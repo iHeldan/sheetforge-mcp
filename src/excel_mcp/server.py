@@ -1,6 +1,7 @@
 import logging
 import os
-from typing import Any, List, Dict, Optional
+import json
+from typing import Any, Callable, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -24,7 +25,13 @@ from excel_mcp.validation import (
 )
 from excel_mcp.chart import create_chart_in_sheet as create_chart_impl
 from excel_mcp.workbook import get_workbook_info
-from excel_mcp.data import write_data
+from excel_mcp.data import (
+    append_table_rows as append_table_rows_impl,
+    read_as_table,
+    search_cells,
+    update_rows_by_key as update_rows_by_key_impl,
+    write_data,
+)
 from excel_mcp.pivot import create_pivot_table as create_pivot_table_impl
 from excel_mcp.tables import create_excel_table as create_table_impl
 from excel_mcp.sheet import (
@@ -72,6 +79,85 @@ mcp = FastMCP(
     instructions="SheetForge MCP for manipulating Excel workbooks"
 )
 
+HANDLED_TOOL_ERRORS = (
+    ValidationError,
+    WorkbookError,
+    SheetError,
+    DataError,
+    FormattingError,
+    CalculationError,
+    PivotError,
+    ChartError,
+    ValueError,
+    FileNotFoundError,
+)
+
+
+def _extract_payload_parts(result: Any) -> tuple[Optional[str], Any, Dict[str, Any]]:
+    if isinstance(result, dict):
+        payload = dict(result)
+        message = payload.pop("message", None)
+        meta = {}
+        for key in ("dry_run", "changes", "warnings", "preview"):
+            if key in payload:
+                meta[key] = payload.pop(key)
+        data = payload or None
+        return message, data, meta
+
+    if isinstance(result, str):
+        return result, None, {}
+
+    return None, result, {}
+
+
+def _success_response(
+    operation: str,
+    *,
+    result: Any = None,
+    message: Optional[str] = None,
+    data: Any = None,
+    **meta: Any,
+) -> str:
+    extracted_message, extracted_data, extracted_meta = _extract_payload_parts(result)
+    if data is None:
+        data = extracted_data
+
+    payload = {
+        "ok": True,
+        "operation": operation,
+        "message": message or extracted_message or f"{operation} completed",
+        "data": data,
+    }
+    payload.update({key: value for key, value in extracted_meta.items() if value is not None})
+    payload.update({key: value for key, value in meta.items() if value is not None})
+    return json.dumps(payload, indent=2, default=str)
+
+
+def _error_response(operation: str, error: Exception) -> str:
+    return json.dumps(
+        {
+            "ok": False,
+            "operation": operation,
+            "error": {
+                "type": type(error).__name__,
+                "message": str(error),
+            },
+        },
+        indent=2,
+        default=str,
+    )
+
+
+def _run_tool(operation: str, action: Callable[[], Any], *, message: Optional[str] = None) -> str:
+    try:
+        return _success_response(operation, result=action(), message=message)
+    except HANDLED_TOOL_ERRORS as e:
+        logger.error("%s failed: %s", operation, e)
+        return _error_response(operation, e)
+    except Exception as e:
+        logger.exception("Unhandled error in %s", operation)
+        return _error_response(operation, e)
+
 def get_excel_path(filename: str) -> str:
     """Get full path to Excel file.
     
@@ -109,22 +195,17 @@ def apply_formula(
     Apply Excel formula to cell.
     Excel formula will write to cell with verification.
     """
-    try:
+    def action() -> Any:
         full_path = get_excel_path(filepath)
-        # First validate the formula
         validation = validate_formula_impl(full_path, sheet_name, cell, formula)
         if isinstance(validation, dict) and "error" in validation:
-            return f"Error: {validation['error']}"
-            
-        # If valid, apply the formula
+            raise ValidationError(validation["error"])
+
         from excel_mcp.calculations import apply_formula as apply_formula_impl
-        result = apply_formula_impl(full_path, sheet_name, cell, formula)
-        return result["message"]
-    except (ValidationError, CalculationError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error applying formula: {e}")
-        raise
+
+        return apply_formula_impl(full_path, sheet_name, cell, formula)
+
+    return _run_tool("apply_formula", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -139,15 +220,10 @@ def validate_formula_syntax(
     formula: str,
 ) -> str:
     """Validate Excel formula syntax without applying it."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = validate_formula_impl(full_path, sheet_name, cell, formula)
-        return result["message"]
-    except (ValidationError, CalculationError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error validating formula: {e}")
-        raise
+    return _run_tool(
+        "validate_formula_syntax",
+        lambda: validate_formula_impl(get_excel_path(filepath), sheet_name, cell, formula),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -173,40 +249,37 @@ def format_range(
     wrap_text: bool = False,
     merge_cells: bool = False,
     protection: Optional[Dict[str, Any]] = None,
-    conditional_format: Optional[Dict[str, Any]] = None
+    conditional_format: Optional[Dict[str, Any]] = None,
+    dry_run: bool = False,
 ) -> str:
     """Apply formatting to a range of cells."""
-    try:
+    def action() -> Any:
         full_path = get_excel_path(filepath)
         from excel_mcp.formatting import format_range as format_range_func
-        
-        # Convert None values to appropriate defaults for the underlying function
-        format_range_func(
+
+        return format_range_func(
             filepath=full_path,
             sheet_name=sheet_name,
             start_cell=start_cell,
-            end_cell=end_cell,  # This can be None
+            end_cell=end_cell,
             bold=bold,
             italic=italic,
             underline=underline,
-            font_size=font_size,  # This can be None
-            font_color=font_color,  # This can be None
-            bg_color=bg_color,  # This can be None
-            border_style=border_style,  # This can be None
-            border_color=border_color,  # This can be None
-            number_format=number_format,  # This can be None
-            alignment=alignment,  # This can be None
+            font_size=font_size,
+            font_color=font_color,
+            bg_color=bg_color,
+            border_style=border_style,
+            border_color=border_color,
+            number_format=number_format,
+            alignment=alignment,
             wrap_text=wrap_text,
             merge_cells=merge_cells,
-            protection=protection,  # This can be None
-            conditional_format=conditional_format  # This can be None
+            protection=protection,
+            conditional_format=conditional_format,
+            dry_run=dry_run,
         )
-        return "Range formatted successfully"
-    except (ValidationError, FormattingError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error formatting range: {e}")
-        raise
+
+    return _run_tool("format_range", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -244,8 +317,8 @@ def read_data_from_excel(
             start_cell,
             end_cell
         )
-        if not result or not result.get("cells"):
-            return "No data found in specified range"
+        if not result:
+            result = {"range": f"{start_cell}:{end_cell}" if end_cell else start_cell, "sheet_name": sheet_name, "cells": []}
 
         if preview_only:
             total_cells = len(result["cells"])
@@ -264,13 +337,18 @@ def read_data_from_excel(
             result["preview_only"] = True
             result["truncated"] = len(preview_cells) < total_cells
 
-        # Return as formatted JSON string
-        import json
-        return json.dumps(result, indent=2, default=str)
+        return _success_response(
+            "read_data_from_excel",
+            result=result,
+            message=f"Read {len(result['cells'])} cell(s) from '{sheet_name}'",
+        )
 
+    except HANDLED_TOOL_ERRORS as e:
+        logger.error("read_data_from_excel failed: %s", e)
+        return _error_response("read_data_from_excel", e)
     except Exception as e:
-        logger.error(f"Error reading data: {e}")
-        raise
+        logger.exception("Unhandled error in read_data_from_excel")
+        return _error_response("read_data_from_excel", e)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -288,15 +366,10 @@ def read_excel_as_table(
     Read Excel data as a compact table with headers and rows.
     Much more context-efficient than read_data_from_excel for structured data.
     """
-    try:
-        full_path = get_excel_path(filepath)
-        from excel_mcp.data import read_as_table
-        result = read_as_table(full_path, sheet_name, header_row=header_row, max_rows=max_rows)
-        import json
-        return json.dumps(result, indent=2, default=str)
-    except Exception as e:
-        logger.error(f"Error reading as table: {e}")
-        raise
+    return _run_tool(
+        "read_excel_as_table",
+        lambda: read_as_table(get_excel_path(filepath), sheet_name, header_row=header_row, max_rows=max_rows),
+    )
 
 
 @mcp.tool(
@@ -310,6 +383,7 @@ def write_data_to_excel(
     sheet_name: str,
     data: List[List],
     start_cell: str = "A1",
+    dry_run: bool = False,
 ) -> str:
     """
     Write data to Excel worksheet.
@@ -322,15 +396,10 @@ def write_data_to_excel(
     start_cell: Cell to start writing to, default is "A1"
   
     """
-    try:
-        full_path = get_excel_path(filepath)
-        result = write_data(full_path, sheet_name, data, start_cell)
-        return result["message"]
-    except (ValidationError, DataError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error writing data: {e}")
-        raise
+    return _run_tool(
+        "write_data_to_excel",
+        lambda: write_data(get_excel_path(filepath), sheet_name, data, start_cell, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -340,16 +409,16 @@ def write_data_to_excel(
 )
 def create_workbook(filepath: str) -> str:
     """Create new Excel workbook."""
-    try:
+    def action() -> Any:
         full_path = get_excel_path(filepath)
         from excel_mcp.workbook import create_workbook as create_workbook_impl
-        create_workbook_impl(full_path)
-        return f"Created workbook at {full_path}"
-    except WorkbookError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error creating workbook: {e}")
-        raise
+
+        result = create_workbook_impl(full_path)
+        result.pop("workbook", None)
+        result["filepath"] = full_path
+        return result
+
+    return _run_tool("create_workbook", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -359,16 +428,15 @@ def create_workbook(filepath: str) -> str:
 )
 def create_worksheet(filepath: str, sheet_name: str) -> str:
     """Create new worksheet in workbook."""
-    try:
+    def action() -> Any:
         full_path = get_excel_path(filepath)
         from excel_mcp.workbook import create_sheet as create_worksheet_impl
+
         result = create_worksheet_impl(full_path, sheet_name)
-        return result["message"]
-    except (ValidationError, WorkbookError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error creating worksheet: {e}")
-        raise
+        result["sheet_name"] = sheet_name
+        return result
+
+    return _run_tool("create_worksheet", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -387,10 +455,9 @@ def create_chart(
     y_axis: str = ""
 ) -> str:
     """Create chart in worksheet."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = create_chart_impl(
-            filepath=full_path,
+    def action() -> Any:
+        return create_chart_impl(
+            filepath=get_excel_path(filepath),
             sheet_name=sheet_name,
             data_range=data_range,
             chart_type=chart_type,
@@ -399,12 +466,8 @@ def create_chart(
             x_axis=x_axis,
             y_axis=y_axis
         )
-        return result["message"]
-    except (ValidationError, ChartError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error creating chart: {e}")
-        raise
+
+    return _run_tool("create_chart", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -422,23 +485,18 @@ def create_pivot_table(
     agg_func: str = "mean"
 ) -> str:
     """Create pivot table in worksheet."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = create_pivot_table_impl(
-            filepath=full_path,
+    return _run_tool(
+        "create_pivot_table",
+        lambda: create_pivot_table_impl(
+            filepath=get_excel_path(filepath),
             sheet_name=sheet_name,
             data_range=data_range,
             rows=rows,
             values=values,
             columns=columns or [],
             agg_func=agg_func
-        )
-        return result["message"]
-    except (ValidationError, PivotError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error creating pivot table: {e}")
-        raise
+        ),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -454,21 +512,16 @@ def create_table(
     table_style: str = "TableStyleMedium9"
 ) -> str:
     """Creates a native Excel table from a specified range of data."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = create_table_impl(
-            filepath=full_path,
+    return _run_tool(
+        "create_table",
+        lambda: create_table_impl(
+            filepath=get_excel_path(filepath),
             sheet_name=sheet_name,
             data_range=data_range,
             table_name=table_name,
             table_style=table_style
-        )
-        return result["message"]
-    except DataError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error creating table: {e}")
-        raise
+        ),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -482,15 +535,10 @@ def copy_worksheet(
     target_sheet: str
 ) -> str:
     """Copy worksheet within workbook."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = copy_sheet(full_path, source_sheet, target_sheet)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error copying worksheet: {e}")
-        raise
+    return _run_tool(
+        "copy_worksheet",
+        lambda: copy_sheet(get_excel_path(filepath), source_sheet, target_sheet),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -503,15 +551,10 @@ def delete_worksheet(
     sheet_name: str
 ) -> str:
     """Delete worksheet from workbook."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = delete_sheet(full_path, sheet_name)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error deleting worksheet: {e}")
-        raise
+    return _run_tool(
+        "delete_worksheet",
+        lambda: delete_sheet(get_excel_path(filepath), sheet_name),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -525,15 +568,10 @@ def rename_worksheet(
     new_name: str
 ) -> str:
     """Rename worksheet in workbook."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = rename_sheet(full_path, old_name, new_name)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error renaming worksheet: {e}")
-        raise
+    return _run_tool(
+        "rename_worksheet",
+        lambda: rename_sheet(get_excel_path(filepath), old_name, new_name),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -546,15 +584,10 @@ def get_workbook_metadata(
     include_ranges: bool = False
 ) -> str:
     """Get metadata about workbook including sheets, ranges, etc."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = get_workbook_info(full_path, include_ranges=include_ranges)
-        return str(result)
-    except WorkbookError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error getting workbook metadata: {e}")
-        raise
+    return _run_tool(
+        "get_workbook_metadata",
+        lambda: get_workbook_info(get_excel_path(filepath), include_ranges=include_ranges),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -562,17 +595,18 @@ def get_workbook_metadata(
         destructiveHint=True,
     ),
 )
-def merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str) -> str:
+def merge_cells(
+    filepath: str,
+    sheet_name: str,
+    start_cell: str,
+    end_cell: str,
+    dry_run: bool = False,
+) -> str:
     """Merge a range of cells."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = merge_range(full_path, sheet_name, start_cell, end_cell)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error merging cells: {e}")
-        raise
+    return _run_tool(
+        "merge_cells",
+        lambda: merge_range(get_excel_path(filepath), sheet_name, start_cell, end_cell, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -580,17 +614,18 @@ def merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str) 
         destructiveHint=True,
     ),
 )
-def unmerge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str) -> str:
+def unmerge_cells(
+    filepath: str,
+    sheet_name: str,
+    start_cell: str,
+    end_cell: str,
+    dry_run: bool = False,
+) -> str:
     """Unmerge a range of cells."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = unmerge_range(full_path, sheet_name, start_cell, end_cell)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error unmerging cells: {e}")
-        raise
+    return _run_tool(
+        "unmerge_cells",
+        lambda: unmerge_range(get_excel_path(filepath), sheet_name, start_cell, end_cell, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -600,14 +635,10 @@ def unmerge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str
 )
 def get_merged_cells(filepath: str, sheet_name: str) -> str:
     """Get merged cells in a worksheet."""
-    try:
-        full_path = get_excel_path(filepath)
-        return str(get_merged_ranges(full_path, sheet_name))
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error getting merged cells: {e}")
-        raise
+    def action() -> Any:
+        return {"sheet_name": sheet_name, "ranges": get_merged_ranges(get_excel_path(filepath), sheet_name)}
+
+    return _run_tool("get_merged_cells", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -621,26 +652,24 @@ def copy_range(
     source_start: str,
     source_end: str,
     target_start: str,
-    target_sheet: Optional[str] = None
+    target_sheet: Optional[str] = None,
+    dry_run: bool = False,
 ) -> str:
     """Copy a range of cells to another location."""
-    try:
-        full_path = get_excel_path(filepath)
+    def action() -> Any:
         from excel_mcp.sheet import copy_range_operation
-        result = copy_range_operation(
-            full_path,
+
+        return copy_range_operation(
+            get_excel_path(filepath),
             sheet_name,
             source_start,
             source_end,
             target_start,
-            target_sheet or sheet_name  # Use source sheet if target_sheet is None
+            target_sheet or sheet_name,
+            dry_run=dry_run,
         )
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error copying range: {e}")
-        raise
+
+    return _run_tool("copy_range", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -653,25 +682,23 @@ def delete_range(
     sheet_name: str,
     start_cell: str,
     end_cell: str,
-    shift_direction: str = "up"
+    shift_direction: str = "up",
+    dry_run: bool = False,
 ) -> str:
     """Delete a range of cells and shift remaining cells."""
-    try:
-        full_path = get_excel_path(filepath)
+    def action() -> Any:
         from excel_mcp.sheet import delete_range_operation
-        result = delete_range_operation(
-            full_path,
+
+        return delete_range_operation(
+            get_excel_path(filepath),
             sheet_name,
             start_cell,
             end_cell,
-            shift_direction
+            shift_direction,
+            dry_run=dry_run,
         )
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error deleting range: {e}")
-        raise
+
+    return _run_tool("delete_range", action)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -686,16 +713,11 @@ def validate_excel_range(
     end_cell: Optional[str] = None
 ) -> str:
     """Validate if a range exists and is properly formatted."""
-    try:
-        full_path = get_excel_path(filepath)
-        range_str = start_cell if not end_cell else f"{start_cell}:{end_cell}"
-        result = validate_range_impl(full_path, sheet_name, range_str)
-        return result["message"]
-    except ValidationError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error validating range: {e}")
-        raise
+    range_str = start_cell if not end_cell else f"{start_cell}:{end_cell}"
+    return _run_tool(
+        "validate_excel_range",
+        lambda: validate_range_impl(get_excel_path(filepath), sheet_name, range_str),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -727,23 +749,30 @@ def get_data_validation_info(
 
         with safe_workbook(full_path) as wb:
             if sheet_name not in wb.sheetnames:
-                return f"Error: Sheet '{sheet_name}' not found"
+                raise SheetError(f"Sheet '{sheet_name}' not found")
 
             ws = wb[sheet_name]
             validations = get_all_validation_ranges(ws)
 
-        if not validations:
-            return "No data validation rules found in this worksheet"
-            
-        import json
-        return json.dumps({
-            "sheet_name": sheet_name,
-            "validation_rules": validations
-        }, indent=2, default=str)
-        
+        return _success_response(
+            "get_data_validation_info",
+            data={
+                "sheet_name": sheet_name,
+                "validation_rules": validations,
+            },
+            message=(
+                "No data validation rules found in this worksheet"
+                if not validations
+                else f"Found {len(validations)} validation rule(s) in '{sheet_name}'"
+            ),
+        )
+
+    except HANDLED_TOOL_ERRORS as e:
+        logger.error("get_data_validation_info failed: %s", e)
+        return _error_response("get_data_validation_info", e)
     except Exception as e:
-        logger.error(f"Error getting validation info: {e}")
-        raise
+        logger.exception("Unhandled error in get_data_validation_info")
+        return _error_response("get_data_validation_info", e)
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -755,18 +784,14 @@ def insert_rows(
     filepath: str,
     sheet_name: str,
     start_row: int,
-    count: int = 1
+    count: int = 1,
+    dry_run: bool = False,
 ) -> str:
     """Insert one or more rows starting at the specified row."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = insert_row(full_path, sheet_name, start_row, count)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error inserting rows: {e}")
-        raise
+    return _run_tool(
+        "insert_rows",
+        lambda: insert_row(get_excel_path(filepath), sheet_name, start_row, count, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -778,18 +803,14 @@ def insert_columns(
     filepath: str,
     sheet_name: str,
     start_col: int,
-    count: int = 1
+    count: int = 1,
+    dry_run: bool = False,
 ) -> str:
     """Insert one or more columns starting at the specified column."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = insert_cols(full_path, sheet_name, start_col, count)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error inserting columns: {e}")
-        raise
+    return _run_tool(
+        "insert_columns",
+        lambda: insert_cols(get_excel_path(filepath), sheet_name, start_col, count, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -801,18 +822,14 @@ def delete_sheet_rows(
     filepath: str,
     sheet_name: str,
     start_row: int,
-    count: int = 1
+    count: int = 1,
+    dry_run: bool = False,
 ) -> str:
     """Delete one or more rows starting at the specified row."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = delete_rows(full_path, sheet_name, start_row, count)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error deleting rows: {e}")
-        raise
+    return _run_tool(
+        "delete_sheet_rows",
+        lambda: delete_rows(get_excel_path(filepath), sheet_name, start_row, count, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -824,18 +841,14 @@ def delete_sheet_columns(
     filepath: str,
     sheet_name: str,
     start_col: int,
-    count: int = 1
+    count: int = 1,
+    dry_run: bool = False,
 ) -> str:
     """Delete one or more columns starting at the specified column."""
-    try:
-        full_path = get_excel_path(filepath)
-        result = delete_cols(full_path, sheet_name, start_col, count)
-        return result["message"]
-    except (ValidationError, SheetError) as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error deleting columns: {e}")
-        raise
+    return _run_tool(
+        "delete_sheet_columns",
+        lambda: delete_cols(get_excel_path(filepath), sheet_name, start_col, count, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(
@@ -853,15 +866,17 @@ def search_in_sheet(
     """
     Search for cells matching a value in a worksheet.
     """
-    try:
-        full_path = get_excel_path(filepath)
-        from excel_mcp.data import search_cells
-        results = search_cells(full_path, sheet_name, query, exact=exact, max_results=max_results)
-        import json
-        return json.dumps(results, indent=2, default=str)
-    except Exception as e:
-        logger.error(f"Error searching cells: {e}")
-        raise
+    def action() -> Any:
+        results = search_cells(get_excel_path(filepath), sheet_name, query, exact=exact, max_results=max_results)
+        return {
+            "sheet_name": sheet_name,
+            "query": query,
+            "exact": exact,
+            "max_results": max_results,
+            "matches": results,
+        }
+
+    return _run_tool("search_in_sheet", action)
 
 
 @mcp.tool(
@@ -875,15 +890,66 @@ def list_all_sheets(filepath: str) -> str:
     List all sheets in a workbook with row/column counts.
     Quick overview before reading data.
     """
-    try:
-        full_path = get_excel_path(filepath)
+    def action() -> Any:
         from excel_mcp.workbook import list_sheets
-        result = list_sheets(full_path)
-        import json
-        return json.dumps(result, indent=2, default=str)
-    except Exception as e:
-        logger.error(f"Error listing sheets: {e}")
-        raise
+
+        return {"sheets": list_sheets(get_excel_path(filepath))}
+
+    return _run_tool("list_all_sheets", action)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Append Table Rows",
+        destructiveHint=True,
+    ),
+)
+def append_table_rows(
+    filepath: str,
+    sheet_name: str,
+    rows: List[Dict[str, Any]],
+    header_row: int = 1,
+    dry_run: bool = False,
+) -> str:
+    """Append dictionary-shaped rows by matching worksheet headers."""
+    return _run_tool(
+        "append_table_rows",
+        lambda: append_table_rows_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            rows,
+            header_row=header_row,
+            dry_run=dry_run,
+        ),
+    )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Update Rows by Key",
+        destructiveHint=True,
+    ),
+)
+def update_rows_by_key(
+    filepath: str,
+    sheet_name: str,
+    key_column: str,
+    updates: List[Dict[str, Any]],
+    header_row: int = 1,
+    dry_run: bool = False,
+) -> str:
+    """Update existing table rows using a named key column."""
+    return _run_tool(
+        "update_rows_by_key",
+        lambda: update_rows_by_key_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            key_column,
+            updates,
+            header_row=header_row,
+            dry_run=dry_run,
+        ),
+    )
 
 
 def run_sse():

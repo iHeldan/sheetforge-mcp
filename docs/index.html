@@ -216,8 +216,9 @@
         <h2>At a glance</h2>
         <ul class="meta-list">
           <li>Python 3.10+</li>
-          <li>28 MCP tools</li>
+          <li>30 MCP tools</li>
           <li>Supports `stdio`, `streamable-http`, and deprecated `sse`</li>
+          <li>Uniform JSON envelopes for every tool response</li>
           <li>No Microsoft Excel dependency</li>
           <li>Backed by `openpyxl` and FastMCP</li>
         </ul>
@@ -242,6 +243,8 @@
           <li><strong>`list_all_sheets`</strong><br>Quick workbook overview before reading.</li>
           <li><strong>`read_excel_as_table`</strong><br>Compact table output for agents.</li>
           <li><strong>`search_in_sheet`</strong><br>Find a value before mutating a workbook.</li>
+          <li><strong>`append_table_rows`</strong><br>Append rows with header names instead of cell math.</li>
+          <li><strong>`update_rows_by_key`</strong><br>Update existing rows by matching a key column.</li>
           <li><strong>`read_data_from_excel`</strong><br>Read cells with addresses and validation metadata.</li>
         </ul>
       </article>

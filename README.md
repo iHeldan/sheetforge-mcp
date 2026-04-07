@@ -100,10 +100,10 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 28 MCP tools across these groups:
+The server currently registers 30 MCP tools across these groups:
 
 - workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `list_all_sheets`
-- data access: `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`
+- data access: `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `validate_excel_range`, `get_data_validation_info`
@@ -116,6 +116,34 @@ The three most agent-friendly read tools are:
 - `search_in_sheet`: exact or partial value search across a worksheet
 
 See [TOOLS.md](TOOLS.md) for the full reference.
+
+## Response Format
+
+Every tool now returns a JSON envelope with a consistent top-level shape:
+
+```json
+{
+  "ok": true,
+  "operation": "read_excel_as_table",
+  "message": "read_excel_as_table completed",
+  "data": {}
+}
+```
+
+Error responses follow the same contract:
+
+```json
+{
+  "ok": false,
+  "operation": "write_data_to_excel",
+  "error": {
+    "type": "DataError",
+    "message": "No data provided to write"
+  }
+}
+```
+
+For destructive tools that support preview mode, the envelope may also include `dry_run` and `changes`.
 
 ## Development
 
@@ -155,8 +183,9 @@ uv run sheetforge-mcp stdio
 ## Notes For Integrators
 
 - `stdio` mode is careful not to write non-protocol text to `stdout`.
-- Most read-oriented tools return JSON strings, but a few older tools still return plain string representations for compatibility.
+- All tools return structured JSON envelopes, which makes client-side parsing predictable.
 - `read_data_from_excel(..., preview_only=True)` limits the response to the first 10 rows in the selected range and marks the payload as truncated when applicable.
+- Core mutation tools support `dry_run=True` so clients can preview changes before saving a workbook.
 
 ## License
 

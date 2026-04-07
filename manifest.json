@@ -32,6 +32,8 @@
     {"name": "read_data_from_excel", "description": "Read data from Excel range"},
     {"name": "read_excel_as_table", "description": "Read worksheet data as compact headers and rows"},
     {"name": "search_in_sheet", "description": "Search worksheet cells for matching values"},
+    {"name": "append_table_rows", "description": "Append table rows using worksheet headers"},
+    {"name": "update_rows_by_key", "description": "Update table rows by matching a key column"},
     {"name": "format_range", "description": "Apply formatting to cell range"},
     {"name": "merge_cells", "description": "Merge cells in a range"},
     {"name": "unmerge_cells", "description": "Unmerge previously merged cells"},

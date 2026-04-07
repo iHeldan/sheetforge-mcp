@@ -183,10 +183,16 @@ def delete_range(worksheet: Worksheet, start_cell: str, end_cell: Optional[str] 
             cell.number_format = "General"
             cell.alignment = None
 
-def merge_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str) -> Dict[str, Any]:
+def merge_range(
+    filepath: str,
+    sheet_name: str,
+    start_cell: str,
+    end_cell: str,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """Merge a range of cells."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -198,7 +204,17 @@ def merge_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str) 
             range_string = format_range_string(start_row, start_col, end_row, end_col)
             worksheet = wb[sheet_name]
             worksheet.merge_cells(range_string)
-        return {"message": f"Range '{range_string}' merged in sheet '{sheet_name}'"}
+        return {
+            "message": f"Range '{range_string}' {'would be merged' if dry_run else 'merged'} in sheet '{sheet_name}'",
+            "range": range_string,
+            "sheet_name": sheet_name,
+            "dry_run": dry_run,
+            "changes": [{
+                "type": "merge_cells",
+                "sheet_name": sheet_name,
+                "range": range_string,
+            }],
+        }
     except SheetError as e:
         logger.error(str(e))
         raise
@@ -206,10 +222,16 @@ def merge_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str) 
         logger.error(f"Failed to merge range: {e}")
         raise SheetError(str(e))
 
-def unmerge_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str) -> Dict[str, Any]:
+def unmerge_range(
+    filepath: str,
+    sheet_name: str,
+    start_cell: str,
+    end_cell: str,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """Unmerge a range of cells."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -230,7 +252,17 @@ def unmerge_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str
                 raise SheetError(f"Range '{range_string}' is not merged")
 
             worksheet.unmerge_cells(range_string)
-        return {"message": f"Range '{range_string}' unmerged successfully"}
+        return {
+            "message": f"Range '{range_string}' {'would be unmerged' if dry_run else 'unmerged successfully'}",
+            "range": range_string,
+            "sheet_name": sheet_name,
+            "dry_run": dry_run,
+            "changes": [{
+                "type": "unmerge_cells",
+                "sheet_name": sheet_name,
+                "range": range_string,
+            }],
+        }
     except SheetError as e:
         logger.error(str(e))
         raise
@@ -259,17 +291,21 @@ def copy_range_operation(
     source_start: str,
     source_end: str,
     target_start: str,
-    target_sheet: Optional[str] = None
+    target_sheet: Optional[str] = None,
+    dry_run: bool = False,
 ) -> Dict:
     """Copy a range of cells to another location."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 logger.error(f"Sheet '{sheet_name}' not found")
                 raise ValidationError(f"Sheet '{sheet_name}' not found")
 
             source_ws = wb[sheet_name]
-            target_ws = wb[target_sheet] if target_sheet else source_ws
+            resolved_target_sheet = target_sheet or sheet_name
+            if resolved_target_sheet not in wb.sheetnames:
+                raise ValidationError(f"Target sheet '{resolved_target_sheet}' not found")
+            target_ws = wb[resolved_target_sheet]
 
             # Parse source range
             try:
@@ -289,16 +325,34 @@ def copy_range_operation(
             # Copy the range
             row_offset = target_row - start_row
             col_offset = target_col - start_col
+            changes = []
 
             for i in range(start_row, end_row + 1):
                 for j in range(start_col, end_col + 1):
                     source_cell = source_ws.cell(row=i, column=j)
                     target_cell = target_ws.cell(row=i + row_offset, column=j + col_offset)
+                    if target_cell.value != source_cell.value:
+                        changes.append({
+                            "sheet_name": resolved_target_sheet,
+                            "cell": f"{get_column_letter(j + col_offset)}{i + row_offset}",
+                            "row": i + row_offset,
+                            "column": j + col_offset,
+                            "old_value": target_cell.value,
+                            "new_value": source_cell.value,
+                            "source_cell": f"{get_column_letter(j)}{i}",
+                        })
                     target_cell.value = source_cell.value
                     if source_cell.has_style:
                         target_cell._style = copy(source_cell._style)
 
-        return {"message": f"Range copied successfully"}
+        return {
+            "message": f"{'Previewed' if dry_run else 'Copied'} range successfully",
+            "source_range": f"{source_start}:{source_end}",
+            "target_sheet": resolved_target_sheet,
+            "target_start": target_start,
+            "dry_run": dry_run,
+            "changes": changes,
+        }
 
     except (ValidationError, SheetError):
         raise
@@ -311,11 +365,12 @@ def delete_range_operation(
     sheet_name: str,
     start_cell: str,
     end_cell: Optional[str] = None,
-    shift_direction: str = "up"
+    shift_direction: str = "up",
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Delete a range of cells and shift remaining cells."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -340,6 +395,20 @@ def delete_range_operation(
                 end_row or start_row,
                 end_col or start_col
             )
+            changes = []
+            for row in range(start_row, (end_row or start_row) + 1):
+                for col in range(start_col, (end_col or start_col) + 1):
+                    value = worksheet.cell(row=row, column=col).value
+                    if value is None:
+                        continue
+                    changes.append({
+                        "sheet_name": sheet_name,
+                        "cell": f"{get_column_letter(col)}{row}",
+                        "row": row,
+                        "column": col,
+                        "old_value": value,
+                        "new_value": None,
+                    })
 
             # Delete range contents
             delete_range(worksheet, start_cell, end_cell)
@@ -350,7 +419,13 @@ def delete_range_operation(
             elif shift_direction == "left":
                 worksheet.delete_cols(start_col, (end_col or start_col) - start_col + 1)
 
-        return {"message": f"Range {range_string} deleted successfully"}
+        return {
+            "message": f"{'Previewed' if dry_run else 'Deleted'} range {range_string} successfully",
+            "range": range_string,
+            "shift_direction": shift_direction,
+            "dry_run": dry_run,
+            "changes": changes,
+        }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -358,10 +433,16 @@ def delete_range_operation(
         logger.error(f"Failed to delete range: {e}")
         raise SheetError(str(e))
 
-def insert_row(filepath: str, sheet_name: str, start_row: int, count: int = 1) -> Dict[str, Any]:
+def insert_row(
+    filepath: str,
+    sheet_name: str,
+    start_row: int,
+    count: int = 1,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """Insert one or more rows starting at the specified row."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -375,7 +456,19 @@ def insert_row(filepath: str, sheet_name: str, start_row: int, count: int = 1) -
 
             worksheet.insert_rows(start_row, count)
 
-        return {"message": f"Inserted {count} row(s) starting at row {start_row} in sheet '{sheet_name}'"}
+        return {
+            "message": f"{'Previewed' if dry_run else 'Inserted'} {count} row(s) starting at row {start_row} in sheet '{sheet_name}'",
+            "sheet_name": sheet_name,
+            "start_row": start_row,
+            "count": count,
+            "dry_run": dry_run,
+            "changes": [{
+                "type": "insert_rows",
+                "sheet_name": sheet_name,
+                "start_row": start_row,
+                "count": count,
+            }],
+        }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -383,10 +476,16 @@ def insert_row(filepath: str, sheet_name: str, start_row: int, count: int = 1) -
         logger.error(f"Failed to insert rows: {e}")
         raise SheetError(str(e))
 
-def insert_cols(filepath: str, sheet_name: str, start_col: int, count: int = 1) -> Dict[str, Any]:
+def insert_cols(
+    filepath: str,
+    sheet_name: str,
+    start_col: int,
+    count: int = 1,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """Insert one or more columns starting at the specified column."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -400,7 +499,19 @@ def insert_cols(filepath: str, sheet_name: str, start_col: int, count: int = 1) 
 
             worksheet.insert_cols(start_col, count)
 
-        return {"message": f"Inserted {count} column(s) starting at column {start_col} in sheet '{sheet_name}'"}
+        return {
+            "message": f"{'Previewed' if dry_run else 'Inserted'} {count} column(s) starting at column {start_col} in sheet '{sheet_name}'",
+            "sheet_name": sheet_name,
+            "start_col": start_col,
+            "count": count,
+            "dry_run": dry_run,
+            "changes": [{
+                "type": "insert_columns",
+                "sheet_name": sheet_name,
+                "start_col": start_col,
+                "count": count,
+            }],
+        }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -408,10 +519,16 @@ def insert_cols(filepath: str, sheet_name: str, start_col: int, count: int = 1) 
         logger.error(f"Failed to insert columns: {e}")
         raise SheetError(str(e))
 
-def delete_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1) -> Dict[str, Any]:
+def delete_rows(
+    filepath: str,
+    sheet_name: str,
+    start_row: int,
+    count: int = 1,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """Delete one or more rows starting at the specified row."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -427,7 +544,19 @@ def delete_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1) 
 
             worksheet.delete_rows(start_row, count)
 
-        return {"message": f"Deleted {count} row(s) starting at row {start_row} in sheet '{sheet_name}'"}
+        return {
+            "message": f"{'Previewed' if dry_run else 'Deleted'} {count} row(s) starting at row {start_row} in sheet '{sheet_name}'",
+            "sheet_name": sheet_name,
+            "start_row": start_row,
+            "count": count,
+            "dry_run": dry_run,
+            "changes": [{
+                "type": "delete_rows",
+                "sheet_name": sheet_name,
+                "start_row": start_row,
+                "count": count,
+            }],
+        }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -435,10 +564,16 @@ def delete_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1) 
         logger.error(f"Failed to delete rows: {e}")
         raise SheetError(str(e))
 
-def delete_cols(filepath: str, sheet_name: str, start_col: int, count: int = 1) -> Dict[str, Any]:
+def delete_cols(
+    filepath: str,
+    sheet_name: str,
+    start_col: int,
+    count: int = 1,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """Delete one or more columns starting at the specified column."""
     try:
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -454,7 +589,19 @@ def delete_cols(filepath: str, sheet_name: str, start_col: int, count: int = 1) 
 
             worksheet.delete_cols(start_col, count)
 
-        return {"message": f"Deleted {count} column(s) starting at column {start_col} in sheet '{sheet_name}'"}
+        return {
+            "message": f"{'Previewed' if dry_run else 'Deleted'} {count} column(s) starting at column {start_col} in sheet '{sheet_name}'",
+            "sheet_name": sheet_name,
+            "start_col": start_col,
+            "count": count,
+            "dry_run": dry_run,
+            "changes": [{
+                "type": "delete_columns",
+                "sheet_name": sheet_name,
+                "start_col": start_col,
+                "count": count,
+            }],
+        }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise

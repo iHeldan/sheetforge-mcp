@@ -34,7 +34,8 @@ def format_range(
     wrap_text: bool = False,
     merge_cells: bool = False,
     protection: Optional[Dict[str, Any]] = None,
-    conditional_format: Optional[Dict[str, Any]] = None
+    conditional_format: Optional[Dict[str, Any]] = None,
+    dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Apply formatting to a range of cells.
     
@@ -79,7 +80,7 @@ def format_range(
         if end_cell and not validate_cell_reference(end_cell):
             raise ValidationError(f"Invalid end cell reference: {end_cell}")
             
-        with safe_workbook(filepath, save=True) as wb:
+        with safe_workbook(filepath, save=not dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise ValidationError(f"Sheet '{sheet_name}' not found")
 
@@ -96,6 +97,32 @@ def format_range(
                 end_row = start_row
             if end_col is None:
                 end_col = start_col
+
+            range_str = f"{start_cell}:{end_cell}" if end_cell else start_cell
+            preview = {
+                "sheet_name": sheet_name,
+                "range": range_str,
+                "font": {
+                    "bold": bold,
+                    "italic": italic,
+                    "underline": underline,
+                    "font_size": font_size,
+                    "font_color": font_color,
+                },
+                "fill": {"bg_color": bg_color} if bg_color is not None else None,
+                "border": {
+                    "border_style": border_style,
+                    "border_color": border_color,
+                }
+                if border_style is not None or border_color is not None
+                else None,
+                "number_format": number_format,
+                "alignment": alignment,
+                "wrap_text": wrap_text,
+                "merge_cells": merge_cells,
+                "protection": protection,
+                "conditional_format": conditional_format,
+            }
 
             # Apply font formatting
             font_args = {
@@ -186,14 +213,12 @@ def format_range(
             # Merge cells if requested
             if merge_cells and end_cell:
                 try:
-                    range_str = f"{start_cell}:{end_cell}"
                     sheet.merge_cells(range_str)
                 except ValueError as e:
                     raise FormattingError(f"Failed to merge cells: {str(e)}")
 
             # Apply conditional formatting
             if conditional_format is not None:
-                range_str = f"{start_cell}:{end_cell}" if end_cell else start_cell
                 rule_type = conditional_format.get('type')
                 if not rule_type:
                     raise FormattingError("Conditional format type not specified")
@@ -233,10 +258,11 @@ def format_range(
                 except Exception as e:
                     raise FormattingError(f"Failed to apply conditional formatting: {str(e)}")
 
-        range_str = f"{start_cell}:{end_cell}" if end_cell else start_cell
         return {
-            "message": f"Applied formatting to range {range_str}",
-            "range": range_str
+            "message": f"{'Previewed' if dry_run else 'Applied'} formatting to range {range_str}",
+            "range": range_str,
+            "dry_run": dry_run,
+            "changes": [preview],
         }
 
     except (ValidationError, FormattingError) as e:

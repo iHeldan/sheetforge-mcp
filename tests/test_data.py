@@ -1,7 +1,22 @@
 import json
 
-from excel_mcp.data import read_excel_range, read_excel_range_with_metadata
-from excel_mcp.server import read_data_from_excel, search_in_sheet
+from excel_mcp.data import (
+    append_table_rows,
+    read_as_table,
+    read_excel_range,
+    read_excel_range_with_metadata,
+    update_rows_by_key,
+    write_data,
+)
+from excel_mcp.server import list_all_sheets, read_data_from_excel, search_in_sheet
+
+
+def _load_tool_payload(raw: str) -> dict:
+    payload = json.loads(raw)
+    assert payload["ok"] is True
+    assert "operation" in payload
+    assert "message" in payload
+    return payload
 
 
 def test_read_from_explicit_start_cell(tmp_workbook):
@@ -26,9 +41,6 @@ def test_read_with_metadata_respects_start_cell(tmp_workbook):
     values = [c["value"] for c in cells]
     assert "Name" not in values, "start_cell was ignored in metadata read"
     assert cells[0]["value"] == "Turku"
-
-
-from excel_mcp.data import read_as_table
 
 
 def test_read_as_table_returns_headers_and_rows(tmp_workbook):
@@ -85,9 +97,10 @@ def test_search_cells_matches_numeric_values_from_string_queries(tmp_workbook):
 
 
 def test_search_in_sheet_accepts_numeric_queries(tmp_workbook):
-    results = json.loads(search_in_sheet(tmp_workbook, "Sheet1", 30))
-    assert len(results) == 1
-    assert results[0]["cell"] == "B2"
+    payload = _load_tool_payload(search_in_sheet(tmp_workbook, "Sheet1", 30))
+    assert payload["operation"] == "search_in_sheet"
+    assert len(payload["data"]["matches"]) == 1
+    assert payload["data"]["matches"][0]["cell"] == "B2"
 
 
 def test_read_data_from_excel_preview_only_limits_output(tmp_path):
@@ -103,9 +116,87 @@ def test_read_data_from_excel_preview_only_limits_output(tmp_path):
     wb.save(filepath)
     wb.close()
 
-    payload = json.loads(read_data_from_excel(str(filepath), "Sheet1", preview_only=True))
-    preview_rows = {cell["row"] for cell in payload["cells"]}
+    payload = _load_tool_payload(read_data_from_excel(str(filepath), "Sheet1", preview_only=True))
+    preview_rows = {cell["row"] for cell in payload["data"]["cells"]}
 
     assert len(preview_rows) == 10
-    assert payload["preview_only"] is True
-    assert payload["truncated"] is True
+    assert payload["data"]["preview_only"] is True
+    assert payload["data"]["truncated"] is True
+
+
+def test_list_all_sheets_returns_json_envelope(tmp_workbook):
+    payload = _load_tool_payload(list_all_sheets(tmp_workbook))
+    assert payload["operation"] == "list_all_sheets"
+    assert payload["data"]["sheets"][0]["name"] == "Sheet1"
+
+
+def test_write_data_dry_run_does_not_persist(tmp_workbook):
+    result = write_data(tmp_workbook, "Sheet1", [["Mallory", 44, "Lahti"]], start_cell="A2", dry_run=True)
+    assert result["dry_run"] is True
+    assert result["changes"][0]["cell"] == "A2"
+
+    table = read_as_table(tmp_workbook, "Sheet1")
+    assert table["rows"][0] == ["Alice", 30, "Helsinki"]
+
+
+def test_append_table_rows_appends_using_headers(tmp_workbook):
+    result = append_table_rows(
+        tmp_workbook,
+        "Sheet1",
+        [{"Name": "Mallory", "Age": 44, "City": "Lahti"}],
+    )
+
+    assert result["rows_appended"] == 1
+    assert result["dry_run"] is False
+
+    table = read_as_table(tmp_workbook, "Sheet1")
+    assert table["rows"][-1] == ["Mallory", 44, "Lahti"]
+
+
+def test_append_table_rows_dry_run_does_not_persist(tmp_workbook):
+    result = append_table_rows(
+        tmp_workbook,
+        "Sheet1",
+        [{"Name": "Mallory", "Age": 44, "City": "Lahti"}],
+        dry_run=True,
+    )
+
+    assert result["dry_run"] is True
+    assert result["start_row"] == 7
+
+    table = read_as_table(tmp_workbook, "Sheet1")
+    assert table["total_rows"] == 5
+
+
+def test_update_rows_by_key_updates_matching_rows_and_reports_missing_keys(tmp_workbook):
+    result = update_rows_by_key(
+        tmp_workbook,
+        "Sheet1",
+        "Name",
+        [
+            {"Name": "Alice", "City": "Vantaa", "Age": 31},
+            {"Name": "Missing", "City": "Nowhere"},
+        ],
+    )
+
+    assert result["updated_rows"] == 1
+    assert result["missing_keys"] == ["Missing"]
+
+    table = read_as_table(tmp_workbook, "Sheet1")
+    assert table["rows"][0] == ["Alice", 31, "Vantaa"]
+
+
+def test_update_rows_by_key_dry_run_does_not_persist(tmp_workbook):
+    result = update_rows_by_key(
+        tmp_workbook,
+        "Sheet1",
+        "Name",
+        [{"Name": "Alice", "City": "Vantaa"}],
+        dry_run=True,
+    )
+
+    assert result["dry_run"] is True
+    assert result["changes"][0]["cell"] == "C2"
+
+    table = read_as_table(tmp_workbook, "Sheet1")
+    assert table["rows"][0] == ["Alice", 30, "Helsinki"]

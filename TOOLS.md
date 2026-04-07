@@ -6,60 +6,113 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 
 - In `stdio` mode, `filepath` must be an absolute path.
 - In `streamable-http` and `sse` mode, relative `filepath` values resolve under `EXCEL_FILES_PATH`.
-- Destructive tools update the workbook on disk in place.
-- Most read tools return JSON strings. A few compatibility-oriented tools still return plain stringified Python data.
+- Destructive tools update the workbook on disk in place unless `dry_run=True`.
+- Every tool returns a JSON envelope with `ok`, `operation`, `message`, and `data`.
 
 ## Structured Output Shapes
 
-### `list_all_sheets`
+### Shared envelope
 
-Returns a JSON array like:
+All tools return a response like:
 
 ```json
-[
-  {
-    "name": "Sheet1",
-    "rows": 12,
-    "columns": 4,
-    "column_range": "A-D",
-    "is_empty": false
+{
+  "ok": true,
+  "operation": "list_all_sheets",
+  "message": "list_all_sheets completed",
+  "data": {}
+}
+```
+
+Dry-run responses may also include `dry_run` and `changes`:
+
+```json
+{
+  "ok": true,
+  "operation": "write_data_to_excel",
+  "message": "Previewed data to Sheet1",
+  "data": {
+    "active_sheet": "Sheet1",
+    "target_range": "A2:C2",
+    "changed_cells": 3
+  },
+  "dry_run": true,
+  "changes": [
+    {
+      "cell": "A2",
+      "old_value": "Alice",
+      "new_value": "Mallory"
+    }
+  ]
+}
+```
+
+### `list_all_sheets`
+
+Returns workbook inventory under `data.sheets`:
+
+```json
+{
+  "ok": true,
+  "operation": "list_all_sheets",
+  "message": "list_all_sheets completed",
+  "data": {
+    "sheets": [
+      {
+        "name": "Sheet1",
+        "rows": 12,
+        "columns": 4,
+        "column_range": "A-D",
+        "is_empty": false
+      }
+    ]
   }
-]
+}
 ```
 
 ### `read_excel_as_table`
 
-Returns a compact JSON object like:
+Returns a compact table object under `data`:
 
 ```json
 {
-  "headers": ["Name", "Age", "City"],
-  "rows": [["Alice", 30, "Helsinki"]],
-  "total_rows": 5,
-  "truncated": false,
-  "sheet_name": "Sheet1"
+  "ok": true,
+  "operation": "read_excel_as_table",
+  "message": "read_excel_as_table completed",
+  "data": {
+    "headers": ["Name", "Age", "City"],
+    "rows": [["Alice", 30, "Helsinki"]],
+    "total_rows": 5,
+    "truncated": false,
+    "sheet_name": "Sheet1"
+  }
 }
 ```
 
 ### `read_data_from_excel`
 
-Returns a JSON object with cell metadata:
+Returns cell metadata under `data`:
 
 ```json
 {
-  "range": "A1:C3",
-  "sheet_name": "Sheet1",
-  "cells": [
-    {
-      "address": "A1",
-      "value": "Name",
-      "row": 1,
-      "column": 1,
-      "validation": {
-        "has_validation": false
+  "ok": true,
+  "operation": "read_data_from_excel",
+  "message": "Read 9 cell(s) from 'Sheet1'",
+  "data": {
+    "range": "A1:C3",
+    "sheet_name": "Sheet1",
+    "cells": [
+      {
+        "address": "A1",
+        "value": "Name",
+        "row": 1,
+        "column": 1,
+        "validation": {
+          "has_validation": false
+        }
       }
-    }
-  ]
+    ]
+  }
 }
 ```
 
@@ -67,17 +120,28 @@ If `preview_only=True`, the payload is limited to the first 10 rows from the sel
 
 ### `search_in_sheet`
 
-Returns a JSON array of matches:
+Returns matches under `data.matches`:
 
 ```json
-[
-  {
-    "cell": "B2",
-    "value": 30,
-    "row": 2,
-    "column": 2
+{
+  "ok": true,
+  "operation": "search_in_sheet",
+  "message": "search_in_sheet completed",
+  "data": {
+    "sheet_name": "Sheet1",
+    "query": 30,
+    "exact": true,
+    "max_results": 50,
+    "matches": [
+      {
+        "cell": "B2",
+        "value": 30,
+        "row": 2,
+        "column": 2
+      }
+    ]
   }
-]
+}
 ```
 
 ## Workbook And Overview Tools
@@ -87,20 +151,24 @@ Returns a JSON array of matches:
 - `create_worksheet(filepath: str, sheet_name: str) -> str`
   Adds a worksheet to an existing workbook.
 - `get_workbook_metadata(filepath: str, include_ranges: bool = False) -> str`
-  Returns workbook metadata. The current response format is a plain stringified dictionary.
+  Returns workbook metadata under the shared JSON envelope.
 - `list_all_sheets(filepath: str) -> str`
-  Returns JSON with one entry per worksheet, including `rows`, `columns`, `column_range`, and `is_empty`.
+  Returns one entry per worksheet, including `rows`, `columns`, `column_range`, and `is_empty`.
 
 ## Read, Search, And Write Tools
 
-- `write_data_to_excel(filepath: str, sheet_name: str, data: List[List], start_cell: str = "A1") -> str`
-  Writes tabular data starting at the given cell. Missing target sheets are created automatically.
+- `write_data_to_excel(filepath: str, sheet_name: str, data: List[List], start_cell: str = "A1", dry_run: bool = False) -> str`
+  Writes tabular data starting at the given cell. Missing target sheets are created automatically. Returns `changes` and supports preview mode.
 - `read_data_from_excel(filepath: str, sheet_name: str, start_cell: str = "A1", end_cell: Optional[str] = None, preview_only: bool = False) -> str`
-  Returns JSON for a cell range with row, column, address, value, and validation metadata.
+  Returns cell range data with row, column, address, value, and validation metadata under the shared envelope.
 - `read_excel_as_table(filepath: str, sheet_name: str, header_row: int = 1, max_rows: Optional[int] = None) -> str`
-  Returns JSON with `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`.
+  Returns `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`.
 - `search_in_sheet(filepath: str, sheet_name: str, query: Any, exact: bool = True, max_results: int = 50) -> str`
-  Returns JSON matches for exact or partial value search across the worksheet.
+  Returns exact or partial value matches across the worksheet.
+- `append_table_rows(filepath: str, sheet_name: str, rows: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False) -> str`
+  Appends header-aware rows using dictionary keys that match worksheet headers.
+- `update_rows_by_key(filepath: str, sheet_name: str, key_column: str, updates: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False) -> str`
+  Updates existing rows by matching a named key column, and reports unmatched keys.
 
 ## Formula And Validation Tools
 
@@ -115,14 +183,14 @@ Returns a JSON array of matches:
 
 ## Formatting And Layout Tools
 
-- `format_range(filepath: str, sheet_name: str, start_cell: str, end_cell: Optional[str] = None, bold: bool = False, italic: bool = False, underline: bool = False, font_size: Optional[int] = None, font_color: Optional[str] = None, bg_color: Optional[str] = None, border_style: Optional[str] = None, border_color: Optional[str] = None, number_format: Optional[str] = None, alignment: Optional[str] = None, wrap_text: bool = False, merge_cells: bool = False, protection: Optional[Dict[str, Any]] = None, conditional_format: Optional[Dict[str, Any]] = None) -> str`
-  Applies formatting options to a cell or range.
-- `merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str) -> str`
-  Merges the selected range.
-- `unmerge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str) -> str`
-  Unmerges the selected range.
+- `format_range(filepath: str, sheet_name: str, start_cell: str, end_cell: Optional[str] = None, bold: bool = False, italic: bool = False, underline: bool = False, font_size: Optional[int] = None, font_color: Optional[str] = None, bg_color: Optional[str] = None, border_style: Optional[str] = None, border_color: Optional[str] = None, number_format: Optional[str] = None, alignment: Optional[str] = None, wrap_text: bool = False, merge_cells: bool = False, protection: Optional[Dict[str, Any]] = None, conditional_format: Optional[Dict[str, Any]] = None, dry_run: bool = False) -> str`
+  Applies formatting options to a cell or range and supports preview mode.
+- `merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str, dry_run: bool = False) -> str`
+  Merges the selected range and supports preview mode.
+- `unmerge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str, dry_run: bool = False) -> str`
+  Unmerges the selected range and supports preview mode.
 - `get_merged_cells(filepath: str, sheet_name: str) -> str`
-  Returns the worksheet's merged ranges as a plain stringified list.
+  Returns the worksheet's merged ranges under the shared JSON envelope.
 
 ## Worksheet And Range Mutation Tools
 
@@ -132,18 +200,18 @@ Returns a JSON array of matches:
   Deletes a worksheet. The final remaining sheet cannot be deleted.
 - `rename_worksheet(filepath: str, old_name: str, new_name: str) -> str`
   Renames a worksheet.
-- `copy_range(filepath: str, sheet_name: str, source_start: str, source_end: str, target_start: str, target_sheet: Optional[str] = None) -> str`
-  Copies a range to another location, optionally on a different sheet.
-- `delete_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str, shift_direction: str = "up") -> str`
-  Deletes a range and shifts remaining cells up or left.
-- `insert_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1) -> str`
-  Inserts one or more rows.
-- `insert_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1) -> str`
-  Inserts one or more columns.
-- `delete_sheet_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1) -> str`
-  Deletes one or more rows.
-- `delete_sheet_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1) -> str`
-  Deletes one or more columns.
+- `copy_range(filepath: str, sheet_name: str, source_start: str, source_end: str, target_start: str, target_sheet: Optional[str] = None, dry_run: bool = False) -> str`
+  Copies a range to another location, optionally on a different sheet, and supports preview mode.
+- `delete_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str, shift_direction: str = "up", dry_run: bool = False) -> str`
+  Deletes a range and shifts remaining cells up or left. Supports preview mode.
+- `insert_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1, dry_run: bool = False) -> str`
+  Inserts one or more rows and supports preview mode.
+- `insert_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1, dry_run: bool = False) -> str`
+  Inserts one or more columns and supports preview mode.
+- `delete_sheet_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1, dry_run: bool = False) -> str`
+  Deletes one or more rows and supports preview mode.
+- `delete_sheet_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1, dry_run: bool = False) -> str`
+  Deletes one or more columns and supports preview mode.
 
 ## Table, Chart, And Pivot Tools
 
