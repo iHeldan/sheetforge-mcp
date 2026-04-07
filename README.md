@@ -1,9 +1,9 @@
-# IHeldan Excel MCP
+# SheetForge MCP
 
-IHeldan Excel MCP exposes `.xlsx` workbook operations over the Model Context Protocol. It uses `openpyxl` under the hood, so MCP clients can inspect and modify Excel files without launching Microsoft Excel or LibreOffice.
+SheetForge MCP exposes `.xlsx` workbook operations over the Model Context Protocol. It uses `openpyxl` under the hood, so MCP clients can inspect and modify Excel files without launching Microsoft Excel or LibreOffice.
 
-Package name: `iheldan-excel-mcp`
-CLI command: `iheldan-excel-mcp`
+Package name: `sheetforge-mcp`
+CLI command: `sheetforge-mcp`
 
 ## What This Project Covers
 
@@ -29,7 +29,7 @@ CLI command: `iheldan-excel-mcp`
 Use `stdio` when the MCP client starts the server locally.
 
 ```bash
-uvx iheldan-excel-mcp stdio
+uvx sheetforge-mcp stdio
 ```
 
 ```json
@@ -37,7 +37,7 @@ uvx iheldan-excel-mcp stdio
   "mcpServers": {
     "excel": {
       "command": "uvx",
-      "args": ["iheldan-excel-mcp", "stdio"]
+      "args": ["sheetforge-mcp", "stdio"]
     }
   }
 }
@@ -48,7 +48,7 @@ uvx iheldan-excel-mcp stdio
 Use `streamable-http` when you want a long-running local or remote server process.
 
 ```bash
-EXCEL_FILES_PATH=/path/to/excel-files uvx iheldan-excel-mcp streamable-http
+EXCEL_FILES_PATH=/path/to/excel-files uvx sheetforge-mcp streamable-http
 ```
 
 Default endpoint:
@@ -74,7 +74,7 @@ Example client config:
 SSE is kept for compatibility, but new integrations should prefer `streamable-http`.
 
 ```bash
-EXCEL_FILES_PATH=/path/to/excel-files uvx iheldan-excel-mcp sse
+EXCEL_FILES_PATH=/path/to/excel-files uvx sheetforge-mcp sse
 ```
 
 Default endpoint:
@@ -134,7 +134,7 @@ uv run --extra dev pytest -q
 Run the package locally:
 
 ```bash
-uv run iheldan-excel-mcp stdio
+uv run sheetforge-mcp stdio
 ```
 
 ## Release Flow

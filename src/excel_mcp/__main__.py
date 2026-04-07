@@ -6,7 +6,7 @@ import typer
 
 from .server import run_sse, run_stdio, run_streamable_http
 
-app = typer.Typer(help="IHeldan Excel MCP")
+app = typer.Typer(help="SheetForge MCP")
 
 
 def _run_server(start_fn: Callable[[], None]) -> None:
@@ -30,17 +30,17 @@ def _run_server(start_fn: Callable[[], None]) -> None:
 
 @app.command()
 def sse():
-    """Start IHeldan Excel MCP in SSE mode."""
+    """Start SheetForge MCP in SSE mode."""
     _run_server(run_sse)
 
 @app.command()
 def streamable_http():
-    """Start IHeldan Excel MCP in streamable HTTP mode."""
+    """Start SheetForge MCP in streamable HTTP mode."""
     _run_server(run_streamable_http)
 
 @app.command()
 def stdio():
-    """Start IHeldan Excel MCP in stdio mode."""
+    """Start SheetForge MCP in stdio mode."""
     _run_server(run_stdio)
 
 if __name__ == "__main__":

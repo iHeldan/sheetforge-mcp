@@ -1,7 +1,7 @@
 [project]
-name = "iheldan-excel-mcp"
-version = "0.2.0"
-description = "IHeldan's MCP server for reading, writing, and reshaping Excel workbooks"
+name = "sheetforge-mcp"
+version = "0.2.1"
+description = "SheetForge MCP for reading, writing, and reshaping Excel workbooks"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -11,10 +11,10 @@ dependencies = [
     "typer>=0.16.0"
 ]
 [[project.authors]]
-name = "iHeldan"
+name = "SheetForge"
 
 [project.scripts]
-iheldan-excel-mcp = "excel_mcp.__main__:app"
+sheetforge-mcp = "excel_mcp.__main__:app"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]

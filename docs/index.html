@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>IHeldan Excel MCP</title>
+  <title>SheetForge MCP</title>
   <style>
     :root {
       color-scheme: light;
@@ -197,9 +197,9 @@
     <section class="hero">
       <div class="hero-copy">
         <span class="eyebrow">MCP + Excel</span>
-        <h1>IHeldan Excel MCP</h1>
+        <h1>SheetForge MCP</h1>
         <p>
-          IHeldan's MCP server for reading, writing, searching, formatting, and restructuring
+          SheetForge MCP for reading, writing, searching, formatting, and restructuring
           `.xlsx` workbooks with `openpyxl`.
         </p>
         <p>
@@ -250,12 +250,12 @@
     <section class="stack">
       <article class="card">
         <h2>Quick start</h2>
-        <pre><code>uvx iheldan-excel-mcp stdio</code></pre>
+        <pre><code>uvx sheetforge-mcp stdio</code></pre>
       </article>
 
       <article class="card">
         <h2>Streamable HTTP example</h2>
-        <pre><code>EXCEL_FILES_PATH=/path/to/excel-files uvx iheldan-excel-mcp streamable-http</code></pre>
+        <pre><code>EXCEL_FILES_PATH=/path/to/excel-files uvx sheetforge-mcp streamable-http</code></pre>
       </article>
 
       <article class="card">
@@ -264,7 +264,7 @@
   "mcpServers": {
     "excel": {
       "command": "uvx",
-      "args": ["iheldan-excel-mcp", "stdio"]
+      "args": ["sheetforge-mcp", "stdio"]
     }
   }
 }</code></pre>

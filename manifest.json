@@ -1,10 +1,10 @@
 {
   "manifest_version": "0.3",
-  "name": "iheldan-excel-mcp",
-  "version": "0.2.0",
-  "description": "IHeldan's MCP server for reading, writing, and reshaping Excel workbooks",
+  "name": "sheetforge-mcp",
+  "version": "0.2.1",
+  "description": "SheetForge MCP for reading, writing, and reshaping Excel workbooks",
   "author": {
-    "name": "iHeldan",
+    "name": "SheetForge",
     "url": "https://github.com/iHeldan"
   },
   "repository": {
@@ -20,7 +20,7 @@
     "entry_point": "src/excel_mcp/__main__.py",
     "mcp_config": {
       "command": "uvx",
-      "args": ["iheldan-excel-mcp", "stdio"]
+      "args": ["sheetforge-mcp", "stdio"]
     }
   },
   "tools": [

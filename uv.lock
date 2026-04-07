@@ -394,32 +394,6 @@ wheels = [
 ]
 
 [[package]]
-name = "iheldan-excel-mcp"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "fastmcp" },
-    { name = "mcp", extra = ["cli"] },
-    { name = "openpyxl" },
-    { name = "typer" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastmcp", specifier = ">=2.0.0,<3.0.0" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.10.1" },
-    { name = "openpyxl", specifier = ">=3.1.5" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "typer", specifier = ">=0.16.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1139,6 +1113,32 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/71/2d/ceb3f9c12f8cfa56d34995097f6cd99da1325642c60d1b6680dd9df03ed8/rpds_py-0.26.0-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:4feb7511c29f8442cbbc28149a92093d32e815a28aa2c50d333826ad2a20fdf0", size = 588380, upload-time = "2025-07-01T15:56:50.086Z" },
     { url = "https://files.pythonhosted.org/packages/c8/ed/9de62c2150ca8e2e5858acf3f4f4d0d180a38feef9fdab4078bea63d8dba/rpds_py-0.26.0-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:e99685fc95d386da368013e7fb4269dd39c30d99f812a8372d62f244f662709c", size = 555334, upload-time = "2025-07-01T15:56:51.703Z" },
 ]
+
+[[package]]
+name = "sheetforge-mcp"
+version = "0.2.1"
+source = { editable = "." }
+dependencies = [
+    { name = "fastmcp" },
+    { name = "mcp", extra = ["cli"] },
+    { name = "openpyxl" },
+    { name = "typer" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=2.0.0,<3.0.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.10.1" },
+    { name = "openpyxl", specifier = ">=3.1.5" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "typer", specifier = ">=0.16.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "shellingham"
