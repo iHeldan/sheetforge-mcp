@@ -176,7 +176,7 @@ uv run sheetforge-mcp stdio
 - `src/excel_mcp/workbook.py`: workbook lifecycle helpers and workbook metadata
 - `src/excel_mcp/data.py`: read, write, table, and search helpers
 - `src/excel_mcp/sheet.py`: worksheet and range mutations
-- `tests/`: regression tests for workbook handling and public behavior
+- `tests/`: 91 regression tests covering data, layout, charts, pivots, formatting, tables, and resource safety
 - `manifest.json`: packaged MCP bundle metadata
 - `docs/index.html`: static project landing page
 

@@ -225,8 +225,8 @@ Returns matches under `data.matches`:
   Creates a native Excel table from an existing range.
 - `create_chart(filepath: str, sheet_name: str, data_range: str, chart_type: str, target_cell: str, title: str = "", x_axis: str = "", y_axis: str = "") -> str`
   Creates a chart anchored at `target_cell`. Supported chart types are `line`, `bar`, `pie`, `scatter`, and `area`.
-- `create_pivot_table(filepath: str, sheet_name: str, data_range: str, rows: List[str], values: List[str], columns: Optional[List[str]] = None, agg_func: str = "mean") -> str`
-  Creates a pivot-style summary from the given data range.
+- `create_pivot_table(filepath: str, sheet_name: str, data_range: str, rows: List[str], values: List[str], columns: Optional[List[str]] = None, agg_func: str = "sum") -> str`
+  Creates a pivot-style summary from the given data range. Supported aggregation functions: `sum`, `average`, `count`, `min`, `max`.
 
 ## Practical Usage Notes
 
