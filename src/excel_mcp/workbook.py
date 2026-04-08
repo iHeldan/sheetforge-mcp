@@ -104,6 +104,48 @@ def list_sheets(filepath: str) -> list[dict[str, Any]]:
         logger.error(f"Failed to list sheets: {e}")
         raise WorkbookError(str(e))
 
+
+def list_named_ranges(filepath: str) -> list[dict[str, Any]]:
+    """List workbook-level and local defined names."""
+    try:
+        with safe_workbook(filepath) as wb:
+            ranges = []
+            for name, defined_name in wb.defined_names.items():
+                destinations = []
+                try:
+                    destinations = [
+                        {
+                            "sheet_name": sheet_name,
+                            "range": cell_range,
+                        }
+                        for sheet_name, cell_range in defined_name.destinations
+                    ]
+                except Exception:
+                    destinations = []
+
+                local_sheet = None
+                if defined_name.localSheetId is not None:
+                    try:
+                        local_sheet = wb.sheetnames[defined_name.localSheetId]
+                    except Exception:
+                        local_sheet = None
+
+                ranges.append(
+                    {
+                        "name": name,
+                        "type": defined_name.type,
+                        "value": defined_name.value,
+                        "destinations": destinations,
+                        "local_sheet": local_sheet,
+                        "hidden": bool(getattr(defined_name, "hidden", False)),
+                    }
+                )
+
+            return sorted(ranges, key=lambda item: item["name"].lower())
+    except Exception as e:
+        logger.error(f"Failed to list named ranges: {e}")
+        raise WorkbookError(str(e))
+
 def get_workbook_info(filepath: str, include_ranges: bool = False) -> dict[str, Any]:
     """Get metadata about workbook including sheets, ranges, etc."""
     try:

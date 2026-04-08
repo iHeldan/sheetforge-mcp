@@ -24,7 +24,7 @@ from excel_mcp.validation import (
     validate_range_in_sheet_operation as validate_range_impl
 )
 from excel_mcp.chart import create_chart_in_sheet as create_chart_impl
-from excel_mcp.workbook import get_workbook_info
+from excel_mcp.workbook import get_workbook_info, list_named_ranges as list_named_ranges_impl
 from excel_mcp.data import (
     append_table_rows as append_table_rows_impl,
     read_as_table,
@@ -41,6 +41,8 @@ from excel_mcp.sheet import (
     merge_range,
     unmerge_range,
     get_merged_ranges,
+    set_auto_filter,
+    set_freeze_panes,
     insert_row,
     insert_cols,
     delete_rows,
@@ -589,6 +591,20 @@ def get_workbook_metadata(
         lambda: get_workbook_info(get_excel_path(filepath), include_ranges=include_ranges),
     )
 
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List Named Ranges",
+        readOnlyHint=True,
+    ),
+)
+def list_named_ranges(filepath: str) -> str:
+    """List workbook defined names and their destinations."""
+    def action() -> Any:
+        return {"named_ranges": list_named_ranges_impl(get_excel_path(filepath))}
+
+    return _run_tool("list_named_ranges", action)
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="Merge Cells",
@@ -639,6 +655,44 @@ def get_merged_cells(filepath: str, sheet_name: str) -> str:
         return {"sheet_name": sheet_name, "ranges": get_merged_ranges(get_excel_path(filepath), sheet_name)}
 
     return _run_tool("get_merged_cells", action)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Freeze Panes",
+        destructiveHint=True,
+    ),
+)
+def freeze_panes(
+    filepath: str,
+    sheet_name: str,
+    cell: Optional[str] = None,
+    dry_run: bool = False,
+) -> str:
+    """Set or clear worksheet freeze panes."""
+    return _run_tool(
+        "freeze_panes",
+        lambda: set_freeze_panes(get_excel_path(filepath), sheet_name, cell, dry_run=dry_run),
+    )
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Set Autofilter",
+        destructiveHint=True,
+    ),
+)
+def set_autofilter(
+    filepath: str,
+    sheet_name: str,
+    range_ref: Optional[str] = None,
+    dry_run: bool = False,
+) -> str:
+    """Set worksheet autofilter for an explicit or inferred range."""
+    return _run_tool(
+        "set_autofilter",
+        lambda: set_auto_filter(get_excel_path(filepath), sheet_name, range_ref, dry_run=dry_run),
+    )
 
 @mcp.tool(
     annotations=ToolAnnotations(

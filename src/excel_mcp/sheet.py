@@ -6,7 +6,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.styles import Font, Border, PatternFill, Side
 
-from .cell_utils import parse_cell_range
+from .cell_utils import parse_cell_range, validate_cell_reference
 from .exceptions import SheetError, ValidationError
 from .workbook import safe_workbook
 
@@ -283,6 +283,105 @@ def get_merged_ranges(filepath: str, sheet_name: str) -> list[str]:
         raise
     except Exception as e:
         logger.error(f"Failed to get merged cells: {e}")
+        raise SheetError(str(e))
+
+
+def set_freeze_panes(
+    filepath: str,
+    sheet_name: str,
+    cell: Optional[str],
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Set or clear worksheet freeze panes."""
+    try:
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            if sheet_name not in wb.sheetnames:
+                raise SheetError(f"Sheet '{sheet_name}' not found")
+
+            worksheet = wb[sheet_name]
+            previous_value = worksheet.freeze_panes
+            previous_cell = previous_value.coordinate if hasattr(previous_value, "coordinate") else previous_value
+
+            normalized_cell = None if cell in (None, "", "A1") else cell
+            if normalized_cell is not None and not validate_cell_reference(normalized_cell):
+                raise ValidationError(f"Invalid freeze pane cell reference: {normalized_cell}")
+
+            worksheet.freeze_panes = normalized_cell
+
+        changes = [{
+            "type": "freeze_panes",
+            "sheet_name": sheet_name,
+            "old_value": previous_cell,
+            "new_value": normalized_cell,
+        }]
+
+        if normalized_cell is None:
+            message = f"{'Previewed clearing' if dry_run else 'Cleared'} freeze panes in sheet '{sheet_name}'"
+        else:
+            message = f"{'Previewed' if dry_run else 'Set'} freeze panes at {normalized_cell} in sheet '{sheet_name}'"
+
+        return {
+            "message": message,
+            "sheet_name": sheet_name,
+            "freeze_panes": normalized_cell,
+            "dry_run": dry_run,
+            "changes": changes,
+        }
+    except (ValidationError, SheetError) as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set freeze panes: {e}")
+        raise SheetError(str(e))
+
+
+def set_auto_filter(
+    filepath: str,
+    sheet_name: str,
+    range_ref: Optional[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Set worksheet autofilter for an explicit or inferred range."""
+    try:
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            if sheet_name not in wb.sheetnames:
+                raise SheetError(f"Sheet '{sheet_name}' not found")
+
+            worksheet = wb[sheet_name]
+            previous_ref = worksheet.auto_filter.ref
+
+            resolved_ref = range_ref
+            if not resolved_ref:
+                is_empty = worksheet.max_row == 1 and worksheet.max_column == 1 and worksheet.cell(1, 1).value is None
+                if is_empty:
+                    raise SheetError("Cannot infer autofilter range from an empty sheet")
+                resolved_ref = f"A1:{get_column_letter(worksheet.max_column)}{worksheet.max_row}"
+
+            try:
+                start_ref, end_ref = resolved_ref.split(":", 1)
+            except ValueError:
+                raise ValidationError("Autofilter range must be in A1:B2 format")
+
+            parse_cell_range(start_ref, end_ref)
+            worksheet.auto_filter.ref = resolved_ref
+
+        return {
+            "message": f"{'Previewed' if dry_run else 'Set'} autofilter range {resolved_ref} in sheet '{sheet_name}'",
+            "sheet_name": sheet_name,
+            "range": resolved_ref,
+            "dry_run": dry_run,
+            "changes": [{
+                "type": "set_autofilter",
+                "sheet_name": sheet_name,
+                "old_value": previous_ref,
+                "new_value": resolved_ref,
+            }],
+        }
+    except (ValidationError, SheetError) as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set autofilter: {e}")
         raise SheetError(str(e))
 
 def copy_range_operation(

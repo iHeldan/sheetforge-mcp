@@ -152,6 +152,8 @@ Returns matches under `data.matches`:
   Adds a worksheet to an existing workbook.
 - `get_workbook_metadata(filepath: str, include_ranges: bool = False) -> str`
   Returns workbook metadata under the shared JSON envelope.
+- `list_named_ranges(filepath: str) -> str`
+  Returns workbook defined names, their values, and any sheet/range destinations.
 - `list_all_sheets(filepath: str) -> str`
   Returns one entry per worksheet, including `rows`, `columns`, `column_range`, and `is_empty`.
 
@@ -185,6 +187,10 @@ Returns matches under `data.matches`:
 
 - `format_range(filepath: str, sheet_name: str, start_cell: str, end_cell: Optional[str] = None, bold: bool = False, italic: bool = False, underline: bool = False, font_size: Optional[int] = None, font_color: Optional[str] = None, bg_color: Optional[str] = None, border_style: Optional[str] = None, border_color: Optional[str] = None, number_format: Optional[str] = None, alignment: Optional[str] = None, wrap_text: bool = False, merge_cells: bool = False, protection: Optional[Dict[str, Any]] = None, conditional_format: Optional[Dict[str, Any]] = None, dry_run: bool = False) -> str`
   Applies formatting options to a cell or range and supports preview mode.
+- `freeze_panes(filepath: str, sheet_name: str, cell: Optional[str] = None, dry_run: bool = False) -> str`
+  Sets freeze panes at the given cell or clears them when `cell` is omitted or `A1`. Supports preview mode.
+- `set_autofilter(filepath: str, sheet_name: str, range_ref: Optional[str] = None, dry_run: bool = False) -> str`
+  Applies an autofilter to the given range or infers the used range automatically. Supports preview mode.
 - `merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str, dry_run: bool = False) -> str`
   Merges the selected range and supports preview mode.
 - `unmerge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str, dry_run: bool = False) -> str`

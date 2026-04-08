@@ -12,7 +12,7 @@ CLI command: `sheetforge-mcp`
 - structured reads, compact table reads, and cell search
 - row, column, and range mutations
 - formulas and validation checks
-- formatting, merges, and conditional formatting
+- formatting, freezes, autofilters, merges, and conditional formatting
 - native Excel tables, charts, and pivot summaries
 - `stdio`, `streamable-http`, and deprecated `sse` transports
 
@@ -100,12 +100,12 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 30 MCP tools across these groups:
+The server currently registers 33 MCP tools across these groups:
 
-- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `list_all_sheets`
+- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `list_named_ranges`, `list_all_sheets`
 - data access: `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
-- formatting and layout: `format_range`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
+- formatting and layout: `format_range`, `freeze_panes`, `set_autofilter`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `validate_excel_range`, `get_data_validation_info`
 - analysis and structure: `create_table`, `create_chart`, `create_pivot_table`
 
