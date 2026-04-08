@@ -182,6 +182,7 @@ def get_excel_path(filename: str) -> str:
     return os.path.join(EXCEL_FILES_PATH, filename)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Apply Formula",
         destructiveHint=True,
@@ -210,6 +211,7 @@ def apply_formula(
     return _run_tool("apply_formula", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Validate Formula Syntax",
         readOnlyHint=True,
@@ -228,6 +230,7 @@ def validate_formula_syntax(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Format Range",
         destructiveHint=True,
@@ -284,6 +287,7 @@ def format_range(
     return _run_tool("format_range", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Read Data from Excel",
         readOnlyHint=True,
@@ -353,6 +357,7 @@ def read_data_from_excel(
         return _error_response("read_data_from_excel", e)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Read Excel as Table",
         readOnlyHint=True,
@@ -375,6 +380,7 @@ def read_excel_as_table(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Write Data to Excel",
         destructiveHint=True,
@@ -404,6 +410,7 @@ def write_data_to_excel(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Create Workbook",
         destructiveHint=True,
@@ -423,6 +430,7 @@ def create_workbook(filepath: str) -> str:
     return _run_tool("create_workbook", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Create Worksheet",
         destructiveHint=True,
@@ -441,6 +449,7 @@ def create_worksheet(filepath: str, sheet_name: str) -> str:
     return _run_tool("create_worksheet", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Create Chart",
         destructiveHint=True,
@@ -472,6 +481,7 @@ def create_chart(
     return _run_tool("create_chart", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Create Pivot Table",
         destructiveHint=True,
@@ -501,6 +511,7 @@ def create_pivot_table(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Create Table",
         destructiveHint=True,
@@ -526,6 +537,7 @@ def create_table(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Copy Worksheet",
         destructiveHint=True,
@@ -543,6 +555,7 @@ def copy_worksheet(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Delete Worksheet",
         destructiveHint=True,
@@ -559,6 +572,7 @@ def delete_worksheet(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Rename Worksheet",
         destructiveHint=True,
@@ -576,6 +590,7 @@ def rename_worksheet(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Get Workbook Metadata",
         readOnlyHint=True,
@@ -593,6 +608,7 @@ def get_workbook_metadata(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="List Named Ranges",
         readOnlyHint=True,
@@ -606,6 +622,7 @@ def list_named_ranges(filepath: str) -> str:
     return _run_tool("list_named_ranges", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Merge Cells",
         destructiveHint=True,
@@ -625,6 +642,7 @@ def merge_cells(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Unmerge Cells",
         destructiveHint=True,
@@ -644,6 +662,7 @@ def unmerge_cells(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Get Merged Cells",
         readOnlyHint=True,
@@ -658,6 +677,7 @@ def get_merged_cells(filepath: str, sheet_name: str) -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Freeze Panes",
         destructiveHint=True,
@@ -677,6 +697,7 @@ def freeze_panes(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Set Autofilter",
         destructiveHint=True,
@@ -695,6 +716,7 @@ def set_autofilter(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Copy Range",
         destructiveHint=True,
@@ -726,6 +748,7 @@ def copy_range(
     return _run_tool("copy_range", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Delete Range",
         destructiveHint=True,
@@ -755,6 +778,7 @@ def delete_range(
     return _run_tool("delete_range", action)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Validate Excel Range",
         readOnlyHint=True,
@@ -774,6 +798,7 @@ def validate_excel_range(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Get Data Validation Info",
         readOnlyHint=True,
@@ -829,6 +854,7 @@ def get_data_validation_info(
         return _error_response("get_data_validation_info", e)
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Insert Rows",
         destructiveHint=True,
@@ -848,6 +874,7 @@ def insert_rows(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Insert Columns",
         destructiveHint=True,
@@ -867,6 +894,7 @@ def insert_columns(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Delete Rows",
         destructiveHint=True,
@@ -886,6 +914,7 @@ def delete_sheet_rows(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Delete Columns",
         destructiveHint=True,
@@ -905,6 +934,7 @@ def delete_sheet_columns(
     )
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Search Cells",
         readOnlyHint=True,
@@ -934,6 +964,7 @@ def search_in_sheet(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="List Sheets",
         readOnlyHint=True,
@@ -953,6 +984,7 @@ def list_all_sheets(filepath: str) -> str:
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Append Table Rows",
         destructiveHint=True,
@@ -979,6 +1011,7 @@ def append_table_rows(
 
 
 @mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(
         title="Update Rows by Key",
         destructiveHint=True,
@@ -1047,7 +1080,7 @@ def run_streamable_http():
 def run_stdio():
     """Run Excel MCP server in stdio mode."""
     # No need to assign EXCEL_FILES_PATH in stdio mode
-    
+
     try:
         logger.info("Starting Excel MCP server with stdio transport")
         mcp.run(transport="stdio")
