@@ -114,6 +114,7 @@ For chart authoring, prefer `create_chart` as the primary entry point:
 
 - use `data_range` for the simple contiguous-data path
 - use explicit `series` plus optional `categories_range` for non-contiguous or hand-authored charts
+- use top-level `width` and `height` to control chart size in centimeters; defaults are `15 x 7.5`
 - keep `create_chart_from_series` for backward compatibility or existing prompts that already rely on it
 
 The most agent-friendly read tools are:
@@ -222,6 +223,7 @@ uv build
 - Core mutation tools now default to compact responses on committed writes, including data writes, formatting, worksheet layout helpers, and merge/unmerge helpers. Use `include_changes=True` for detailed diffs.
 - `format_ranges` batches multiple formatting operations into one workbook pass, and now reports per-range `errors` without discarding successful ranges in the same batch.
 - `autofit_columns` estimates practical column widths from the current cell contents, with optional column filters and min/max bounds.
+- `list_charts` now reports chart `width` and `height` in centimeters in addition to anchor, type, and series metadata.
 - `get_worksheet_protection` and `set_worksheet_protection` add a safe worksheet-level wrapper around Excel protection flags.
 - `set_print_area` and `set_print_titles` make report/export setup scriptable without dropping into raw openpyxl workbook internals.
 - `list_tables` now returns lightweight schema metadata such as headers, row counts, and stripe settings in addition to table names and ranges.

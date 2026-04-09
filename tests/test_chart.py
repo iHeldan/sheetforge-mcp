@@ -111,6 +111,24 @@ def test_chart_with_axis_labels(chart_workbook):
     assert result["details"]["data_range"] == "A1:B5"
 
 
+def test_chart_omits_empty_axis_titles(chart_workbook):
+    create_chart_in_sheet(
+        chart_workbook,
+        "Sales",
+        "A1:B5",
+        "bar",
+        "E1",
+        title="Revenue",
+        x_axis="",
+        y_axis="",
+    )
+
+    charts = list_charts(chart_workbook, sheet_name="Sales")
+    created_chart = next(chart for chart in charts if chart["anchor"] == "E1")
+    assert "x_axis_title" not in created_chart
+    assert "y_axis_title" not in created_chart
+
+
 def test_create_chart_can_reference_data_from_another_sheet(chart_workbook):
     wb = load_workbook(chart_workbook)
     source = wb.create_sheet("Source")
@@ -128,6 +146,42 @@ def test_create_chart_can_reference_data_from_another_sheet(chart_workbook):
     )
 
     assert result["details"]["data_range"] == "Source!A1:B3"
+
+
+def test_chart_dimensions_can_be_set_with_top_level_params(chart_workbook):
+    result = create_chart_in_sheet(
+        chart_workbook,
+        "Sales",
+        "A1:B5",
+        "bar",
+        "E1",
+        width=12,
+        height=8,
+    )
+
+    assert result["details"]["width"] == 12
+    assert result["details"]["height"] == 8
+
+    charts = list_charts(chart_workbook, sheet_name="Sales")
+    created_chart = next(chart for chart in charts if chart["anchor"] == "E1")
+    assert created_chart["width"] == 12
+    assert created_chart["height"] == 8
+
+
+def test_chart_dimensions_fallback_to_legacy_style_keys(chart_workbook):
+    create_chart_in_sheet(
+        chart_workbook,
+        "Sales",
+        "A1:B5",
+        "line",
+        "E1",
+        style={"width": 11, "height": 6.5},
+    )
+
+    charts = list_charts(chart_workbook, sheet_name="Sales")
+    created_chart = next(chart for chart in charts if chart["anchor"] == "E1")
+    assert created_chart["width"] == 11
+    assert created_chart["height"] == 6.5
 
 
 def test_create_chart_from_series_supports_non_contiguous_ranges(chart_workbook):
@@ -233,6 +287,8 @@ def test_list_charts_returns_created_chart_metadata(chart_workbook):
     assert charts[0]["x_axis_title"] == "Month"
     assert charts[0]["y_axis_title"] == "EUR"
     assert charts[0]["anchor"] == "E1"
+    assert charts[0]["width"] == 15
+    assert charts[0]["height"] == 7.5
     assert len(charts[0]["series"]) == 2
 
 
@@ -300,6 +356,24 @@ def test_create_chart_tool_accepts_explicit_series(chart_workbook):
     assert payload["data"]["details"]["type"] == "scatter"
 
 
+def test_create_chart_tool_accepts_top_level_dimensions(chart_workbook):
+    payload = _load_tool_payload(
+        create_chart_tool(
+            chart_workbook,
+            "Sales",
+            "bar",
+            "L1",
+            data_range="A1:B5",
+            width=13,
+            height=9,
+        )
+    )
+
+    assert payload["operation"] == "create_chart"
+    assert payload["data"]["details"]["width"] == 13
+    assert payload["data"]["details"]["height"] == 9
+
+
 # --- Error cases ---
 
 def test_chart_invalid_sheet(chart_workbook):
@@ -315,6 +389,11 @@ def test_chart_unsupported_type(chart_workbook):
 def test_chart_invalid_data_range(chart_workbook):
     with pytest.raises(ValidationError, match="Invalid data range"):
         create_chart_in_sheet(chart_workbook, "Sales", "ZZZ", "bar", "E1")
+
+
+def test_chart_rejects_invalid_dimensions(chart_workbook):
+    with pytest.raises(ValidationError, match="width must be a positive number"):
+        create_chart_in_sheet(chart_workbook, "Sales", "A1:B5", "bar", "E1", width=0)
 
 
 def test_chart_rejects_both_data_range_and_series(chart_workbook):

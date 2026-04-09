@@ -606,6 +606,8 @@ def create_chart(
     style: Optional[Dict[str, Any]] = None,
     series: Optional[List[Dict[str, Any]]] = None,
     categories_range: Optional[str] = None,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
 ) -> str:
     """Create chart in worksheet from a contiguous range or explicit series.
 
@@ -625,6 +627,8 @@ def create_chart(
             style=style,
             series=series,
             categories_range=categories_range,
+            width=width,
+            height=height,
         )
 
     return _run_tool("create_chart", action)
@@ -648,6 +652,8 @@ def create_chart_from_series(
     y_axis: str = "",
     categories_range: Optional[str] = None,
     style: Optional[Dict[str, Any]] = None,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
 ) -> str:
     """Create a chart from explicit series definitions for non-contiguous ranges."""
     def action() -> Any:
@@ -662,6 +668,8 @@ def create_chart_from_series(
             y_axis=y_axis,
             categories_range=categories_range,
             style=style,
+            width=width,
+            height=height,
         )
 
     return _run_tool("create_chart_from_series", action)

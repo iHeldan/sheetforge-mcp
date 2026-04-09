@@ -15,12 +15,15 @@ from openpyxl.chart.label import DataLabelList
 from openpyxl.chart.legend import Legend
 from openpyxl.chart.axis import ChartLines
 from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils.units import EMU_to_cm
 
 from .cell_utils import parse_cell_range
 from .exceptions import ValidationError, ChartError
 from .workbook import safe_workbook
 
 logger = logging.getLogger(__name__)
+DEFAULT_CHART_WIDTH = 15.0
+DEFAULT_CHART_HEIGHT = 7.5
 
 class ChartType(str, Enum):
     """Supported chart types"""
@@ -91,7 +94,10 @@ def _extract_title_text(title: Any) -> Optional[str]:
 
     value = getattr(title, "v", None)
     if value is not None:
-        return str(value)
+        value_text = str(value).strip()
+        if not value_text or value_text == "None":
+            return None
+        return value_text
 
     return None
 
@@ -142,6 +148,14 @@ def _extract_series_metadata(series: Any) -> Dict[str, Any]:
     return metadata
 
 
+def _extract_chart_dimensions(chart: Any) -> tuple[Optional[float], Optional[float]]:
+    anchor = getattr(chart, "anchor", None)
+    ext = getattr(anchor, "ext", None)
+    if ext is not None and getattr(ext, "cx", None) is not None and getattr(ext, "cy", None) is not None:
+        return EMU_to_cm(ext.cx), EMU_to_cm(ext.cy)
+    return getattr(chart, "width", None), getattr(chart, "height", None)
+
+
 def _chart_type_name(chart: Any) -> str:
     class_name = type(chart).__name__
     if class_name.endswith("Chart"):
@@ -166,6 +180,7 @@ def list_charts(
                 worksheet = wb[current_sheet_name]
                 for chart_index, chart in enumerate(getattr(worksheet, "_charts", []), start=1):
                     series = getattr(chart, "ser", None) or list(getattr(chart, "series", []))
+                    width, height = _extract_chart_dimensions(chart)
                     chart_info = {
                         "sheet_name": current_sheet_name,
                         "chart_index": chart_index,
@@ -180,6 +195,8 @@ def list_charts(
                         ),
                         "legend_position": getattr(getattr(chart, "legend", None), "position", None),
                         "style": getattr(chart, "style", None),
+                        "width": width,
+                        "height": height,
                         "series": [_extract_series_metadata(item) for item in series],
                     }
                     charts.append({key: value for key, value in chart_info.items() if value is not None})
@@ -246,12 +263,40 @@ def _build_chart(
 ) -> Any:
     _, chart_class = _resolve_chart_class(chart_type)
     chart = chart_class()
-    chart.title = title
-    if hasattr(chart, "x_axis"):
+    if title:
+        chart.title = title
+    if hasattr(chart, "x_axis") and x_axis:
         chart.x_axis.title = x_axis
-    if hasattr(chart, "y_axis"):
+    if hasattr(chart, "y_axis") and y_axis:
         chart.y_axis.title = y_axis
     return chart
+
+
+def _resolve_chart_dimensions(
+    style: Optional[Dict[str, Any]],
+    width: Optional[float],
+    height: Optional[float],
+) -> tuple[float, float]:
+    style = style or {}
+
+    raw_width = width if width is not None else style.get("width")
+    raw_height = height if height is not None else style.get("height")
+
+    def _coerce_dimension(raw_value: Any, name: str, default: float) -> float:
+        if raw_value is None:
+            return default
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(f"{name} must be a positive number") from exc
+        if value <= 0:
+            raise ValidationError(f"{name} must be a positive number")
+        return value
+
+    return (
+        _coerce_dimension(raw_width, "width", DEFAULT_CHART_WIDTH),
+        _coerce_dimension(raw_height, "height", DEFAULT_CHART_HEIGHT),
+    )
 
 
 def _resolve_range_source(
@@ -338,11 +383,18 @@ def _apply_chart_style(chart: Any, style: Dict[str, Any]) -> None:
         raise ChartError(f"Failed to apply chart style: {str(e)}")
 
 
-def _finalize_chart(worksheet: Any, chart: Any, target_cell: str) -> None:
+def _finalize_chart(
+    worksheet: Any,
+    chart: Any,
+    target_cell: str,
+    *,
+    width: float = DEFAULT_CHART_WIDTH,
+    height: float = DEFAULT_CHART_HEIGHT,
+) -> None:
     try:
         _validate_target_cell(target_cell)
-        chart.width = 15
-        chart.height = 7.5
+        chart.width = width
+        chart.height = height
         worksheet.add_chart(chart, target_cell)
     except ValidationError:
         raise
@@ -363,9 +415,12 @@ def create_chart_in_sheet(
     style: Optional[Dict] = None,
     series: Optional[List[Dict[str, Any]]] = None,
     categories_range: Optional[str] = None,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
 ) -> dict[str, Any]:
     """Create chart in sheet with either a contiguous data range or explicit series."""
     style = _normalize_style(style)
+    resolved_width, resolved_height = _resolve_chart_dimensions(style, width, height)
     if data_range and series:
         raise ValidationError("Provide either data_range or series, not both")
     if not data_range and not series:
@@ -382,6 +437,8 @@ def create_chart_in_sheet(
             y_axis=y_axis,
             categories_range=categories_range,
             style=style,
+            width=resolved_width,
+            height=resolved_height,
         )
 
     try:
@@ -438,7 +495,13 @@ def create_chart_in_sheet(
                 raise ChartError(f"Failed to create chart data references: {str(e)}")
 
             _apply_chart_style(chart, style)
-            _finalize_chart(worksheet, chart, target_cell)
+            _finalize_chart(
+                worksheet,
+                chart,
+                target_cell,
+                width=resolved_width,
+                height=resolved_height,
+            )
 
         return {
             "message": f"{chart_type.capitalize()} chart created successfully",
@@ -446,6 +509,8 @@ def create_chart_in_sheet(
                 "type": chart_type,
                 "location": target_cell,
                 "data_range": data_range,
+                "width": resolved_width,
+                "height": resolved_height,
             }
         }
 
@@ -467,9 +532,12 @@ def create_chart_from_series(
     y_axis: str = "",
     categories_range: Optional[str] = None,
     style: Optional[Dict[str, Any]] = None,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
 ) -> dict[str, Any]:
     """Create a chart from explicit series definitions."""
     normalized_style = _normalize_style(style)
+    resolved_width, resolved_height = _resolve_chart_dimensions(normalized_style, width, height)
     if not isinstance(series, list) or not series:
         raise ValidationError("At least one series definition is required")
 
@@ -528,7 +596,13 @@ def create_chart_from_series(
                 raise ChartError(f"Failed to create chart series: {str(e)}")
 
             _apply_chart_style(chart, normalized_style)
-            _finalize_chart(worksheet, chart, target_cell)
+            _finalize_chart(
+                worksheet,
+                chart,
+                target_cell,
+                width=resolved_width,
+                height=resolved_height,
+            )
 
         return {
             "message": f"{chart_type.capitalize()} chart created successfully",
@@ -537,6 +611,8 @@ def create_chart_from_series(
                 "location": target_cell,
                 "series_count": len(series),
                 "categories_range": categories_range,
+                "width": resolved_width,
+                "height": resolved_height,
             },
         }
 
