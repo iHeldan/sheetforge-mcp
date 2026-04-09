@@ -201,20 +201,20 @@ Returns matches under `data.matches`:
   Applies formatting options to a cell or range and supports preview mode. Returns compact summaries by default on committed writes.
 - `format_ranges(filepath: str, sheet_name: str, ranges: List[Dict[str, Any]], dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Applies formatting to multiple ranges in one workbook pass. Each range object uses the same option keys as `format_range`, such as `start_cell`, `end_cell`, `bold`, `font_size`, `bg_color`, or `conditional_format`.
-- `freeze_panes(filepath: str, sheet_name: str, cell: Optional[str] = None, dry_run: bool = False) -> str`
-  Sets freeze panes at the given cell or clears them when `cell` is omitted or `A1`. Supports preview mode.
-- `set_autofilter(filepath: str, sheet_name: str, range_ref: Optional[str] = None, dry_run: bool = False) -> str`
-  Applies an autofilter to the given range or infers the used range automatically. Supports preview mode.
-- `set_print_area(filepath: str, sheet_name: str, range_ref: Optional[str] = None, dry_run: bool = False) -> str`
-  Sets a worksheet print area such as `A1:F40`, or clears the existing print area when `range_ref` is omitted.
-- `set_print_titles(filepath: str, sheet_name: str, rows: Optional[str] = None, columns: Optional[str] = None, dry_run: bool = False) -> str`
+- `freeze_panes(filepath: str, sheet_name: str, cell: Optional[str] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Sets freeze panes at the given cell or clears them when `cell` is omitted or `A1`. Supports preview mode, and committed writes stay compact unless `include_changes=True`.
+- `set_autofilter(filepath: str, sheet_name: str, range_ref: Optional[str] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Applies an autofilter to the given range or infers the used range automatically. Supports preview mode, and committed writes stay compact unless `include_changes=True`.
+- `set_print_area(filepath: str, sheet_name: str, range_ref: Optional[str] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Sets a worksheet print area such as `A1:F40`, or clears the existing print area when `range_ref` is omitted. Committed writes stay compact unless `include_changes=True`.
+- `set_print_titles(filepath: str, sheet_name: str, rows: Optional[str] = None, columns: Optional[str] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Sets repeating print title rows and columns. Use `rows=""` or `columns=""` to clear an existing setting while preserving the other dimension.
-- `set_column_widths(filepath: str, sheet_name: str, widths: Dict[str, float], dry_run: bool = False) -> str`
-  Sets explicit widths for one or more worksheet columns using a map keyed by column letter. Supports preview mode.
+- `set_column_widths(filepath: str, sheet_name: str, widths: Dict[str, float], dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Sets explicit widths for one or more worksheet columns using a map keyed by column letter. Supports preview mode, and committed writes stay compact unless `include_changes=True`.
 - `autofit_columns(filepath: str, sheet_name: str, columns: Optional[List[str]] = None, min_width: float = 8.43, max_width: Optional[float] = None, padding: float = 2.0, dry_run: bool = False) -> str`
   Auto-fits worksheet columns from the current content width. When `columns` is omitted, the tool scans the used worksheet range.
-- `set_row_heights(filepath: str, sheet_name: str, heights: Dict[str, float], dry_run: bool = False) -> str`
-  Sets explicit heights for one or more worksheet rows using a map keyed by row number. Supports preview mode.
+- `set_row_heights(filepath: str, sheet_name: str, heights: Dict[str, float], dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Sets explicit heights for one or more worksheet rows using a map keyed by row number. Supports preview mode, and committed writes stay compact unless `include_changes=True`.
 - `merge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str, dry_run: bool = False) -> str`
   Merges the selected range and supports preview mode.
 - `unmerge_cells(filepath: str, sheet_name: str, start_cell: str, end_cell: str, dry_run: bool = False) -> str`
@@ -230,12 +230,12 @@ Returns matches under `data.matches`:
   Deletes a worksheet. The final remaining sheet cannot be deleted.
 - `rename_worksheet(filepath: str, old_name: str, new_name: str) -> str`
   Renames a worksheet.
-- `set_worksheet_visibility(filepath: str, sheet_name: str, visibility: str, dry_run: bool = False) -> str`
-  Sets worksheet visibility to `visible`, `hidden`, or `veryHidden`, and supports preview mode.
+- `set_worksheet_visibility(filepath: str, sheet_name: str, visibility: str, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Sets worksheet visibility to `visible`, `hidden`, or `veryHidden`, and supports preview mode. Committed writes stay compact unless `include_changes=True`.
 - `get_worksheet_protection(filepath: str, sheet_name: str) -> str`
   Returns worksheet protection status, password presence, and the current option flags such as `selectUnlockedCells` or `formatCells`.
-- `set_worksheet_protection(filepath: str, sheet_name: str, enabled: bool = True, password: Optional[str] = None, options: Optional[Dict[str, bool]] = None, dry_run: bool = False) -> str`
-  Enables or disables worksheet protection and optionally overrides supported protection flags in one call.
+- `set_worksheet_protection(filepath: str, sheet_name: str, enabled: bool = True, password: Optional[str] = None, options: Optional[Dict[str, bool]] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Enables or disables worksheet protection and optionally overrides supported protection flags in one call. Committed writes stay compact unless `include_changes=True`.
 - `copy_range(filepath: str, sheet_name: str, source_start: str, source_end: str, target_start: str, target_sheet: Optional[str] = None, dry_run: bool = False) -> str`
   Copies a range to another location, optionally on a different sheet, and supports preview mode.
 - `delete_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str, shift_direction: str = "up", dry_run: bool = False) -> str`

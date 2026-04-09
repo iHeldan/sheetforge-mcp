@@ -146,7 +146,7 @@ Error responses follow the same contract:
 ```
 
 For destructive tools that support preview mode, the envelope may also include `dry_run` and `changes`.
-Committed write operations now default to compact summaries; pass `include_changes=True` when you want per-cell or per-range detail.
+Committed write operations now default to compact summaries; pass `include_changes=True` when you want per-cell, per-range, or per-operation detail.
 
 ## Development
 

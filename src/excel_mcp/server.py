@@ -878,11 +878,18 @@ def freeze_panes(
     sheet_name: str,
     cell: Optional[str] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Set or clear worksheet freeze panes."""
     return _run_tool(
         "freeze_panes",
-        lambda: set_freeze_panes(get_excel_path(filepath), sheet_name, cell, dry_run=dry_run),
+        lambda: set_freeze_panes(
+            get_excel_path(filepath),
+            sheet_name,
+            cell,
+            dry_run=dry_run,
+            include_changes=include_changes,
+        ),
     )
 
 
@@ -898,11 +905,18 @@ def set_autofilter(
     sheet_name: str,
     range_ref: Optional[str] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Set worksheet autofilter for an explicit or inferred range."""
     return _run_tool(
         "set_autofilter",
-        lambda: set_auto_filter(get_excel_path(filepath), sheet_name, range_ref, dry_run=dry_run),
+        lambda: set_auto_filter(
+            get_excel_path(filepath),
+            sheet_name,
+            range_ref,
+            dry_run=dry_run,
+            include_changes=include_changes,
+        ),
     )
 
 @mcp.tool(
@@ -917,6 +931,7 @@ def set_worksheet_visibility(
     sheet_name: str,
     visibility: str,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Set worksheet visibility to visible, hidden, or veryHidden."""
     return _run_tool(
@@ -926,6 +941,7 @@ def set_worksheet_visibility(
             sheet_name,
             visibility,
             dry_run=dry_run,
+            include_changes=include_changes,
         ),
     )
 
@@ -959,6 +975,7 @@ def set_worksheet_protection(
     password: Optional[str] = None,
     options: Optional[Dict[str, bool]] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Enable or disable worksheet protection with optional capability flags."""
     return _run_tool(
@@ -970,6 +987,7 @@ def set_worksheet_protection(
             password=password,
             options=options,
             dry_run=dry_run,
+            include_changes=include_changes,
         ),
     )
 
@@ -986,6 +1004,7 @@ def set_print_area(
     sheet_name: str,
     range_ref: Optional[str] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Set or clear worksheet print area."""
     return _run_tool(
@@ -995,6 +1014,7 @@ def set_print_area(
             sheet_name,
             range_ref=range_ref,
             dry_run=dry_run,
+            include_changes=include_changes,
         ),
     )
 
@@ -1012,6 +1032,7 @@ def set_print_titles(
     rows: Optional[str] = None,
     columns: Optional[str] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Set, preserve, or clear repeating print title rows and columns."""
     return _run_tool(
@@ -1022,6 +1043,7 @@ def set_print_titles(
             rows=rows,
             columns=columns,
             dry_run=dry_run,
+            include_changes=include_changes,
         ),
     )
 
@@ -1037,6 +1059,7 @@ def set_column_widths(
     sheet_name: str,
     widths: Dict[str, float],
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Set explicit widths for one or more worksheet columns."""
     return _run_tool(
@@ -1046,6 +1069,7 @@ def set_column_widths(
             sheet_name,
             widths,
             dry_run=dry_run,
+            include_changes=include_changes,
         ),
     )
 
@@ -1092,6 +1116,7 @@ def set_row_heights(
     sheet_name: str,
     heights: Dict[str, float],
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> str:
     """Set explicit heights for one or more worksheet rows."""
     return _run_tool(
@@ -1101,6 +1126,7 @@ def set_row_heights(
             sheet_name,
             heights,
             dry_run=dry_run,
+            include_changes=include_changes,
         ),
     )
 

@@ -57,6 +57,7 @@ def named_range_workbook(tmp_path):
 def test_set_freeze_panes_persists_value(tmp_workbook):
     result = set_freeze_panes(tmp_workbook, "Sheet1", "B2")
     assert result["freeze_panes"] == "B2"
+    assert "changes" not in result
 
     wb = load_workbook(tmp_workbook)
     assert wb["Sheet1"].freeze_panes == "B2"
@@ -76,6 +77,7 @@ def test_set_freeze_panes_dry_run_does_not_persist(tmp_workbook):
 def test_set_autofilter_infers_used_range(tmp_workbook):
     result = set_auto_filter(tmp_workbook, "Sheet1")
     assert result["range"] == "A1:C6"
+    assert "changes" not in result
 
     wb = load_workbook(tmp_workbook)
     assert wb["Sheet1"].auto_filter.ref == "A1:C6"
@@ -210,12 +212,19 @@ def test_set_print_titles_can_clear_rows_or_columns(tmp_workbook):
 def test_set_column_widths_persists_values(tmp_workbook):
     result = set_column_widths(tmp_workbook, "Sheet1", {"A": 24, "c": 18.5})
     assert result["widths"] == {"A": 24.0, "C": 18.5}
+    assert "changes" not in result
 
     wb = load_workbook(tmp_workbook)
     ws = wb["Sheet1"]
     assert ws.column_dimensions["A"].width == 24.0
     assert ws.column_dimensions["C"].width == 18.5
     wb.close()
+
+
+def test_set_column_widths_can_include_changes_explicitly(tmp_workbook):
+    result = set_column_widths(tmp_workbook, "Sheet1", {"B": 30}, include_changes=True)
+
+    assert result["changes"][0]["new_value"] == 30.0
 
 
 def test_set_column_widths_dry_run_does_not_persist(tmp_workbook):
@@ -267,6 +276,7 @@ def test_autofit_columns_dry_run_does_not_persist(tmp_workbook):
 def test_set_row_heights_persists_values(tmp_workbook):
     result = set_row_heights(tmp_workbook, "Sheet1", {"1": 22, "3": 28.5})
     assert result["heights"] == {1: 22.0, 3: 28.5}
+    assert "changes" not in result
 
     wb = load_workbook(tmp_workbook)
     ws = wb["Sheet1"]
@@ -305,6 +315,13 @@ def test_freeze_panes_tool_returns_json_envelope(tmp_workbook):
     assert payload["operation"] == "freeze_panes"
     assert payload["dry_run"] is True
     assert payload["data"]["freeze_panes"] == "B2"
+
+
+def test_freeze_panes_tool_defaults_to_compact_committed_response(tmp_workbook):
+    payload = _load_tool_payload(freeze_panes_tool(tmp_workbook, "Sheet1", "B2"))
+
+    assert payload["operation"] == "freeze_panes"
+    assert "changes" not in payload
 
 
 def test_set_autofilter_tool_returns_json_envelope(tmp_workbook):

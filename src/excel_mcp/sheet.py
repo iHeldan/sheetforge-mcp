@@ -34,6 +34,24 @@ PROTECTION_OPTION_FIELDS = (
 ROW_RANGE_PATTERN = re.compile(r"^\$?(\d+):\$?(\d+)$")
 COLUMN_RANGE_PATTERN = re.compile(r"^\$?([A-Za-z]+):\$?([A-Za-z]+)$")
 
+
+def _should_include_changes(dry_run: bool, include_changes: Optional[bool]) -> bool:
+    if include_changes is None:
+        return dry_run
+    return include_changes
+
+
+def _attach_changes(
+    payload: Dict[str, Any],
+    *,
+    changes: list[dict[str, Any]],
+    dry_run: bool,
+    include_changes: Optional[bool],
+) -> Dict[str, Any]:
+    if _should_include_changes(dry_run, include_changes):
+        payload["changes"] = changes
+    return payload
+
 def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str, Any]:
     """Copy a worksheet within the same workbook."""
     try:
@@ -101,6 +119,7 @@ def set_sheet_visibility(
     sheet_name: str,
     visibility: str,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Set worksheet visibility to visible, hidden, or veryHidden."""
     valid_visibilities = {"visible", "hidden", "veryHidden"}
@@ -129,7 +148,7 @@ def set_sheet_visibility(
 
             worksheet.sheet_state = visibility
 
-        return {
+        return _attach_changes({
             "message": (
                 f"{'Previewed' if dry_run else 'Set'} worksheet visibility for "
                 f"'{sheet_name}' to '{visibility}'"
@@ -137,15 +156,14 @@ def set_sheet_visibility(
             "sheet_name": sheet_name,
             "visibility": visibility,
             "dry_run": dry_run,
-            "changes": [
-                {
-                    "type": "set_worksheet_visibility",
-                    "sheet_name": sheet_name,
-                    "old_value": previous_visibility,
-                    "new_value": visibility,
-                }
-            ],
-        }
+        }, changes=[
+            {
+                "type": "set_worksheet_visibility",
+                "sheet_name": sheet_name,
+                "old_value": previous_visibility,
+                "new_value": visibility,
+            }
+        ], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -219,6 +237,7 @@ def set_sheet_protection(
     password: Optional[str] = None,
     options: Optional[Dict[str, bool]] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Enable or disable worksheet protection with optional capability flags."""
     try:
@@ -253,7 +272,7 @@ def set_sheet_protection(
 
             current_state = _sheet_protection_state(worksheet)
 
-        return {
+        return _attach_changes({
             "message": (
                 f"{'Previewed' if dry_run else 'Set'} worksheet protection "
                 f"for '{sheet_name}' to {'enabled' if enabled else 'disabled'}"
@@ -261,15 +280,14 @@ def set_sheet_protection(
             "sheet_name": sheet_name,
             **current_state,
             "dry_run": dry_run,
-            "changes": [
-                {
-                    "type": "set_worksheet_protection",
-                    "sheet_name": sheet_name,
-                    "old_value": previous_state,
-                    "new_value": current_state,
-                }
-            ],
-        }
+        }, changes=[
+            {
+                "type": "set_worksheet_protection",
+                "sheet_name": sheet_name,
+                "old_value": previous_state,
+                "new_value": current_state,
+            }
+        ], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -351,6 +369,7 @@ def set_print_area(
     sheet_name: str,
     range_ref: Optional[str] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Set or clear worksheet print area."""
     try:
@@ -367,7 +386,7 @@ def set_print_area(
             worksheet.print_area = normalized_range
             current_area = _display_print_area(worksheet)
 
-        return {
+        return _attach_changes({
             "message": (
                 f"{'Previewed' if dry_run else 'Set'} print area for "
                 f"'{sheet_name}' to '{current_area}'"
@@ -377,15 +396,14 @@ def set_print_area(
             "sheet_name": sheet_name,
             "print_area": current_area,
             "dry_run": dry_run,
-            "changes": [
-                {
-                    "type": "set_print_area",
-                    "sheet_name": sheet_name,
-                    "old_value": previous_area,
-                    "new_value": current_area,
-                }
-            ],
-        }
+        }, changes=[
+            {
+                "type": "set_print_area",
+                "sheet_name": sheet_name,
+                "old_value": previous_area,
+                "new_value": current_area,
+            }
+        ], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -400,6 +418,7 @@ def set_print_titles(
     rows: Optional[str] = None,
     columns: Optional[str] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Set, preserve, or clear worksheet repeating title rows and columns."""
     try:
@@ -438,7 +457,7 @@ def set_print_titles(
             current_rows = _display_print_title_rows(worksheet)
             current_columns = _display_print_title_columns(worksheet)
 
-        return {
+        return _attach_changes({
             "message": (
                 f"{'Previewed' if dry_run else 'Set'} print titles for '{sheet_name}'"
             ),
@@ -446,21 +465,20 @@ def set_print_titles(
             "print_title_rows": current_rows,
             "print_title_columns": current_columns,
             "dry_run": dry_run,
-            "changes": [
-                {
-                    "type": "set_print_titles",
-                    "sheet_name": sheet_name,
-                    "old_value": {
-                        "rows": previous_rows,
-                        "columns": previous_columns,
-                    },
-                    "new_value": {
-                        "rows": current_rows,
-                        "columns": current_columns,
-                    },
-                }
-            ],
-        }
+        }, changes=[
+            {
+                "type": "set_print_titles",
+                "sheet_name": sheet_name,
+                "old_value": {
+                    "rows": previous_rows,
+                    "columns": previous_columns,
+                },
+                "new_value": {
+                    "rows": current_rows,
+                    "columns": current_columns,
+                },
+            }
+        ], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -474,6 +492,7 @@ def set_column_widths(
     sheet_name: str,
     widths: Dict[str, float],
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Set explicit widths for one or more worksheet columns."""
     try:
@@ -510,7 +529,7 @@ def set_column_widths(
                     }
                 )
 
-        return {
+        return _attach_changes({
             "message": (
                 f"{'Previewed' if dry_run else 'Set'} widths for "
                 f"{len(normalized_widths)} column(s) in sheet '{sheet_name}'"
@@ -518,8 +537,7 @@ def set_column_widths(
             "sheet_name": sheet_name,
             "widths": normalized_widths,
             "dry_run": dry_run,
-            "changes": changes,
-        }
+        }, changes=changes, dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -533,6 +551,7 @@ def set_row_heights(
     sheet_name: str,
     heights: Dict[str, float],
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Set explicit heights for one or more worksheet rows."""
     try:
@@ -570,7 +589,7 @@ def set_row_heights(
                     }
                 )
 
-        return {
+        return _attach_changes({
             "message": (
                 f"{'Previewed' if dry_run else 'Set'} heights for "
                 f"{len(normalized_heights)} row(s) in sheet '{sheet_name}'"
@@ -578,8 +597,7 @@ def set_row_heights(
             "sheet_name": sheet_name,
             "heights": normalized_heights,
             "dry_run": dry_run,
-            "changes": changes,
-        }
+        }, changes=changes, dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -880,6 +898,7 @@ def set_freeze_panes(
     sheet_name: str,
     cell: Optional[str],
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Set or clear worksheet freeze panes."""
     try:
@@ -909,13 +928,12 @@ def set_freeze_panes(
         else:
             message = f"{'Previewed' if dry_run else 'Set'} freeze panes at {normalized_cell} in sheet '{sheet_name}'"
 
-        return {
+        return _attach_changes({
             "message": message,
             "sheet_name": sheet_name,
             "freeze_panes": normalized_cell,
             "dry_run": dry_run,
-            "changes": changes,
-        }
+        }, changes=changes, dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -929,6 +947,7 @@ def set_auto_filter(
     sheet_name: str,
     range_ref: Optional[str] = None,
     dry_run: bool = False,
+    include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Set worksheet autofilter for an explicit or inferred range."""
     try:
@@ -954,18 +973,17 @@ def set_auto_filter(
             parse_cell_range(start_ref, end_ref)
             worksheet.auto_filter.ref = resolved_ref
 
-        return {
+        return _attach_changes({
             "message": f"{'Previewed' if dry_run else 'Set'} autofilter range {resolved_ref} in sheet '{sheet_name}'",
             "sheet_name": sheet_name,
             "range": resolved_ref,
             "dry_run": dry_run,
-            "changes": [{
-                "type": "set_autofilter",
-                "sheet_name": sheet_name,
-                "old_value": previous_ref,
-                "new_value": resolved_ref,
-            }],
-        }
+        }, changes=[{
+            "type": "set_autofilter",
+            "sheet_name": sheet_name,
+            "old_value": previous_ref,
+            "new_value": resolved_ref,
+        }], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
