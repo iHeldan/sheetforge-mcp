@@ -2,6 +2,7 @@ import uuid
 import logging
 from typing import Any
 
+from openpyxl.utils import range_boundaries
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from .exceptions import DataError
 from .workbook import safe_workbook
@@ -85,8 +86,26 @@ def list_excel_tables(
                 ws = wb[current_sheet_name]
                 for table in ws.tables.values():
                     style_name = None
+                    show_first_column = None
+                    show_last_column = None
+                    show_row_stripes = None
+                    show_column_stripes = None
                     if table.tableStyleInfo is not None:
                         style_name = table.tableStyleInfo.name
+                        show_first_column = table.tableStyleInfo.showFirstColumn
+                        show_last_column = table.tableStyleInfo.showLastColumn
+                        show_row_stripes = table.tableStyleInfo.showRowStripes
+                        show_column_stripes = table.tableStyleInfo.showColumnStripes
+
+                    min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+                    headers = [
+                        ws.cell(row=min_row, column=column_index).value
+                        for column_index in range(min_col, max_col + 1)
+                    ]
+                    column_count = max_col - min_col + 1
+                    header_row_count = int(table.headerRowCount or 0)
+                    total_row_count = int(table.totalsRowCount or 0)
+                    data_row_count = max(max_row - min_row + 1 - header_row_count, 0)
 
                     tables.append(
                         {
@@ -94,6 +113,16 @@ def list_excel_tables(
                             "table_name": table.displayName,
                             "range": table.ref,
                             "style": style_name,
+                            "headers": headers,
+                            "column_count": column_count,
+                            "data_row_count": data_row_count,
+                            "header_row_count": header_row_count,
+                            "totals_row_count": total_row_count,
+                            "totals_row_shown": bool(table.totalsRowShown),
+                            "show_first_column": show_first_column,
+                            "show_last_column": show_last_column,
+                            "show_row_stripes": show_row_stripes,
+                            "show_column_stripes": show_column_stripes,
                         }
                     )
 

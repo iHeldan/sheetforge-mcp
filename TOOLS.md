@@ -163,7 +163,7 @@ Returns matches under `data.matches`:
 - `list_all_sheets(filepath: str) -> str`
   Returns one entry per worksheet, including `rows`, `columns`, `column_range`, and `is_empty`.
 - `list_tables(filepath: str, sheet_name: Optional[str] = None) -> str`
-  Returns native Excel tables across the workbook or for one worksheet, including `sheet_name`, `table_name`, `range`, and `style`.
+  Returns native Excel tables across the workbook or for one worksheet, including `sheet_name`, `table_name`, `range`, `style`, `headers`, row counts, and style flags.
 
 ## Read, Search, And Write Tools
 
@@ -203,6 +203,10 @@ Returns matches under `data.matches`:
   Sets freeze panes at the given cell or clears them when `cell` is omitted or `A1`. Supports preview mode.
 - `set_autofilter(filepath: str, sheet_name: str, range_ref: Optional[str] = None, dry_run: bool = False) -> str`
   Applies an autofilter to the given range or infers the used range automatically. Supports preview mode.
+- `set_print_area(filepath: str, sheet_name: str, range_ref: Optional[str] = None, dry_run: bool = False) -> str`
+  Sets a worksheet print area such as `A1:F40`, or clears the existing print area when `range_ref` is omitted.
+- `set_print_titles(filepath: str, sheet_name: str, rows: Optional[str] = None, columns: Optional[str] = None, dry_run: bool = False) -> str`
+  Sets repeating print title rows and columns. Use `rows=""` or `columns=""` to clear an existing setting while preserving the other dimension.
 - `set_column_widths(filepath: str, sheet_name: str, widths: Dict[str, float], dry_run: bool = False) -> str`
   Sets explicit widths for one or more worksheet columns using a map keyed by column letter. Supports preview mode.
 - `autofit_columns(filepath: str, sheet_name: str, columns: Optional[List[str]] = None, min_width: float = 8.43, max_width: Optional[float] = None, padding: float = 2.0, dry_run: bool = False) -> str`
@@ -226,6 +230,10 @@ Returns matches under `data.matches`:
   Renames a worksheet.
 - `set_worksheet_visibility(filepath: str, sheet_name: str, visibility: str, dry_run: bool = False) -> str`
   Sets worksheet visibility to `visible`, `hidden`, or `veryHidden`, and supports preview mode.
+- `get_worksheet_protection(filepath: str, sheet_name: str) -> str`
+  Returns worksheet protection status, password presence, and the current option flags such as `selectUnlockedCells` or `formatCells`.
+- `set_worksheet_protection(filepath: str, sheet_name: str, enabled: bool = True, password: Optional[str] = None, options: Optional[Dict[str, bool]] = None, dry_run: bool = False) -> str`
+  Enables or disables worksheet protection and optionally overrides supported protection flags in one call.
 - `copy_range(filepath: str, sheet_name: str, source_start: str, source_end: str, target_start: str, target_sheet: Optional[str] = None, dry_run: bool = False) -> str`
   Copies a range to another location, optionally on a different sheet, and supports preview mode.
 - `delete_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str, shift_direction: str = "up", dry_run: bool = False) -> str`
@@ -257,6 +265,8 @@ Returns matches under `data.matches`:
 - Use `read_data_from_excel` when you need cell addresses or validation metadata.
 - Use `compact=True` on read tools when you want to minimize response size for agent workflows.
 - Use `format_ranges` instead of repeated `format_range` calls when you're styling a report or dashboard in several places at once.
+- Use `set_print_area` and `set_print_titles` when the workbook is meant for printing, export, or PDF generation.
+- Use `get_worksheet_protection` before changing protection flags on an unfamiliar workbook.
 - Use `autofit_columns` after writing or formatting tables when you want readable output without hand-tuning widths.
 - Use `search_in_sheet` to find a value before mutating a workbook.
 - Prefer `streamable-http` for long-running remote integrations.

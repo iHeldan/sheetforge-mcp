@@ -42,6 +42,10 @@ from excel_mcp.sheet import (
     autofit_columns as autofit_columns_impl,
     copy_sheet,
     delete_sheet,
+    get_sheet_protection as get_sheet_protection_impl,
+    set_print_area as set_print_area_impl,
+    set_print_titles as set_print_titles_impl,
+    set_sheet_protection as set_sheet_protection_impl,
     rename_sheet,
     set_sheet_visibility,
     merge_range,
@@ -852,6 +856,102 @@ def set_worksheet_visibility(
             get_excel_path(filepath),
             sheet_name,
             visibility,
+            dry_run=dry_run,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Get Worksheet Protection",
+        readOnlyHint=True,
+    ),
+)
+def get_worksheet_protection(filepath: str, sheet_name: str) -> str:
+    """Get worksheet protection status and option flags."""
+    return _run_tool(
+        "get_worksheet_protection",
+        lambda: get_sheet_protection_impl(get_excel_path(filepath), sheet_name),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Set Worksheet Protection",
+        destructiveHint=True,
+    ),
+)
+def set_worksheet_protection(
+    filepath: str,
+    sheet_name: str,
+    enabled: bool = True,
+    password: Optional[str] = None,
+    options: Optional[Dict[str, bool]] = None,
+    dry_run: bool = False,
+) -> str:
+    """Enable or disable worksheet protection with optional capability flags."""
+    return _run_tool(
+        "set_worksheet_protection",
+        lambda: set_sheet_protection_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            enabled=enabled,
+            password=password,
+            options=options,
+            dry_run=dry_run,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Set Print Area",
+        destructiveHint=True,
+    ),
+)
+def set_print_area(
+    filepath: str,
+    sheet_name: str,
+    range_ref: Optional[str] = None,
+    dry_run: bool = False,
+) -> str:
+    """Set or clear worksheet print area."""
+    return _run_tool(
+        "set_print_area",
+        lambda: set_print_area_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            range_ref=range_ref,
+            dry_run=dry_run,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Set Print Titles",
+        destructiveHint=True,
+    ),
+)
+def set_print_titles(
+    filepath: str,
+    sheet_name: str,
+    rows: Optional[str] = None,
+    columns: Optional[str] = None,
+    dry_run: bool = False,
+) -> str:
+    """Set, preserve, or clear repeating print title rows and columns."""
+    return _run_tool(
+        "set_print_titles",
+        lambda: set_print_titles_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            rows=rows,
+            columns=columns,
             dry_run=dry_run,
         ),
     )

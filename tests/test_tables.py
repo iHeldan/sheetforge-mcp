@@ -62,6 +62,16 @@ def test_list_tables_returns_created_table(tmp_workbook):
             "table_name": "Customers",
             "range": "A1:C6",
             "style": "TableStyleLight1",
+            "headers": ["Name", "Age", "City"],
+            "column_count": 3,
+            "data_row_count": 5,
+            "header_row_count": 1,
+            "totals_row_count": 0,
+            "totals_row_shown": False,
+            "show_first_column": False,
+            "show_last_column": False,
+            "show_row_stripes": True,
+            "show_column_stripes": False,
         }
     ]
 
@@ -78,6 +88,16 @@ def test_list_tables_can_filter_by_sheet(multi_sheet_workbook):
             "table_name": "InventoryTable",
             "range": "A1:B2",
             "style": "TableStyleMedium9",
+            "headers": ["Item", "Count"],
+            "column_count": 2,
+            "data_row_count": 1,
+            "header_row_count": 1,
+            "totals_row_count": 0,
+            "totals_row_shown": False,
+            "show_first_column": False,
+            "show_last_column": False,
+            "show_row_stripes": True,
+            "show_column_stripes": False,
         }
     ]
 

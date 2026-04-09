@@ -1,6 +1,7 @@
 import logging
-from typing import Any, Dict, Optional
 from copy import copy
+import re
+from typing import Any, Dict, Optional
 
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter, column_index_from_string
@@ -11,6 +12,27 @@ from .exceptions import SheetError, ValidationError
 from .workbook import safe_workbook
 
 logger = logging.getLogger(__name__)
+
+PROTECTION_OPTION_FIELDS = (
+    "selectLockedCells",
+    "selectUnlockedCells",
+    "formatCells",
+    "formatColumns",
+    "formatRows",
+    "insertColumns",
+    "insertRows",
+    "insertHyperlinks",
+    "deleteColumns",
+    "deleteRows",
+    "sort",
+    "autoFilter",
+    "pivotTables",
+    "objects",
+    "scenarios",
+)
+
+ROW_RANGE_PATTERN = re.compile(r"^\$?(\d+):\$?(\d+)$")
+COLUMN_RANGE_PATTERN = re.compile(r"^\$?([A-Za-z]+):\$?([A-Za-z]+)$")
 
 def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str, Any]:
     """Copy a worksheet within the same workbook."""
@@ -153,6 +175,298 @@ def _display_width(value: Any) -> int:
         return 0
     text = str(value)
     return max((len(line) for line in text.splitlines()), default=0)
+
+
+def _serialize_protection_options(worksheet: Worksheet) -> Dict[str, bool]:
+    return {
+        field: bool(getattr(worksheet.protection, field))
+        for field in PROTECTION_OPTION_FIELDS
+    }
+
+
+def _sheet_protection_state(worksheet: Worksheet) -> Dict[str, Any]:
+    return {
+        "enabled": bool(worksheet.protection.sheet),
+        "password_protected": bool(worksheet.protection.password),
+        "options": _serialize_protection_options(worksheet),
+    }
+
+
+def get_sheet_protection(filepath: str, sheet_name: str) -> Dict[str, Any]:
+    """Return worksheet protection state and option flags."""
+    try:
+        with safe_workbook(filepath) as wb:
+            if sheet_name not in wb.sheetnames:
+                raise SheetError(f"Sheet '{sheet_name}' not found")
+
+            worksheet = wb[sheet_name]
+            return {
+                "sheet_name": sheet_name,
+                **_sheet_protection_state(worksheet),
+            }
+    except SheetError as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get worksheet protection: {e}")
+        raise SheetError(str(e))
+
+
+def set_sheet_protection(
+    filepath: str,
+    sheet_name: str,
+    enabled: bool = True,
+    password: Optional[str] = None,
+    options: Optional[Dict[str, bool]] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Enable or disable worksheet protection with optional capability flags."""
+    try:
+        if options is not None:
+            if not isinstance(options, dict):
+                raise ValidationError("Protection options must be an object of boolean flags")
+            unknown_options = sorted(
+                key for key in options.keys() if key not in PROTECTION_OPTION_FIELDS
+            )
+            if unknown_options:
+                raise ValidationError(
+                    f"Unknown protection options: {', '.join(unknown_options)}"
+                )
+            for key, value in options.items():
+                if not isinstance(value, bool):
+                    raise ValidationError(f"Protection option '{key}' must be true or false")
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            if sheet_name not in wb.sheetnames:
+                raise SheetError(f"Sheet '{sheet_name}' not found")
+
+            worksheet = wb[sheet_name]
+            previous_state = _sheet_protection_state(worksheet)
+
+            worksheet.protection.sheet = enabled
+            if enabled and password is not None:
+                worksheet.protection.set_password(password)
+
+            if options:
+                for key, value in options.items():
+                    setattr(worksheet.protection, key, value)
+
+            current_state = _sheet_protection_state(worksheet)
+
+        return {
+            "message": (
+                f"{'Previewed' if dry_run else 'Set'} worksheet protection "
+                f"for '{sheet_name}' to {'enabled' if enabled else 'disabled'}"
+            ),
+            "sheet_name": sheet_name,
+            **current_state,
+            "dry_run": dry_run,
+            "changes": [
+                {
+                    "type": "set_worksheet_protection",
+                    "sheet_name": sheet_name,
+                    "old_value": previous_state,
+                    "new_value": current_state,
+                }
+            ],
+        }
+    except (ValidationError, SheetError) as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set worksheet protection: {e}")
+        raise SheetError(str(e))
+
+
+def _normalize_print_area(range_ref: str) -> str:
+    if not isinstance(range_ref, str) or not range_ref.strip():
+        raise ValidationError("Print area must be a cell range like A1:C10")
+
+    cleaned_range = range_ref.strip()
+    if ":" in cleaned_range:
+        start_cell, end_cell = cleaned_range.split(":", maxsplit=1)
+        try:
+            parse_cell_range(start_cell, end_cell)
+        except ValueError as e:
+            raise ValidationError(f"Invalid print area: {str(e)}") from e
+        return f"{start_cell.upper()}:{end_cell.upper()}"
+
+    if not validate_cell_reference(cleaned_range):
+        raise ValidationError(f"Invalid print area: {range_ref}")
+    return cleaned_range.upper()
+
+
+def _display_print_area(worksheet: Worksheet) -> Optional[str]:
+    value = worksheet.print_area
+    if not value:
+        return None
+    if isinstance(value, str):
+        raw_value = value
+    else:
+        raw_value = ",".join(str(item) for item in value)
+
+    prefixes = [
+        f"'{worksheet.title}'!",
+        f"{worksheet.title}!",
+    ]
+    for prefix in prefixes:
+        raw_value = raw_value.replace(prefix, "")
+    return raw_value.replace("$", "")
+
+
+def _normalize_print_title_rows(rows: str) -> str:
+    match = ROW_RANGE_PATTERN.match(rows.strip())
+    if not match:
+        raise ValidationError("Print title rows must be in the form '1:3'")
+    start_row = int(match.group(1))
+    end_row = int(match.group(2))
+    if start_row > end_row:
+        raise ValidationError("Print title rows must be in ascending order")
+    return f"{start_row}:{end_row}"
+
+
+def _normalize_print_title_columns(columns: str) -> str:
+    match = COLUMN_RANGE_PATTERN.match(columns.strip())
+    if not match:
+        raise ValidationError("Print title columns must be in the form 'A:C'")
+    start_column = match.group(1).upper()
+    end_column = match.group(2).upper()
+    if column_index_from_string(start_column) > column_index_from_string(end_column):
+        raise ValidationError("Print title columns must be in ascending order")
+    return f"{start_column}:{end_column}"
+
+
+def _display_print_title_rows(worksheet: Worksheet) -> Optional[str]:
+    value = worksheet.print_title_rows
+    return value.replace("$", "") if value else None
+
+
+def _display_print_title_columns(worksheet: Worksheet) -> Optional[str]:
+    value = worksheet.print_title_cols
+    return value.replace("$", "") if value else None
+
+
+def set_print_area(
+    filepath: str,
+    sheet_name: str,
+    range_ref: Optional[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Set or clear worksheet print area."""
+    try:
+        normalized_range = (
+            _normalize_print_area(range_ref) if range_ref is not None else None
+        )
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            if sheet_name not in wb.sheetnames:
+                raise SheetError(f"Sheet '{sheet_name}' not found")
+
+            worksheet = wb[sheet_name]
+            previous_area = _display_print_area(worksheet)
+            worksheet.print_area = normalized_range
+            current_area = _display_print_area(worksheet)
+
+        return {
+            "message": (
+                f"{'Previewed' if dry_run else 'Set'} print area for "
+                f"'{sheet_name}' to '{current_area}'"
+                if current_area is not None
+                else f"{'Previewed clearing' if dry_run else 'Cleared'} print area for '{sheet_name}'"
+            ),
+            "sheet_name": sheet_name,
+            "print_area": current_area,
+            "dry_run": dry_run,
+            "changes": [
+                {
+                    "type": "set_print_area",
+                    "sheet_name": sheet_name,
+                    "old_value": previous_area,
+                    "new_value": current_area,
+                }
+            ],
+        }
+    except (ValidationError, SheetError) as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set print area: {e}")
+        raise SheetError(str(e))
+
+
+def set_print_titles(
+    filepath: str,
+    sheet_name: str,
+    rows: Optional[str] = None,
+    columns: Optional[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Set, preserve, or clear worksheet repeating title rows and columns."""
+    try:
+        if rows is None and columns is None:
+            raise ValidationError("Provide rows, columns, or both")
+
+        normalized_rows = (
+            _normalize_print_title_rows(rows) if rows not in (None, "") else rows
+        )
+        normalized_columns = (
+            _normalize_print_title_columns(columns)
+            if columns not in (None, "")
+            else columns
+        )
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            if sheet_name not in wb.sheetnames:
+                raise SheetError(f"Sheet '{sheet_name}' not found")
+
+            worksheet = wb[sheet_name]
+            previous_rows = _display_print_title_rows(worksheet)
+            previous_columns = _display_print_title_columns(worksheet)
+
+            if rows is not None:
+                if normalized_rows == "":
+                    worksheet._print_rows = None
+                else:
+                    worksheet.print_title_rows = normalized_rows
+
+            if columns is not None:
+                if normalized_columns == "":
+                    worksheet._print_cols = None
+                else:
+                    worksheet.print_title_cols = normalized_columns
+
+            current_rows = _display_print_title_rows(worksheet)
+            current_columns = _display_print_title_columns(worksheet)
+
+        return {
+            "message": (
+                f"{'Previewed' if dry_run else 'Set'} print titles for '{sheet_name}'"
+            ),
+            "sheet_name": sheet_name,
+            "print_title_rows": current_rows,
+            "print_title_columns": current_columns,
+            "dry_run": dry_run,
+            "changes": [
+                {
+                    "type": "set_print_titles",
+                    "sheet_name": sheet_name,
+                    "old_value": {
+                        "rows": previous_rows,
+                        "columns": previous_columns,
+                    },
+                    "new_value": {
+                        "rows": current_rows,
+                        "columns": current_columns,
+                    },
+                }
+            ],
+        }
+    except (ValidationError, SheetError) as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set print titles: {e}")
+        raise SheetError(str(e))
 
 
 def set_column_widths(

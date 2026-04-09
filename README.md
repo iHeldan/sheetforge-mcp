@@ -100,12 +100,12 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 41 MCP tools across these groups:
+The server currently registers 45 MCP tools across these groups:
 
 - workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `list_named_ranges`, `list_all_sheets`, `list_tables`
 - data access: `quick_read`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `update_rows_by_key`
-- worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
-- formatting and layout: `format_range`, `format_ranges`, `freeze_panes`, `set_autofilter`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
+- worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
+- formatting and layout: `format_range`, `format_ranges`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `validate_excel_range`, `get_data_validation_info`
 - analysis and structure: `create_table`, `list_charts`, `create_chart`, `create_pivot_table`
 
@@ -198,6 +198,9 @@ uv run sheetforge-mcp stdio
 - `write_data_to_excel`, `append_table_rows`, `update_rows_by_key`, and `format_range` now default to compact responses on committed writes. Use `include_changes=True` for detailed diffs.
 - `format_ranges` batches multiple formatting operations into one workbook pass, which is much more efficient for report polish than repeated single-range calls.
 - `autofit_columns` estimates practical column widths from the current cell contents, with optional column filters and min/max bounds.
+- `get_worksheet_protection` and `set_worksheet_protection` add a safe worksheet-level wrapper around Excel protection flags.
+- `set_print_area` and `set_print_titles` make report/export setup scriptable without dropping into raw openpyxl workbook internals.
+- `list_tables` now returns lightweight schema metadata such as headers, row counts, and stripe settings in addition to table names and ranges.
 - Core mutation tools support `dry_run=True` so clients can preview changes before saving a workbook.
 
 ## License
