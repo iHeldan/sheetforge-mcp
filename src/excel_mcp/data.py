@@ -1,6 +1,9 @@
+from datetime import date, datetime, time
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 import logging
+import re
+from typing import Any, Dict, List, Optional
 
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import column_index_from_string, get_column_letter
@@ -11,6 +14,7 @@ from .cell_validation import get_data_validation_for_cell
 from .workbook import safe_workbook
 
 logger = logging.getLogger(__name__)
+ROW_MODES = {"arrays", "objects"}
 
 
 def _cell_address(row: int, col: int) -> str:
@@ -30,6 +34,122 @@ def _compact_table_payload(table_data: Dict[str, Any]) -> Dict[str, Any]:
         compact_data["total_rows"] = table_data["total_rows"]
         compact_data["truncated"] = True
     return compact_data
+
+
+def _validate_row_mode(row_mode: str) -> None:
+    if row_mode not in ROW_MODES:
+        raise DataError("row_mode must be 'arrays' or 'objects'")
+
+
+def _field_name_from_header(header: Any, index: int) -> str:
+    raw_header = "" if header is None else str(header).strip()
+    if not raw_header:
+        return f"column_{index}"
+
+    normalized = re.sub(r"[^0-9A-Za-z]+", "_", raw_header).strip("_").lower()
+    if not normalized:
+        return f"column_{index}"
+    if normalized[0].isdigit():
+        return f"column_{normalized}"
+    return normalized
+
+
+def _dedupe_field_name(field_name: str, seen_fields: set[str]) -> str:
+    if field_name not in seen_fields:
+        seen_fields.add(field_name)
+        return field_name
+
+    suffix = 2
+    candidate = f"{field_name}_{suffix}"
+    while candidate in seen_fields:
+        suffix += 1
+        candidate = f"{field_name}_{suffix}"
+    seen_fields.add(candidate)
+    return candidate
+
+
+def _infer_value_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, (float, Decimal)):
+        return "number"
+    if isinstance(value, datetime):
+        return "datetime"
+    if isinstance(value, date):
+        return "date"
+    if isinstance(value, time):
+        return "time"
+    if isinstance(value, str):
+        return "string"
+    return type(value).__name__.lower()
+
+
+def _infer_column_type(values: List[Any]) -> str:
+    non_null_types = {_infer_value_type(value) for value in values if value is not None}
+    if not non_null_types:
+        return "unknown"
+    if len(non_null_types) == 1:
+        return next(iter(non_null_types))
+    if non_null_types <= {"integer", "number"}:
+        return "number"
+    if non_null_types <= {"date", "datetime"}:
+        return "datetime"
+    return "mixed"
+
+
+def _build_schema(headers: List[Any], rows: List[List[Any]]) -> List[Dict[str, Any]]:
+    schema: List[Dict[str, Any]] = []
+    seen_fields: set[str] = set()
+
+    for index, header in enumerate(headers, start=1):
+        field_name = _dedupe_field_name(_field_name_from_header(header, index), seen_fields)
+        column_values = [row[index - 1] if index - 1 < len(row) else None for row in rows]
+        schema.append(
+            {
+                "field": field_name,
+                "header": header,
+                "type": _infer_column_type(column_values),
+                "nullable": any(value is None for value in column_values),
+            }
+        )
+
+    return schema
+
+
+def _rows_to_records(rows: List[List[Any]], schema: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        record: Dict[str, Any] = {}
+        for index, column in enumerate(schema):
+            record[column["field"]] = row[index] if index < len(row) else None
+        records.append(record)
+    return records
+
+
+def augment_tabular_payload(
+    payload: Dict[str, Any],
+    *,
+    headers: List[Any],
+    rows: List[List[Any]],
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> Dict[str, Any]:
+    _validate_row_mode(row_mode)
+
+    result = dict(payload)
+    schema = _build_schema(headers, rows) if infer_schema or row_mode == "objects" else None
+
+    if row_mode == "objects":
+        result.pop("rows", None)
+        result["records"] = _rows_to_records(rows, schema or [])
+        result["row_mode"] = "objects"
+
+    if infer_schema and schema is not None:
+        result["schema"] = schema
+
+    return result
 
 
 def _get_header_map(ws: Worksheet, header_row: int) -> Dict[str, int]:
@@ -389,10 +509,13 @@ def read_as_table(
     end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
 ) -> Dict[str, Any]:
     """Read Excel data as a compact table with headers.
 
-    Returns a dict with headers, rows, total_rows, truncated.
+    Returns a dict with headers plus either rows or records, optional schema
+    hints, total_rows, truncated, and sheet_name.
     """
     try:
         with safe_workbook(str(filepath)) as wb:
@@ -408,6 +531,8 @@ def read_as_table(
                 end_col=end_col,
                 max_rows=max_rows,
                 compact=compact,
+                row_mode=row_mode,
+                infer_schema=infer_schema,
             )
     except DataError:
         raise
@@ -425,6 +550,8 @@ def _read_table_from_worksheet(
     end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
 ) -> Dict[str, Any]:
     start_col_idx = column_index_from_string(start_col.upper())
     if end_col:
@@ -455,9 +582,14 @@ def _read_table_from_worksheet(
         "truncated": max_rows is not None and total_rows > max_rows,
         "sheet_name": sheet_name,
     }
-    if compact:
-        return _compact_table_payload(result)
-    return result
+    payload = _compact_table_payload(result) if compact else result
+    return augment_tabular_payload(
+        payload,
+        headers=headers,
+        rows=rows,
+        row_mode=row_mode,
+        infer_schema=infer_schema,
+    )
 
 
 def quick_read(
@@ -465,8 +597,14 @@ def quick_read(
     sheet_name: Optional[str] = None,
     header_row: int = 1,
     max_rows: Optional[int] = None,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
 ) -> Dict[str, Any]:
-    """Read a compact table from an explicit sheet or the first sheet automatically."""
+    """Read a compact table from an explicit sheet or the first sheet automatically.
+
+    Supports array rows by default, or object-shaped records plus lightweight
+    inferred schema hints when requested.
+    """
     try:
         with safe_workbook(str(filepath)) as wb:
             if not wb.sheetnames:
@@ -483,6 +621,8 @@ def quick_read(
                 resolved_sheet_name,
                 header_row=header_row,
                 max_rows=max_rows,
+                row_mode=row_mode,
+                infer_schema=infer_schema,
             )
             result["auto_selected_sheet"] = auto_selected_sheet
             return result

@@ -117,6 +117,12 @@ The most agent-friendly read tools are:
 - `read_excel_as_table`: compact `headers + rows` output for structured datasets, with `compact=True` for the smallest payload
 - `search_in_sheet`: exact or partial value search across a worksheet
 
+For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_table`):
+
+- `row_mode="arrays"` keeps the smallest `headers + rows` shape
+- `row_mode="objects"` returns `records` keyed by normalized field names such as `first_name`
+- `infer_schema=True` adds lightweight `schema` hints inferred from the returned rows
+
 See [TOOLS.md](TOOLS.md) for the full reference.
 
 ## Response Format
@@ -196,6 +202,7 @@ uv run sheetforge-mcp stdio
 - `read_data_from_excel(..., preview_only=True)` limits the response to the first 10 rows in the selected range and marks the payload as truncated when applicable.
 - `read_data_from_excel(..., compact=True)` omits default validation stubs for cells that do not have validation rules.
 - `read_excel_as_table(..., compact=True)` returns only `headers` and `rows` unless truncation metadata is needed.
+- `quick_read`, `read_excel_as_table`, and `read_excel_table` can now return `records` plus inferred `schema` hints when you opt into `row_mode="objects"` and `infer_schema=True`.
 - Core mutation tools now default to compact responses on committed writes, including data writes, formatting, worksheet layout helpers, and merge/unmerge helpers. Use `include_changes=True` for detailed diffs.
 - `format_ranges` batches multiple formatting operations into one workbook pass, and now reports per-range `errors` without discarding successful ranges in the same batch.
 - `autofit_columns` estimates practical column widths from the current cell contents, with optional column filters and min/max bounds.

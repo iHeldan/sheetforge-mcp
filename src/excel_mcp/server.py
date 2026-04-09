@@ -421,10 +421,13 @@ def read_excel_as_table(
     header_row: int = 1,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
 ) -> str:
     """
-    Read Excel data as a compact table with headers and rows.
-    Much more context-efficient than read_data_from_excel for structured data.
+    Read Excel data as a compact table with headers and rows or record objects.
+    Much more context-efficient than read_data_from_excel for structured data,
+    with optional inferred schema hints for downstream steps.
     """
     return _run_tool(
         "read_excel_as_table",
@@ -434,6 +437,8 @@ def read_excel_as_table(
             header_row=header_row,
             max_rows=max_rows,
             compact=compact,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
         ),
     )
 
@@ -449,8 +454,14 @@ def quick_read(
     sheet_name: Optional[str] = None,
     header_row: int = 1,
     max_rows: Optional[int] = None,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
 ) -> str:
-    """Read a compact table from an explicit sheet or the first workbook sheet."""
+    """Read a compact table from an explicit sheet or the first workbook sheet.
+
+    Can return either array rows or object-shaped records, plus optional schema
+    hints inferred from the returned rows.
+    """
     return _run_tool(
         "quick_read",
         lambda: quick_read_impl(
@@ -458,6 +469,8 @@ def quick_read(
             sheet_name=sheet_name,
             header_row=header_row,
             max_rows=max_rows,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
         ),
     )
 
@@ -475,8 +488,14 @@ def read_excel_table(
     sheet_name: Optional[str] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
 ) -> str:
-    """Read a native Excel table by its table name."""
+    """Read a native Excel table by its table name.
+
+    Supports compact table payloads, object-shaped record output, and optional
+    inferred schema hints.
+    """
     return _run_tool(
         "read_excel_table",
         lambda: read_excel_table_impl(
@@ -485,6 +504,8 @@ def read_excel_table(
             sheet_name=sheet_name,
             max_rows=max_rows,
             compact=compact,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
         ),
     )
 

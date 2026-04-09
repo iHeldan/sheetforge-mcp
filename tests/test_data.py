@@ -70,6 +70,53 @@ def test_read_as_table_custom_header_row(tmp_workbook):
     result = read_as_table(tmp_workbook, "Sheet1", header_row=2)
     assert result["headers"] == ["Alice", 30, "Helsinki"]
 
+
+def test_read_as_table_can_return_records_and_schema(tmp_workbook):
+    result = read_as_table(tmp_workbook, "Sheet1", row_mode="objects", infer_schema=True)
+
+    assert result["records"][0] == {
+        "name": "Alice",
+        "age": 30,
+        "city": "Helsinki",
+    }
+    assert result["schema"] == [
+        {"field": "name", "header": "Name", "type": "string", "nullable": False},
+        {"field": "age", "header": "Age", "type": "integer", "nullable": False},
+        {"field": "city", "header": "City", "type": "string", "nullable": False},
+    ]
+    assert result["row_mode"] == "objects"
+    assert "rows" not in result
+
+
+def test_read_as_table_schema_normalizes_and_dedupes_headers(tmp_path):
+    from openpyxl import Workbook
+
+    filepath = tmp_path / "schema.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "First Name"
+    ws["B1"] = None
+    ws["C1"] = "First Name"
+    ws["A2"] = "Alice"
+    ws["B2"] = 30
+    ws["C2"] = "Admin"
+    wb.save(filepath)
+    wb.close()
+
+    result = read_as_table(str(filepath), "Sheet1", row_mode="objects", infer_schema=True)
+
+    assert result["schema"] == [
+        {"field": "first_name", "header": "First Name", "type": "string", "nullable": False},
+        {"field": "column_2", "header": None, "type": "integer", "nullable": False},
+        {"field": "first_name_2", "header": "First Name", "type": "string", "nullable": False},
+    ]
+    assert result["records"][0] == {
+        "first_name": "Alice",
+        "column_2": 30,
+        "first_name_2": "Admin",
+    }
+
 def test_search_cells_finds_exact_match(tmp_workbook):
     results = search_cells(tmp_workbook, "Sheet1", "Alice")
     assert len(results) == 1
@@ -185,6 +232,28 @@ def test_read_excel_as_table_compact_preserves_truncation_metadata(tmp_workbook)
     assert payload["data"]["truncated"] is True
 
 
+def test_read_excel_as_table_tool_can_return_records_and_schema(tmp_workbook):
+    payload = _load_tool_payload(
+        read_excel_as_table_tool(
+            tmp_workbook,
+            "Sheet1",
+            compact=True,
+            row_mode="objects",
+            infer_schema=True,
+        )
+    )
+
+    assert payload["data"]["headers"] == ["Name", "Age", "City"]
+    assert payload["data"]["records"][0] == {
+        "name": "Alice",
+        "age": 30,
+        "city": "Helsinki",
+    }
+    assert payload["data"]["schema"][1]["type"] == "integer"
+    assert payload["data"]["row_mode"] == "objects"
+    assert "rows" not in payload["data"]
+
+
 def test_list_all_sheets_returns_json_envelope(tmp_workbook):
     payload = _load_tool_payload(list_all_sheets(tmp_workbook))
     assert payload["operation"] == "list_all_sheets"
@@ -205,11 +274,34 @@ def test_quick_read_respects_explicit_sheet_name(multi_sheet_workbook):
     assert result["headers"] == ["Item", "Count"]
 
 
+def test_quick_read_can_return_records_and_schema(multi_sheet_workbook):
+    result = quick_read_impl(
+        multi_sheet_workbook,
+        sheet_name="Inventory",
+        row_mode="objects",
+        infer_schema=True,
+    )
+
+    assert result["records"] == [{"item": "Widget", "count": 42}]
+    assert result["schema"] == [
+        {"field": "item", "header": "Item", "type": "string", "nullable": False},
+        {"field": "count", "header": "Count", "type": "integer", "nullable": False},
+    ]
+    assert result["row_mode"] == "objects"
+    assert "rows" not in result
+
+
 def test_quick_read_tool_returns_json_envelope(multi_sheet_workbook):
     payload = _load_tool_payload(quick_read(multi_sheet_workbook))
     assert payload["operation"] == "quick_read"
     assert payload["data"]["sheet_name"] == "Sales"
     assert payload["data"]["auto_selected_sheet"] is True
+
+
+def test_quick_read_rejects_invalid_row_mode(multi_sheet_workbook):
+    payload = json.loads(quick_read(multi_sheet_workbook, row_mode="dicts"))
+    assert payload["ok"] is False
+    assert payload["error"]["message"] == "row_mode must be 'arrays' or 'objects'"
 
 
 def test_write_data_dry_run_does_not_persist(tmp_workbook):

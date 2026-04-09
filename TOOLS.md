@@ -164,8 +164,8 @@ Returns matches under `data.matches`:
   Returns one entry per worksheet, including `rows`, `columns`, `column_range`, and `is_empty`.
 - `list_tables(filepath: str, sheet_name: Optional[str] = None) -> str`
   Returns native Excel tables across the workbook or for one worksheet, including `sheet_name`, `table_name`, `range`, `style`, `headers`, row counts, and style flags.
-- `read_excel_table(filepath: str, table_name: str, sheet_name: Optional[str] = None, max_rows: Optional[int] = None, compact: bool = False) -> str`
-  Reads rows from a native Excel table by `table_name`, preserving the table's exact range instead of inferring worksheet bounds. With `compact=True`, the payload keeps `sheet_name`, `table_name`, `range`, `headers`, and `rows`, plus truncation metadata when needed.
+- `read_excel_table(filepath: str, table_name: str, sheet_name: Optional[str] = None, max_rows: Optional[int] = None, compact: bool = False, row_mode: str = "arrays", infer_schema: bool = False) -> str`
+  Reads rows from a native Excel table by `table_name`, preserving the table's exact range instead of inferring worksheet bounds. With `compact=True`, the payload keeps `sheet_name`, `table_name`, `range`, and the selected row payload, plus truncation metadata when needed.
 
 ## Read, Search, And Write Tools
 
@@ -173,10 +173,14 @@ Returns matches under `data.matches`:
   Writes tabular data starting at the given cell. Missing target sheets are created automatically. Returns compact summaries by default on committed writes, and detailed `changes` during previews unless explicitly disabled.
 - `read_data_from_excel(filepath: str, sheet_name: str, start_cell: str = "A1", end_cell: Optional[str] = None, preview_only: bool = False, compact: bool = False) -> str`
   Returns cell range data with row, column, address, value, and validation metadata under the shared envelope.
-- `read_excel_as_table(filepath: str, sheet_name: str, header_row: int = 1, max_rows: Optional[int] = None, compact: bool = False) -> str`
-  Returns `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`. With `compact=True`, only `headers` and `rows` are returned unless truncation metadata is needed.
-- `quick_read(filepath: str, sheet_name: Optional[str] = None, header_row: int = 1, max_rows: Optional[int] = None) -> str`
+- `read_excel_as_table(filepath: str, sheet_name: str, header_row: int = 1, max_rows: Optional[int] = None, compact: bool = False, row_mode: str = "arrays", infer_schema: bool = False) -> str`
+  Returns `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`. With `compact=True`, only the selected row payload is returned unless truncation metadata is needed.
+- `quick_read(filepath: str, sheet_name: Optional[str] = None, header_row: int = 1, max_rows: Optional[int] = None, row_mode: str = "arrays", infer_schema: bool = False) -> str`
   Returns a compact table from the requested sheet, or auto-selects the first workbook sheet when `sheet_name` is omitted.
+- `row_mode`
+  Use `row_mode="arrays"` for the current `headers + rows` shape, or `row_mode="objects"` to receive `records` keyed by normalized field names such as `first_name` or `column_2`.
+- `infer_schema`
+  When `infer_schema=True`, the response includes `schema` entries with `field`, `header`, `type`, and `nullable` hints inferred from the returned rows.
 - `search_in_sheet(filepath: str, sheet_name: str, query: Any, exact: bool = True, max_results: int = 50) -> str`
   Returns exact or partial value matches across the worksheet.
 - `append_table_rows(filepath: str, sheet_name: str, rows: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
@@ -272,6 +276,8 @@ Returns matches under `data.matches`:
 
 - Use `list_all_sheets` before reading unfamiliar workbooks.
 - Use `read_excel_table` when the workbook already contains native Excel tables and you want exact table semantics instead of a sheet-wide read.
+- Use `row_mode="objects"` when the agent benefits more from named fields than the smallest possible payload.
+- Use `infer_schema=True` when downstream steps need lightweight type hints without doing a second pass over the rows.
 - Use `read_excel_as_table` when the source data is tabular and headers matter.
 - Use `read_data_from_excel` when you need cell addresses or validation metadata.
 - Use `compact=True` on read tools when you want to minimize response size for agent workflows.

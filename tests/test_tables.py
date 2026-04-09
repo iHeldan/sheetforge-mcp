@@ -168,6 +168,32 @@ def test_read_excel_table_supports_max_rows_and_compact(tmp_workbook):
     }
 
 
+def test_read_excel_table_can_return_records_and_schema(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    result = read_excel_table(
+        tmp_workbook,
+        "Customers",
+        compact=True,
+        row_mode="objects",
+        infer_schema=True,
+    )
+
+    assert result["records"][0] == {
+        "name": "Alice",
+        "age": 30,
+        "city": "Helsinki",
+    }
+    assert result["schema"][1] == {
+        "field": "age",
+        "header": "Age",
+        "type": "integer",
+        "nullable": False,
+    }
+    assert result["row_mode"] == "objects"
+    assert "rows" not in result
+
+
 def test_read_excel_table_can_filter_by_sheet(multi_sheet_workbook):
     create_excel_table(multi_sheet_workbook, "Sales", "A1:B2", table_name="SalesTable")
     create_excel_table(multi_sheet_workbook, "Inventory", "A1:B2", table_name="InventoryTable")
@@ -192,3 +218,21 @@ def test_read_excel_table_tool_returns_json_envelope(tmp_workbook):
     assert payload["operation"] == "read_excel_table"
     assert payload["data"]["table_name"] == "Customers"
     assert payload["data"]["truncated"] is True
+
+
+def test_read_excel_table_tool_can_return_records_and_schema(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    payload = _load_tool_payload(
+        read_excel_table_tool(
+            tmp_workbook,
+            "Customers",
+            compact=True,
+            row_mode="objects",
+            infer_schema=True,
+        )
+    )
+
+    assert payload["operation"] == "read_excel_table"
+    assert payload["data"]["records"][0]["name"] == "Alice"
+    assert payload["data"]["schema"][2]["field"] == "city"

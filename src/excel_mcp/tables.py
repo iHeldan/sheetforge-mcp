@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from openpyxl.utils import range_boundaries
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from .data import augment_tabular_payload
 from .exceptions import DataError
 from .workbook import safe_workbook
 
@@ -177,8 +178,14 @@ def read_excel_table(
     sheet_name: Optional[str] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
 ) -> dict[str, Any]:
-    """Read rows from a native Excel table by its table name."""
+    """Read rows from a native Excel table by its table name.
+
+    Supports the same array-vs-record row modes and lightweight inferred schema
+    hints as the compact worksheet table readers.
+    """
     try:
         with safe_workbook(filepath) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
@@ -215,7 +222,7 @@ def read_excel_table(
                 "totals_row_shown": metadata["totals_row_shown"],
             }
             if compact:
-                compact_result = {
+                payload = {
                     "sheet_name": result["sheet_name"],
                     "table_name": result["table_name"],
                     "range": result["range"],
@@ -223,10 +230,18 @@ def read_excel_table(
                     "rows": result["rows"],
                 }
                 if result["truncated"]:
-                    compact_result["total_rows"] = result["total_rows"]
-                    compact_result["truncated"] = True
-                return compact_result
-            return result
+                    payload["total_rows"] = result["total_rows"]
+                    payload["truncated"] = True
+            else:
+                payload = result
+
+            return augment_tabular_payload(
+                payload,
+                headers=result["headers"],
+                rows=result["rows"],
+                row_mode=row_mode,
+                infer_schema=infer_schema,
+            )
 
     except DataError:
         raise
