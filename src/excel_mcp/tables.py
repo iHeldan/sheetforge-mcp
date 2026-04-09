@@ -1,6 +1,6 @@
 import uuid
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from openpyxl.utils import range_boundaries
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -8,6 +8,81 @@ from .exceptions import DataError
 from .workbook import safe_workbook
 
 logger = logging.getLogger(__name__)
+
+
+def _get_table_style_details(table: Table) -> dict[str, Any]:
+    style_name = None
+    show_first_column = None
+    show_last_column = None
+    show_row_stripes = None
+    show_column_stripes = None
+    if table.tableStyleInfo is not None:
+        style_name = table.tableStyleInfo.name
+        show_first_column = table.tableStyleInfo.showFirstColumn
+        show_last_column = table.tableStyleInfo.showLastColumn
+        show_row_stripes = table.tableStyleInfo.showRowStripes
+        show_column_stripes = table.tableStyleInfo.showColumnStripes
+
+    return {
+        "style": style_name,
+        "show_first_column": show_first_column,
+        "show_last_column": show_last_column,
+        "show_row_stripes": show_row_stripes,
+        "show_column_stripes": show_column_stripes,
+    }
+
+
+def _build_table_metadata(
+    current_sheet_name: str,
+    ws: Any,
+    table: Table,
+) -> dict[str, Any]:
+    min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+    header_row_count = int(table.headerRowCount or 0)
+    totals_row_count = int(table.totalsRowCount or 0)
+    total_row_span = max_row - min_row + 1
+    data_row_count = max(total_row_span - header_row_count - totals_row_count, 0)
+
+    headers: list[Any] = []
+    if header_row_count > 0:
+        headers = [
+            ws.cell(row=min_row, column=column_index).value
+            for column_index in range(min_col, max_col + 1)
+        ]
+
+    metadata = {
+        "sheet_name": current_sheet_name,
+        "table_name": table.displayName,
+        "range": table.ref,
+        "headers": headers,
+        "column_count": max_col - min_col + 1,
+        "data_row_count": data_row_count,
+        "header_row_count": header_row_count,
+        "totals_row_count": totals_row_count,
+        "totals_row_shown": bool(table.totalsRowShown),
+    }
+    metadata.update(_get_table_style_details(table))
+    return metadata
+
+
+def _find_table(
+    wb: Any,
+    table_name: str,
+    sheet_name: Optional[str] = None,
+) -> tuple[str, Any, Table]:
+    if sheet_name is not None and sheet_name not in wb.sheetnames:
+        raise DataError(f"Sheet '{sheet_name}' not found.")
+
+    sheet_names = [sheet_name] if sheet_name is not None else list(wb.sheetnames)
+    for current_sheet_name in sheet_names:
+        ws = wb[current_sheet_name]
+        for table in ws.tables.values():
+            if table.displayName == table_name:
+                return current_sheet_name, ws, table
+
+    if sheet_name is not None:
+        raise DataError(f"Table '{table_name}' not found in sheet '{sheet_name}'.")
+    raise DataError(f"Table '{table_name}' not found.")
 
 def create_excel_table(
     filepath: str,
@@ -85,46 +160,7 @@ def list_excel_tables(
             for current_sheet_name in sheet_names:
                 ws = wb[current_sheet_name]
                 for table in ws.tables.values():
-                    style_name = None
-                    show_first_column = None
-                    show_last_column = None
-                    show_row_stripes = None
-                    show_column_stripes = None
-                    if table.tableStyleInfo is not None:
-                        style_name = table.tableStyleInfo.name
-                        show_first_column = table.tableStyleInfo.showFirstColumn
-                        show_last_column = table.tableStyleInfo.showLastColumn
-                        show_row_stripes = table.tableStyleInfo.showRowStripes
-                        show_column_stripes = table.tableStyleInfo.showColumnStripes
-
-                    min_col, min_row, max_col, max_row = range_boundaries(table.ref)
-                    headers = [
-                        ws.cell(row=min_row, column=column_index).value
-                        for column_index in range(min_col, max_col + 1)
-                    ]
-                    column_count = max_col - min_col + 1
-                    header_row_count = int(table.headerRowCount or 0)
-                    total_row_count = int(table.totalsRowCount or 0)
-                    data_row_count = max(max_row - min_row + 1 - header_row_count, 0)
-
-                    tables.append(
-                        {
-                            "sheet_name": current_sheet_name,
-                            "table_name": table.displayName,
-                            "range": table.ref,
-                            "style": style_name,
-                            "headers": headers,
-                            "column_count": column_count,
-                            "data_row_count": data_row_count,
-                            "header_row_count": header_row_count,
-                            "totals_row_count": total_row_count,
-                            "totals_row_shown": bool(table.totalsRowShown),
-                            "show_first_column": show_first_column,
-                            "show_last_column": show_last_column,
-                            "show_row_stripes": show_row_stripes,
-                            "show_column_stripes": show_column_stripes,
-                        }
-                    )
+                    tables.append(_build_table_metadata(current_sheet_name, ws, table))
 
             return tables
 
@@ -132,4 +168,68 @@ def list_excel_tables(
         raise
     except Exception as e:
         logger.error(f"Failed to list tables: {e}")
+        raise DataError(str(e))
+
+
+def read_excel_table(
+    filepath: str,
+    table_name: str,
+    sheet_name: Optional[str] = None,
+    max_rows: Optional[int] = None,
+    compact: bool = False,
+) -> dict[str, Any]:
+    """Read rows from a native Excel table by its table name."""
+    try:
+        with safe_workbook(filepath) as wb:
+            current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
+            metadata = _build_table_metadata(current_sheet_name, ws, table)
+            min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+
+            data_start_row = min_row + metadata["header_row_count"]
+            data_end_row = max_row - metadata["totals_row_count"]
+            total_rows = metadata["data_row_count"]
+            row_limit = min(total_rows, max_rows) if max_rows is not None else total_rows
+
+            rows: list[list[Any]] = []
+            for row_index in range(data_start_row, data_start_row + row_limit):
+                if row_index > data_end_row:
+                    break
+                rows.append(
+                    [
+                        ws.cell(row=row_index, column=column_index).value
+                        for column_index in range(min_col, max_col + 1)
+                    ]
+                )
+
+            result = {
+                "sheet_name": current_sheet_name,
+                "table_name": table.displayName,
+                "range": table.ref,
+                "style": metadata["style"],
+                "headers": metadata["headers"],
+                "rows": rows,
+                "total_rows": total_rows,
+                "truncated": max_rows is not None and total_rows > max_rows,
+                "header_row_count": metadata["header_row_count"],
+                "totals_row_count": metadata["totals_row_count"],
+                "totals_row_shown": metadata["totals_row_shown"],
+            }
+            if compact:
+                compact_result = {
+                    "sheet_name": result["sheet_name"],
+                    "table_name": result["table_name"],
+                    "range": result["range"],
+                    "headers": result["headers"],
+                    "rows": result["rows"],
+                }
+                if result["truncated"]:
+                    compact_result["total_rows"] = result["total_rows"]
+                    compact_result["truncated"] = True
+                return compact_result
+            return result
+
+    except DataError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to read table: {e}")
         raise DataError(str(e))

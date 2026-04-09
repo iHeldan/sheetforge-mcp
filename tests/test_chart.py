@@ -3,9 +3,12 @@ import json
 import pytest
 from openpyxl import load_workbook
 
-from excel_mcp.chart import ChartType, create_chart_in_sheet, list_charts
+from excel_mcp.chart import ChartType, create_chart_from_series, create_chart_in_sheet, list_charts
 from excel_mcp.exceptions import ValidationError, ChartError
-from excel_mcp.server import list_charts as list_charts_tool
+from excel_mcp.server import (
+    create_chart_from_series as create_chart_from_series_tool,
+    list_charts as list_charts_tool,
+)
 
 
 def _load_tool_payload(raw: str) -> dict:
@@ -101,6 +104,80 @@ def test_chart_with_axis_labels(chart_workbook):
     assert result["details"]["data_range"] == "A1:B5"
 
 
+def test_create_chart_can_reference_data_from_another_sheet(chart_workbook):
+    wb = load_workbook(chart_workbook)
+    source = wb.create_sheet("Source")
+    source["A1"] = "Month"
+    source["B1"] = "Users"
+    source["A2"] = "Jan"
+    source["B2"] = 10
+    source["A3"] = "Feb"
+    source["B3"] = 15
+    wb.save(chart_workbook)
+    wb.close()
+
+    result = create_chart_in_sheet(
+        chart_workbook, "Sales", "Source!A1:B3", "bar", "J1", title="Users"
+    )
+
+    assert result["details"]["data_range"] == "Source!A1:B3"
+
+
+def test_create_chart_from_series_supports_non_contiguous_ranges(chart_workbook):
+    wb = load_workbook(chart_workbook)
+    ws = wb["Sales"]
+    ws["G1"] = "Clicks"
+    ws["G2"] = 12
+    ws["G3"] = 18
+    ws["G4"] = 20
+    ws["G5"] = 16
+    wb.save(chart_workbook)
+    wb.close()
+
+    result = create_chart_from_series(
+        chart_workbook,
+        "Sales",
+        "bar",
+        "J1",
+        series=[
+            {"title": "Revenue", "values_range": "B2:B5"},
+            {"title": "Clicks", "values_range": "G2:G5"},
+        ],
+        categories_range="A2:A5",
+        title="Quick Wins",
+    )
+
+    assert result["details"]["series_count"] == 2
+
+    charts = list_charts(chart_workbook, sheet_name="Sales")
+    created_chart = next(chart for chart in charts if chart["anchor"] == "J1")
+    assert created_chart["title"] == "Quick Wins"
+    assert len(created_chart["series"]) == 2
+    assert created_chart["series"][0]["values"].endswith("$B$2:$B$5")
+    assert created_chart["series"][1]["values"].endswith("$G$2:$G$5")
+    assert created_chart["series"][0]["categories"].endswith("$A$2:$A$5")
+
+
+def test_create_scatter_chart_from_series(chart_workbook):
+    result = create_chart_from_series(
+        chart_workbook,
+        "Sales",
+        "scatter",
+        "J1",
+        series=[
+            {"title": "Revenue vs Cost", "x_range": "B2:B5", "y_range": "C2:C5"},
+        ],
+        title="Scatter",
+    )
+
+    assert result["details"]["type"] == "scatter"
+
+    charts = list_charts(chart_workbook, sheet_name="Sales")
+    created_chart = next(chart for chart in charts if chart["anchor"] == "J1")
+    assert created_chart["series"][0]["x_values"].endswith("$B$2:$B$5")
+    assert created_chart["series"][0]["y_values"].endswith("$C$2:$C$5")
+
+
 def test_list_charts_returns_created_chart_metadata(chart_workbook):
     create_chart_in_sheet(
         chart_workbook, "Sales", "A1:C5", "bar", "E1", title="Revenue", x_axis="Month", y_axis="EUR"
@@ -149,6 +226,22 @@ def test_list_charts_tool_returns_json_envelope(chart_workbook):
     assert payload["data"]["charts"][0]["title"] == "Revenue"
 
 
+def test_create_chart_from_series_tool_returns_json_envelope(chart_workbook):
+    payload = _load_tool_payload(
+        create_chart_from_series_tool(
+            chart_workbook,
+            "Sales",
+            "scatter",
+            "J1",
+            [{"title": "Revenue vs Cost", "x_range": "B2:B5", "y_range": "C2:C5"}],
+            title="Scatter",
+        )
+    )
+
+    assert payload["operation"] == "create_chart_from_series"
+    assert payload["data"]["details"]["series_count"] == 1
+
+
 # --- Error cases ---
 
 def test_chart_invalid_sheet(chart_workbook):
@@ -174,3 +267,29 @@ def test_chart_invalid_target_cell(chart_workbook):
 def test_chart_cross_sheet_reference_invalid(chart_workbook):
     with pytest.raises(ValidationError, match="not found"):
         create_chart_in_sheet(chart_workbook, "Sales", "Missing!A1:B5", "bar", "E1")
+
+
+def test_create_chart_from_series_rejects_missing_scatter_axis(chart_workbook):
+    with pytest.raises(ValidationError, match="requires both x_range and y_range"):
+        create_chart_from_series(
+            chart_workbook,
+            "Sales",
+            "scatter",
+            "J1",
+            [{"title": "Broken", "x_range": "B2:B5"}],
+        )
+
+
+def test_create_chart_from_series_rejects_multiple_pie_series(chart_workbook):
+    with pytest.raises(ValidationError, match="Pie charts require exactly one series"):
+        create_chart_from_series(
+            chart_workbook,
+            "Sales",
+            "pie",
+            "J1",
+            [
+                {"title": "Revenue", "values_range": "B2:B5"},
+                {"title": "Cost", "values_range": "C2:C5"},
+            ],
+            categories_range="A2:A5",
+        )

@@ -1,6 +1,6 @@
 from enum import Enum
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openpyxl.chart import (
     AreaChart,
@@ -212,6 +212,145 @@ def _validate_target_cell(target_cell: str) -> None:
         raise ValidationError(f"Invalid target cell: {target_cell}")
 
 
+def _normalize_style(style: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized_style = dict(style or {})
+    normalized_style.setdefault("show_data_labels", True)
+    return normalized_style
+
+
+def _resolve_chart_class(chart_type: str) -> tuple[str, Any]:
+    chart_classes = {
+        "line": LineChart,
+        "bar": BarChart,
+        "pie": PieChart,
+        "scatter": ScatterChart,
+        "area": AreaChart,
+    }
+
+    chart_type_lower = chart_type.lower()
+    chart_class = chart_classes.get(chart_type_lower)
+    if not chart_class:
+        raise ValidationError(
+            f"Unsupported chart type: {chart_type}. "
+            f"Supported types: {', '.join(chart_classes.keys())}"
+        )
+    return chart_type_lower, chart_class
+
+
+def _build_chart(
+    chart_type: str,
+    *,
+    title: str = "",
+    x_axis: str = "",
+    y_axis: str = "",
+) -> Any:
+    _, chart_class = _resolve_chart_class(chart_type)
+    chart = chart_class()
+    chart.title = title
+    if hasattr(chart, "x_axis"):
+        chart.x_axis.title = x_axis
+    if hasattr(chart, "y_axis"):
+        chart.y_axis.title = y_axis
+    return chart
+
+
+def _resolve_range_source(
+    workbook: Any,
+    default_worksheet: Any,
+    range_ref: str,
+) -> tuple[Any, int, int, int, int]:
+    if not range_ref:
+        raise ValidationError("Range reference is required")
+
+    if "!" in range_ref:
+        range_sheet_name, cell_range = range_ref.rsplit("!", 1)
+        range_sheet_name = range_sheet_name.strip("'")
+        if range_sheet_name not in workbook.sheetnames:
+            raise ValidationError(f"Sheet '{range_sheet_name}' referenced in range not found")
+        source_worksheet = workbook[range_sheet_name]
+    else:
+        source_worksheet = default_worksheet
+        cell_range = range_ref
+
+    if ":" not in cell_range:
+        raise ValidationError(f"Invalid data range format: {range_ref}")
+
+    try:
+        start_cell, end_cell = cell_range.split(":")
+        start_row, start_col, end_row, end_col = parse_cell_range(start_cell, end_cell)
+    except ValueError as e:
+        raise ValidationError(f"Invalid data range format: {str(e)}") from e
+
+    return source_worksheet, start_row, start_col, end_row, end_col
+
+
+def _reference_from_range(
+    workbook: Any,
+    default_worksheet: Any,
+    range_ref: str,
+) -> Reference:
+    source_worksheet, start_row, start_col, end_row, end_col = _resolve_range_source(
+        workbook,
+        default_worksheet,
+        range_ref,
+    )
+    return Reference(
+        source_worksheet,
+        min_row=start_row,
+        max_row=end_row,
+        min_col=start_col,
+        max_col=end_col,
+    )
+
+
+def _apply_chart_style(chart: Any, style: Dict[str, Any]) -> None:
+    try:
+        if style.get("show_legend", True):
+            chart.legend = Legend()
+            chart.legend.position = style.get("legend_position", "r")
+        else:
+            chart.legend = None
+
+        if style.get("show_data_labels", False):
+            data_labels = DataLabelList()
+            data_label_options = style.get("data_label_options", {})
+            if not isinstance(data_label_options, dict):
+                data_label_options = {}
+
+            def _opt(name: str, default: bool) -> bool:
+                return bool(data_label_options.get(name, default))
+
+            data_labels.showVal = _opt("show_val", True)
+            data_labels.showCatName = _opt("show_cat_name", False)
+            data_labels.showSerName = _opt("show_ser_name", False)
+            data_labels.showLegendKey = _opt("show_legend_key", False)
+            data_labels.showPercent = _opt("show_percent", False)
+            data_labels.showBubbleSize = _opt("show_bubble_size", False)
+            chart.dataLabels = data_labels
+
+        if style.get("grid_lines", False):
+            if hasattr(chart, "x_axis"):
+                chart.x_axis.majorGridlines = ChartLines()
+            if hasattr(chart, "y_axis"):
+                chart.y_axis.majorGridlines = ChartLines()
+    except Exception as e:
+        logger.error(f"Failed to apply chart style: {e}")
+        raise ChartError(f"Failed to apply chart style: {str(e)}")
+
+
+def _finalize_chart(worksheet: Any, chart: Any, target_cell: str) -> None:
+    try:
+        _validate_target_cell(target_cell)
+        chart.width = 15
+        chart.height = 7.5
+        worksheet.add_chart(chart, target_cell)
+    except ValidationError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create chart drawing: {e}")
+        raise ChartError(f"Failed to create chart drawing: {str(e)}")
+
+
 def create_chart_in_sheet(
     filepath: str,
     sheet_name: str,
@@ -224,12 +363,7 @@ def create_chart_in_sheet(
     style: Optional[Dict] = None
 ) -> dict[str, Any]:
     """Create chart in sheet with enhanced styling options"""
-    # Ensure style dict exists and defaults to showing data labels
-    if style is None:
-        style = {"show_data_labels": True}
-    else:
-        # If caller omitted the flag, default to True
-        style.setdefault("show_data_labels", True)
+    style = _normalize_style(style)
     try:
         with safe_workbook(filepath, save=True) as wb:
             if sheet_name not in wb.sheetnames:
@@ -237,83 +371,44 @@ def create_chart_in_sheet(
                 raise ValidationError(f"Sheet '{sheet_name}' not found")
 
             worksheet = wb[sheet_name]
-
-            # Parse the data range
-            if "!" in data_range:
-                range_sheet_name, cell_range = data_range.split("!")
-                if range_sheet_name not in wb.sheetnames:
-                    logger.error(f"Sheet '{range_sheet_name}' referenced in data range not found")
-                    raise ValidationError(f"Sheet '{range_sheet_name}' referenced in data range not found")
-            else:
-                cell_range = data_range
+            source_worksheet, start_row, start_col, end_row, end_col = _resolve_range_source(
+                wb,
+                worksheet,
+                data_range,
+            )
+            chart_type_lower, _ = _resolve_chart_class(chart_type)
+            chart = _build_chart(chart_type_lower, title=title, x_axis=x_axis, y_axis=y_axis)
 
             try:
-                start_cell, end_cell = cell_range.split(":")
-                start_row, start_col, end_row, end_col = parse_cell_range(start_cell, end_cell)
-            except ValueError as e:
-                logger.error(f"Invalid data range format: {e}")
-                raise ValidationError(f"Invalid data range format: {str(e)}")
-
-            # Validate chart type
-            chart_classes = {
-                "line": LineChart,
-                "bar": BarChart,
-                "pie": PieChart,
-                "scatter": ScatterChart,
-                "area": AreaChart
-            }
-
-            chart_type_lower = chart_type.lower()
-            ChartClass = chart_classes.get(chart_type_lower)
-            if not ChartClass:
-                logger.error(f"Unsupported chart type: {chart_type}")
-                raise ValidationError(
-                    f"Unsupported chart type: {chart_type}. "
-                    f"Supported types: {', '.join(chart_classes.keys())}"
-                )
-
-            chart = ChartClass()
-
-            # Basic chart settings
-            chart.title = title
-            if hasattr(chart, "x_axis"):
-                chart.x_axis.title = x_axis
-            if hasattr(chart, "y_axis"):
-                chart.y_axis.title = y_axis
-
-            try:
-                # Create data references
                 if chart_type_lower == "scatter":
-                    # For scatter charts, create series for each pair of columns
                     for col in range(start_col + 1, end_col + 1):
                         x_values = Reference(
-                            worksheet,
+                            source_worksheet,
                             min_row=start_row + 1,
                             max_row=end_row,
-                            min_col=start_col
+                            min_col=start_col,
                         )
                         y_values = Reference(
-                            worksheet,
+                            source_worksheet,
                             min_row=start_row + 1,
                             max_row=end_row,
-                            min_col=col
+                            min_col=col,
                         )
                         series = Series(y_values, x_values, title_from_data=True)
                         chart.series.append(series)
                 else:
-                    # For other chart types
                     data = Reference(
-                        worksheet,
+                        source_worksheet,
                         min_row=start_row,
                         max_row=end_row,
                         min_col=start_col + 1,
-                        max_col=end_col
+                        max_col=end_col,
                     )
                     cats = Reference(
-                        worksheet,
+                        source_worksheet,
                         min_row=start_row + 1,
                         max_row=end_row,
-                        min_col=start_col
+                        min_col=start_col,
                     )
                     chart.add_data(data, titles_from_data=True)
                     chart.set_categories(cats)
@@ -321,55 +416,8 @@ def create_chart_in_sheet(
                 logger.error(f"Failed to create chart data references: {e}")
                 raise ChartError(f"Failed to create chart data references: {str(e)}")
 
-            # Apply style if provided
-            try:
-                if style.get("show_legend", True):
-                    chart.legend = Legend()
-                    chart.legend.position = style.get("legend_position", "r")
-                else:
-                    chart.legend = None
-
-                if style.get("show_data_labels", False):
-                    data_labels = DataLabelList()
-                    # Gather optional overrides
-                    dlo = style.get("data_label_options", {}) if isinstance(style.get("data_label_options", {}), dict) else {}
-
-                    # Helper to read bool with fallback
-                    def _opt(name: str, default: bool) -> bool:
-                        return bool(dlo.get(name, default))
-
-                    # Apply options -- Excel will concatenate any that are set to True
-                    data_labels.showVal = _opt("show_val", True)
-                    data_labels.showCatName = _opt("show_cat_name", False)
-                    data_labels.showSerName = _opt("show_ser_name", False)
-                    data_labels.showLegendKey = _opt("show_legend_key", False)
-                    data_labels.showPercent = _opt("show_percent", False)
-                    data_labels.showBubbleSize = _opt("show_bubble_size", False)
-
-                    chart.dataLabels = data_labels
-
-                if style.get("grid_lines", False):
-                    if hasattr(chart, "x_axis"):
-                        chart.x_axis.majorGridlines = ChartLines()
-                    if hasattr(chart, "y_axis"):
-                        chart.y_axis.majorGridlines = ChartLines()
-            except Exception as e:
-                logger.error(f"Failed to apply chart style: {e}")
-                raise ChartError(f"Failed to apply chart style: {str(e)}")
-
-            # Set chart size
-            chart.width = 15
-            chart.height = 7.5
-
-            # Create drawing and anchor
-            try:
-                _validate_target_cell(target_cell)
-                worksheet.add_chart(chart, target_cell)
-            except ValidationError:
-                raise
-            except Exception as e:
-                logger.error(f"Failed to create chart drawing: {e}")
-                raise ChartError(f"Failed to create chart drawing: {str(e)}")
+            _apply_chart_style(chart, style)
+            _finalize_chart(worksheet, chart, target_cell)
 
         return {
             "message": f"{chart_type.capitalize()} chart created successfully",
@@ -385,3 +433,94 @@ def create_chart_in_sheet(
     except Exception as e:
         logger.error(f"Unexpected error creating chart: {e}")
         raise ChartError(f"Unexpected error creating chart: {str(e)}")
+
+
+def create_chart_from_series(
+    filepath: str,
+    sheet_name: str,
+    chart_type: str,
+    target_cell: str,
+    series: List[Dict[str, Any]],
+    title: str = "",
+    x_axis: str = "",
+    y_axis: str = "",
+    categories_range: Optional[str] = None,
+    style: Optional[Dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Create a chart from explicit series definitions."""
+    normalized_style = _normalize_style(style)
+    if not isinstance(series, list) or not series:
+        raise ValidationError("At least one series definition is required")
+
+    try:
+        with safe_workbook(filepath, save=True) as wb:
+            if sheet_name not in wb.sheetnames:
+                raise ValidationError(f"Sheet '{sheet_name}' not found")
+
+            worksheet = wb[sheet_name]
+            chart_type_lower, _ = _resolve_chart_class(chart_type)
+            chart = _build_chart(chart_type_lower, title=title, x_axis=x_axis, y_axis=y_axis)
+
+            if chart_type_lower == "scatter" and categories_range is not None:
+                raise ValidationError("categories_range is not supported for scatter charts")
+            if chart_type_lower == "pie" and len(series) != 1:
+                raise ValidationError("Pie charts require exactly one series definition")
+
+            shared_categories = None
+            if chart_type_lower != "scatter" and categories_range is not None:
+                shared_categories = _reference_from_range(wb, worksheet, categories_range)
+
+            try:
+                for index, series_definition in enumerate(series, start=1):
+                    if not isinstance(series_definition, dict):
+                        raise ValidationError("Each series definition must be an object")
+
+                    series_title = series_definition.get("title")
+                    if chart_type_lower == "scatter":
+                        x_range = series_definition.get("x_range")
+                        y_range = series_definition.get("y_range")
+                        if not x_range or not y_range:
+                            raise ValidationError(
+                                f"Scatter series {index} requires both x_range and y_range"
+                            )
+
+                        x_values = _reference_from_range(wb, worksheet, x_range)
+                        y_values = _reference_from_range(wb, worksheet, y_range)
+                        chart.series.append(Series(y_values, x_values, title=series_title))
+                        continue
+
+                    values_range = series_definition.get("values_range")
+                    if not values_range:
+                        raise ValidationError(
+                            f"Series {index} requires values_range for {chart_type_lower} charts"
+                        )
+
+                    values = _reference_from_range(wb, worksheet, values_range)
+                    chart.series.append(Series(values, title=series_title))
+
+                if shared_categories is not None:
+                    chart.set_categories(shared_categories)
+            except ValidationError:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to create chart series: {e}")
+                raise ChartError(f"Failed to create chart series: {str(e)}")
+
+            _apply_chart_style(chart, normalized_style)
+            _finalize_chart(worksheet, chart, target_cell)
+
+        return {
+            "message": f"{chart_type.capitalize()} chart created successfully",
+            "details": {
+                "type": chart_type,
+                "location": target_cell,
+                "series_count": len(series),
+                "categories_range": categories_range,
+            },
+        }
+
+    except (ValidationError, ChartError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error creating chart from series: {e}")
+        raise ChartError(f"Unexpected error creating chart from series: {str(e)}")

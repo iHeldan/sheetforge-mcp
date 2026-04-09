@@ -164,6 +164,8 @@ Returns matches under `data.matches`:
   Returns one entry per worksheet, including `rows`, `columns`, `column_range`, and `is_empty`.
 - `list_tables(filepath: str, sheet_name: Optional[str] = None) -> str`
   Returns native Excel tables across the workbook or for one worksheet, including `sheet_name`, `table_name`, `range`, `style`, `headers`, row counts, and style flags.
+- `read_excel_table(filepath: str, table_name: str, sheet_name: Optional[str] = None, max_rows: Optional[int] = None, compact: bool = False) -> str`
+  Reads rows from a native Excel table by `table_name`, preserving the table's exact range instead of inferring worksheet bounds. With `compact=True`, the payload keeps `sheet_name`, `table_name`, `range`, `headers`, and `rows`, plus truncation metadata when needed.
 
 ## Read, Search, And Write Tools
 
@@ -255,16 +257,20 @@ Returns matches under `data.matches`:
   Lists embedded charts across the workbook or for one worksheet, including chart type, anchor, titles, and series references.
 - `create_chart(filepath: str, sheet_name: str, data_range: str, chart_type: str, target_cell: str, title: str = "", x_axis: str = "", y_axis: str = "") -> str`
   Creates a chart anchored at `target_cell`. Supported chart types are `line`, `bar`, `pie`, `scatter`, and `area`.
+- `create_chart_from_series(filepath: str, sheet_name: str, chart_type: str, target_cell: str, series: List[Dict[str, Any]], title: str = "", x_axis: str = "", y_axis: str = "", categories_range: Optional[str] = None, style: Optional[Dict[str, Any]] = None) -> str`
+  Creates a chart from explicit series definitions, including non-contiguous ranges. Non-scatter series use `values_range` per series plus an optional shared `categories_range`; scatter series use `x_range` and `y_range`.
 - `create_pivot_table(filepath: str, sheet_name: str, data_range: str, rows: List[str], values: List[str], columns: Optional[List[str]] = None, agg_func: str = "sum") -> str`
   Creates a pivot-style summary from the given data range. Supported aggregation functions: `sum`, `average`, `count`, `min`, `max`.
 
 ## Practical Usage Notes
 
 - Use `list_all_sheets` before reading unfamiliar workbooks.
+- Use `read_excel_table` when the workbook already contains native Excel tables and you want exact table semantics instead of a sheet-wide read.
 - Use `read_excel_as_table` when the source data is tabular and headers matter.
 - Use `read_data_from_excel` when you need cell addresses or validation metadata.
 - Use `compact=True` on read tools when you want to minimize response size for agent workflows.
 - Use `format_ranges` instead of repeated `format_range` calls when you're styling a report or dashboard in several places at once.
+- Use `create_chart_from_series` when the chart data lives in non-adjacent columns or you want to control each series explicitly.
 - Use `set_print_area` and `set_print_titles` when the workbook is meant for printing, export, or PDF generation.
 - Use `get_worksheet_protection` before changing protection flags on an unfamiliar workbook.
 - Use `autofit_columns` after writing or formatting tables when you want readable output without hand-tuning widths.

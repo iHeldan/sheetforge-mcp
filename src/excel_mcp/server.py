@@ -23,7 +23,11 @@ from excel_mcp.validation import (
     validate_formula_in_cell_operation as validate_formula_impl,
     validate_range_in_sheet_operation as validate_range_impl
 )
-from excel_mcp.chart import create_chart_in_sheet as create_chart_impl, list_charts as list_charts_impl
+from excel_mcp.chart import (
+    create_chart_from_series as create_chart_from_series_impl,
+    create_chart_in_sheet as create_chart_impl,
+    list_charts as list_charts_impl,
+)
 from excel_mcp.workbook import get_workbook_info, list_named_ranges as list_named_ranges_impl
 from excel_mcp.data import (
     append_table_rows as append_table_rows_impl,
@@ -37,6 +41,7 @@ from excel_mcp.pivot import create_pivot_table as create_pivot_table_impl
 from excel_mcp.tables import (
     create_excel_table as create_table_impl,
     list_excel_tables as list_tables_impl,
+    read_excel_table as read_excel_table_impl,
 )
 from excel_mcp.sheet import (
     autofit_columns as autofit_columns_impl,
@@ -460,6 +465,33 @@ def quick_read(
 @mcp.tool(
     structured_output=False,
     annotations=ToolAnnotations(
+        title="Read Excel Table",
+        readOnlyHint=True,
+    ),
+)
+def read_excel_table(
+    filepath: str,
+    table_name: str,
+    sheet_name: Optional[str] = None,
+    max_rows: Optional[int] = None,
+    compact: bool = False,
+) -> str:
+    """Read a native Excel table by its table name."""
+    return _run_tool(
+        "read_excel_table",
+        lambda: read_excel_table_impl(
+            get_excel_path(filepath),
+            table_name,
+            sheet_name=sheet_name,
+            max_rows=max_rows,
+            compact=compact,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
         title="Write Data to Excel",
         destructiveHint=True,
     ),
@@ -565,6 +597,43 @@ def create_chart(
         )
 
     return _run_tool("create_chart", action)
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Create Chart From Series",
+        destructiveHint=True,
+    ),
+)
+def create_chart_from_series(
+    filepath: str,
+    sheet_name: str,
+    chart_type: str,
+    target_cell: str,
+    series: List[Dict[str, Any]],
+    title: str = "",
+    x_axis: str = "",
+    y_axis: str = "",
+    categories_range: Optional[str] = None,
+    style: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Create a chart from explicit series definitions for non-contiguous ranges."""
+    def action() -> Any:
+        return create_chart_from_series_impl(
+            filepath=get_excel_path(filepath),
+            sheet_name=sheet_name,
+            chart_type=chart_type,
+            target_cell=target_cell,
+            series=series,
+            title=title,
+            x_axis=x_axis,
+            y_axis=y_axis,
+            categories_range=categories_range,
+            style=style,
+        )
+
+    return _run_tool("create_chart_from_series", action)
 
 
 @mcp.tool(
