@@ -597,14 +597,21 @@ def create_worksheet(filepath: str, sheet_name: str) -> str:
 def create_chart(
     filepath: str,
     sheet_name: str,
-    data_range: str,
     chart_type: str,
     target_cell: str,
+    data_range: Optional[str] = None,
     title: str = "",
     x_axis: str = "",
-    y_axis: str = ""
+    y_axis: str = "",
+    style: Optional[Dict[str, Any]] = None,
+    series: Optional[List[Dict[str, Any]]] = None,
+    categories_range: Optional[str] = None,
 ) -> str:
-    """Create chart in worksheet."""
+    """Create chart in worksheet from a contiguous range or explicit series.
+
+    This is the preferred chart authoring entry point; explicit-series calls are
+    also still available via create_chart_from_series for backward compatibility.
+    """
     def action() -> Any:
         return create_chart_impl(
             filepath=get_excel_path(filepath),
@@ -614,7 +621,10 @@ def create_chart(
             target_cell=target_cell,
             title=title,
             x_axis=x_axis,
-            y_axis=y_axis
+            y_axis=y_axis,
+            style=style,
+            series=series,
+            categories_range=categories_range,
         )
 
     return _run_tool("create_chart", action)

@@ -109,6 +109,12 @@ The server currently registers 47 MCP tools across these groups:
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `validate_excel_range`, `get_data_validation_info`
 - analysis and structure: `create_table`, `list_charts`, `create_chart`, `create_chart_from_series`, `create_pivot_table`
 
+For chart authoring, prefer `create_chart` as the primary entry point:
+
+- use `data_range` for the simple contiguous-data path
+- use explicit `series` plus optional `categories_range` for non-contiguous or hand-authored charts
+- keep `create_chart_from_series` for backward compatibility or existing prompts that already rely on it
+
 The most agent-friendly read tools are:
 
 - `quick_read`: single-call compact table read that auto-selects the first sheet when needed

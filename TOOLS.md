@@ -265,8 +265,8 @@ Returns matches under `data.matches`:
   Creates a native Excel table from an existing range.
 - `list_charts(filepath: str, sheet_name: Optional[str] = None) -> str`
   Lists embedded charts across the workbook or for one worksheet, including chart type, anchor, titles, and series references.
-- `create_chart(filepath: str, sheet_name: str, data_range: str, chart_type: str, target_cell: str, title: str = "", x_axis: str = "", y_axis: str = "") -> str`
-  Creates a chart anchored at `target_cell`. Supported chart types are `line`, `bar`, `pie`, `scatter`, and `area`.
+- `create_chart(filepath: str, sheet_name: str, chart_type: str, target_cell: str, data_range: Optional[str] = None, title: str = "", x_axis: str = "", y_axis: str = "", style: Optional[Dict[str, Any]] = None, series: Optional[List[Dict[str, Any]]] = None, categories_range: Optional[str] = None) -> str`
+  Creates a chart anchored at `target_cell`. Supported chart types are `line`, `bar`, `pie`, `scatter`, and `area`. Use either a contiguous `data_range` or explicit `series` definitions; non-scatter series use `values_range` plus an optional shared `categories_range`, while scatter series use `x_range` and `y_range`.
 - `create_chart_from_series(filepath: str, sheet_name: str, chart_type: str, target_cell: str, series: List[Dict[str, Any]], title: str = "", x_axis: str = "", y_axis: str = "", categories_range: Optional[str] = None, style: Optional[Dict[str, Any]] = None) -> str`
   Creates a chart from explicit series definitions, including non-contiguous ranges. Non-scatter series use `values_range` per series plus an optional shared `categories_range`; scatter series use `x_range` and `y_range`.
 - `create_pivot_table(filepath: str, sheet_name: str, data_range: str, rows: List[str], values: List[str], columns: Optional[List[str]] = None, agg_func: str = "sum") -> str`
@@ -282,7 +282,8 @@ Returns matches under `data.matches`:
 - Use `read_data_from_excel` when you need cell addresses or validation metadata.
 - Use `compact=True` on read tools when you want to minimize response size for agent workflows.
 - Use `format_ranges` instead of repeated `format_range` calls when you're styling a report or dashboard in several places at once.
-- Use `create_chart_from_series` when the chart data lives in non-adjacent columns or you want to control each series explicitly.
+- Use `create_chart` as the default chart authoring entry point. Pass `data_range` for contiguous source data, or `series` plus optional `categories_range` when the chart data lives in non-adjacent columns.
+- Use `create_chart_from_series` when you want the older explicit-series entry point or need to preserve existing automation prompts unchanged.
 - Use `set_print_area` and `set_print_titles` when the workbook is meant for printing, export, or PDF generation.
 - Use `get_worksheet_protection` before changing protection flags on an unfamiliar workbook.
 - Use `autofit_columns` after writing or formatting tables when you want readable output without hand-tuning widths.

@@ -354,16 +354,36 @@ def _finalize_chart(worksheet: Any, chart: Any, target_cell: str) -> None:
 def create_chart_in_sheet(
     filepath: str,
     sheet_name: str,
-    data_range: str,
+    data_range: Optional[str],
     chart_type: str,
     target_cell: str,
     title: str = "",
     x_axis: str = "",
     y_axis: str = "",
-    style: Optional[Dict] = None
+    style: Optional[Dict] = None,
+    series: Optional[List[Dict[str, Any]]] = None,
+    categories_range: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Create chart in sheet with enhanced styling options"""
+    """Create chart in sheet with either a contiguous data range or explicit series."""
     style = _normalize_style(style)
+    if data_range and series:
+        raise ValidationError("Provide either data_range or series, not both")
+    if not data_range and not series:
+        raise ValidationError("Either data_range or series is required")
+    if series is not None:
+        return create_chart_from_series(
+            filepath=filepath,
+            sheet_name=sheet_name,
+            chart_type=chart_type,
+            target_cell=target_cell,
+            series=series,
+            title=title,
+            x_axis=x_axis,
+            y_axis=y_axis,
+            categories_range=categories_range,
+            style=style,
+        )
+
     try:
         with safe_workbook(filepath, save=True) as wb:
             if sheet_name not in wb.sheetnames:
@@ -424,7 +444,7 @@ def create_chart_in_sheet(
             "details": {
                 "type": chart_type,
                 "location": target_cell,
-                "data_range": data_range
+                "data_range": data_range,
             }
         }
 

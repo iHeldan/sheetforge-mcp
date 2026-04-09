@@ -6,6 +6,7 @@ from openpyxl import load_workbook
 from excel_mcp.chart import ChartType, create_chart_from_series, create_chart_in_sheet, list_charts
 from excel_mcp.exceptions import ValidationError, ChartError
 from excel_mcp.server import (
+    create_chart as create_chart_tool,
     create_chart_from_series as create_chart_from_series_tool,
     list_charts as list_charts_tool,
 )
@@ -158,6 +159,40 @@ def test_create_chart_from_series_supports_non_contiguous_ranges(chart_workbook)
     assert created_chart["series"][0]["categories"].endswith("$A$2:$A$5")
 
 
+def test_create_chart_can_use_explicit_series_definitions(chart_workbook):
+    wb = load_workbook(chart_workbook)
+    ws = wb["Sales"]
+    ws["G1"] = "Clicks"
+    ws["G2"] = 12
+    ws["G3"] = 18
+    ws["G4"] = 20
+    ws["G5"] = 16
+    wb.save(chart_workbook)
+    wb.close()
+
+    result = create_chart_in_sheet(
+        chart_workbook,
+        "Sales",
+        None,
+        "bar",
+        "L1",
+        title="Unified",
+        series=[
+            {"title": "Revenue", "values_range": "B2:B5"},
+            {"title": "Clicks", "values_range": "G2:G5"},
+        ],
+        categories_range="A2:A5",
+    )
+
+    assert result["details"]["series_count"] == 2
+    assert result["details"]["categories_range"] == "A2:A5"
+
+    charts = list_charts(chart_workbook, sheet_name="Sales")
+    created_chart = next(chart for chart in charts if chart["anchor"] == "L1")
+    assert created_chart["title"] == "Unified"
+    assert len(created_chart["series"]) == 2
+
+
 def test_create_scatter_chart_from_series(chart_workbook):
     result = create_chart_from_series(
         chart_workbook,
@@ -242,6 +277,23 @@ def test_create_chart_from_series_tool_returns_json_envelope(chart_workbook):
     assert payload["data"]["details"]["series_count"] == 1
 
 
+def test_create_chart_tool_accepts_explicit_series(chart_workbook):
+    payload = _load_tool_payload(
+        create_chart_tool(
+            chart_workbook,
+            "Sales",
+            "scatter",
+            "L1",
+            series=[{"title": "Revenue vs Cost", "x_range": "B2:B5", "y_range": "C2:C5"}],
+            title="Unified Scatter",
+        )
+    )
+
+    assert payload["operation"] == "create_chart"
+    assert payload["data"]["details"]["series_count"] == 1
+    assert payload["data"]["details"]["type"] == "scatter"
+
+
 # --- Error cases ---
 
 def test_chart_invalid_sheet(chart_workbook):
@@ -257,6 +309,23 @@ def test_chart_unsupported_type(chart_workbook):
 def test_chart_invalid_data_range(chart_workbook):
     with pytest.raises(ValidationError, match="Invalid data range"):
         create_chart_in_sheet(chart_workbook, "Sales", "ZZZ", "bar", "E1")
+
+
+def test_chart_rejects_both_data_range_and_series(chart_workbook):
+    with pytest.raises(ValidationError, match="either data_range or series, not both"):
+        create_chart_in_sheet(
+            chart_workbook,
+            "Sales",
+            "A1:B5",
+            "bar",
+            "E1",
+            series=[{"title": "Revenue", "values_range": "B2:B5"}],
+        )
+
+
+def test_chart_requires_data_range_or_series(chart_workbook):
+    with pytest.raises(ValidationError, match="Either data_range or series is required"):
+        create_chart_in_sheet(chart_workbook, "Sales", None, "bar", "E1")
 
 
 def test_chart_invalid_target_cell(chart_workbook):
