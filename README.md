@@ -101,10 +101,10 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 47 MCP tools across these groups:
+The server currently registers 49 MCP tools across these groups:
 
-- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `list_named_ranges`, `list_all_sheets`, `list_tables`
-- data access: `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `update_rows_by_key`
+- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `profile_workbook`, `list_named_ranges`, `list_all_sheets`, `list_tables`
+- data access: `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `format_ranges`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `validate_excel_range`, `get_data_validation_info`
@@ -119,11 +119,18 @@ For chart authoring, prefer `create_chart` as the primary entry point:
 
 The most agent-friendly read tools are:
 
+- `profile_workbook`: one-call inventory for sheets, tables, charts, named ranges, and key layout/protection state
 - `quick_read`: single-call compact table read that auto-selects the first sheet when needed
 - `read_excel_table`: read a native Excel table by `table_name` without guessing worksheet bounds
 - `list_all_sheets`: quick workbook inventory with sheet sizes and emptiness flags
 - `read_excel_as_table`: compact `headers + rows` output for structured datasets, with `compact=True` for the smallest payload
 - `search_in_sheet`: exact or partial value search across a worksheet
+
+The most agent-friendly write helpers for structured data are:
+
+- `upsert_excel_table_rows`: update matching rows in a native Excel table and append missing keys in one call
+- `append_table_rows`: append header-aware rows to worksheet-shaped data when you do not have a native Excel table
+- `update_rows_by_key`: update worksheet-shaped data by a named key column without appending missing keys
 
 For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_table`):
 
@@ -220,6 +227,7 @@ uv build
 - `read_data_from_excel(..., compact=True)` omits default validation stubs for cells that do not have validation rules.
 - `read_excel_as_table(..., compact=True)` returns only `headers` and `rows` unless truncation metadata is needed.
 - `quick_read`, `read_excel_as_table`, and `read_excel_table` can now return `records` plus inferred `schema` hints when you opt into `row_mode="objects"` and `infer_schema=True`.
+- `profile_workbook` provides a single-call workbook inventory with sheet-level table, chart, protection, print, and filter metadata for faster agent orientation.
 - Core mutation tools now default to compact responses on committed writes, including data writes, formatting, worksheet layout helpers, and merge/unmerge helpers. Use `include_changes=True` for detailed diffs.
 - `format_ranges` batches multiple formatting operations into one workbook pass, and now reports per-range `errors` without discarding successful ranges in the same batch.
 - `autofit_columns` estimates practical column widths from the current cell contents, with optional column filters and min/max bounds.
@@ -227,6 +235,7 @@ uv build
 - `get_worksheet_protection` and `set_worksheet_protection` add a safe worksheet-level wrapper around Excel protection flags.
 - `set_print_area` and `set_print_titles` make report/export setup scriptable without dropping into raw openpyxl workbook internals.
 - `list_tables` now returns lightweight schema metadata such as headers, row counts, and stripe settings in addition to table names and ranges.
+- `upsert_excel_table_rows` expands native Excel table ranges automatically when it appends missing keys, and refuses to grow a table into already occupied cells.
 - Core mutation tools support `dry_run=True` so clients can preview changes before saving a workbook.
 
 ## License

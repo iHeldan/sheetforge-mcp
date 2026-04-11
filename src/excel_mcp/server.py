@@ -28,7 +28,11 @@ from excel_mcp.chart import (
     create_chart_in_sheet as create_chart_impl,
     list_charts as list_charts_impl,
 )
-from excel_mcp.workbook import get_workbook_info, list_named_ranges as list_named_ranges_impl
+from excel_mcp.workbook import (
+    get_workbook_info,
+    list_named_ranges as list_named_ranges_impl,
+    profile_workbook as profile_workbook_impl,
+)
 from excel_mcp.data import (
     append_table_rows as append_table_rows_impl,
     quick_read as quick_read_impl,
@@ -42,6 +46,7 @@ from excel_mcp.tables import (
     create_excel_table as create_table_impl,
     list_excel_tables as list_tables_impl,
     read_excel_table as read_excel_table_impl,
+    upsert_excel_table_rows as upsert_excel_table_rows_impl,
 )
 from excel_mcp.sheet import (
     autofit_columns as autofit_columns_impl,
@@ -839,6 +844,21 @@ def get_workbook_metadata(
 @mcp.tool(
     structured_output=False,
     annotations=ToolAnnotations(
+        title="Profile Workbook",
+        readOnlyHint=True,
+    ),
+)
+def profile_workbook(filepath: str) -> str:
+    """Return a compact workbook inventory with sheets, tables, charts, and layout state."""
+    return _run_tool(
+        "profile_workbook",
+        lambda: profile_workbook_impl(get_excel_path(filepath)),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
         title="List Named Ranges",
         readOnlyHint=True,
     ),
@@ -1476,6 +1496,37 @@ def append_table_rows(
             sheet_name,
             rows,
             header_row=header_row,
+            dry_run=dry_run,
+            include_changes=include_changes,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Upsert Excel Table Rows",
+        destructiveHint=True,
+    ),
+)
+def upsert_excel_table_rows(
+    filepath: str,
+    table_name: str,
+    key_column: str,
+    rows: List[Dict[str, Any]],
+    sheet_name: Optional[str] = None,
+    dry_run: bool = False,
+    include_changes: Optional[bool] = None,
+) -> str:
+    """Update matching rows in a native Excel table and append missing keys."""
+    return _run_tool(
+        "upsert_excel_table_rows",
+        lambda: upsert_excel_table_rows_impl(
+            get_excel_path(filepath),
+            table_name=table_name,
+            key_column=key_column,
+            rows=rows,
+            sheet_name=sheet_name,
             dry_run=dry_run,
             include_changes=include_changes,
         ),

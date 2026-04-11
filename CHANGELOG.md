@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added `profile_workbook` as a one-call workbook inventory for sheets, tables, charts, named ranges, and key layout/protection state.
+- Added `upsert_excel_table_rows` for key-based updates plus append-missing behavior directly on native Excel tables.
+
+### Quality
+
+- Added regression coverage for workbook profiling and native-table upserts, including refusal to expand a table into occupied cells below it.
+
 ## 0.4.1 - 2026-04-09
 
 This patch release tightens chart behavior for real workbook authoring and visual verification workflows.

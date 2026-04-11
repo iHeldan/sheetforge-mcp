@@ -19,6 +19,58 @@ def _get_sheet_usage(ws) -> tuple[int, int, str | None, bool]:
     return ws.max_row, ws.max_column, f"A-{get_column_letter(ws.max_column)}", False
 
 
+def _get_used_range(ws) -> str | None:
+    rows, columns, _, is_empty = _get_sheet_usage(ws)
+    if is_empty or rows == 0 or columns == 0:
+        return None
+    return f"A1:{get_column_letter(columns)}{rows}"
+
+
+def _freeze_panes_value(ws) -> str | None:
+    value = ws.freeze_panes
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return getattr(value, "coordinate", None)
+
+
+def _serialize_named_ranges(wb: Any) -> list[dict[str, Any]]:
+    ranges = []
+    for name, defined_name in wb.defined_names.items():
+        destinations = []
+        try:
+            destinations = [
+                {
+                    "sheet_name": sheet_name,
+                    "range": cell_range,
+                }
+                for sheet_name, cell_range in defined_name.destinations
+            ]
+        except Exception:
+            destinations = []
+
+        local_sheet = None
+        if defined_name.localSheetId is not None:
+            try:
+                local_sheet = wb.sheetnames[defined_name.localSheetId]
+            except Exception:
+                local_sheet = None
+
+        ranges.append(
+            {
+                "name": name,
+                "type": defined_name.type,
+                "value": defined_name.value,
+                "destinations": destinations,
+                "local_sheet": local_sheet,
+                "hidden": bool(getattr(defined_name, "hidden", False)),
+            }
+        )
+
+    return sorted(ranges, key=lambda item: item["name"].lower())
+
+
 @contextmanager
 def safe_workbook(filepath: str, save: bool = False, read_only: bool = False):
     """Context manager that ensures workbook is always closed.
@@ -109,39 +161,7 @@ def list_named_ranges(filepath: str) -> list[dict[str, Any]]:
     """List workbook-level and local defined names."""
     try:
         with safe_workbook(filepath) as wb:
-            ranges = []
-            for name, defined_name in wb.defined_names.items():
-                destinations = []
-                try:
-                    destinations = [
-                        {
-                            "sheet_name": sheet_name,
-                            "range": cell_range,
-                        }
-                        for sheet_name, cell_range in defined_name.destinations
-                    ]
-                except Exception:
-                    destinations = []
-
-                local_sheet = None
-                if defined_name.localSheetId is not None:
-                    try:
-                        local_sheet = wb.sheetnames[defined_name.localSheetId]
-                    except Exception:
-                        local_sheet = None
-
-                ranges.append(
-                    {
-                        "name": name,
-                        "type": defined_name.type,
-                        "value": defined_name.value,
-                        "destinations": destinations,
-                        "local_sheet": local_sheet,
-                        "hidden": bool(getattr(defined_name, "hidden", False)),
-                    }
-                )
-
-            return sorted(ranges, key=lambda item: item["name"].lower())
+            return _serialize_named_ranges(wb)
     except Exception as e:
         logger.error(f"Failed to list named ranges: {e}")
         raise WorkbookError(str(e))
@@ -177,4 +197,100 @@ def get_workbook_info(filepath: str, include_ranges: bool = False) -> dict[str, 
         raise
     except Exception as e:
         logger.error(f"Failed to get workbook info: {e}")
+        raise WorkbookError(str(e))
+
+
+def profile_workbook(filepath: str) -> dict[str, Any]:
+    """Return a workbook-level inventory tuned for agent orientation."""
+    try:
+        path = Path(filepath)
+        if not path.exists():
+            raise WorkbookError(f"File not found: {filepath}")
+
+        with safe_workbook(filepath) as wb:
+            from .chart import (
+                _chart_type_name,
+                _extract_chart_anchor,
+                _extract_chart_dimensions,
+                _extract_title_text,
+            )
+            from .sheet import _sheet_protection_state
+            from .tables import _build_table_metadata
+
+            named_ranges = _serialize_named_ranges(wb)
+            sheets: list[dict[str, Any]] = []
+            total_tables = 0
+            total_charts = 0
+
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                rows, columns, column_range, is_empty = _get_sheet_usage(ws)
+
+                tables = [
+                    _build_table_metadata(sheet_name, ws, table)
+                    for table in ws.tables.values()
+                ]
+                charts = []
+                for chart_index, chart in enumerate(getattr(ws, "_charts", []), start=1):
+                    width, height = _extract_chart_dimensions(chart)
+                    series = getattr(chart, "ser", None) or list(getattr(chart, "series", []))
+                    charts.append(
+                        {
+                            "chart_index": chart_index,
+                            "chart_type": _chart_type_name(chart),
+                            "anchor": _extract_chart_anchor(chart),
+                            "title": _extract_title_text(getattr(chart, "title", None)),
+                            "width": width,
+                            "height": height,
+                            "series_count": len(series),
+                        }
+                    )
+
+                total_tables += len(tables)
+                total_charts += len(charts)
+
+                sheets.append(
+                    {
+                        "name": sheet_name,
+                        "rows": rows,
+                        "columns": columns,
+                        "column_range": column_range,
+                        "used_range": _get_used_range(ws),
+                        "is_empty": is_empty,
+                        "visibility": ws.sheet_state,
+                        "freeze_panes": _freeze_panes_value(ws),
+                        "has_autofilter": bool(ws.auto_filter.ref),
+                        "autofilter_range": ws.auto_filter.ref or None,
+                        "print_area": ws.print_area or None,
+                        "print_title_rows": ws.print_title_rows or None,
+                        "print_title_columns": ws.print_title_cols or None,
+                        "merged_range_count": len(ws.merged_cells.ranges),
+                        "table_count": len(tables),
+                        "chart_count": len(charts),
+                        "protection": {
+                            "enabled": _sheet_protection_state(ws)["enabled"],
+                            "password_protected": _sheet_protection_state(ws)["password_protected"],
+                        },
+                        "tables": tables,
+                        "charts": charts,
+                    }
+                )
+
+            return {
+                "filename": path.name,
+                "size": path.stat().st_size,
+                "modified": path.stat().st_mtime,
+                "sheet_count": len(wb.sheetnames),
+                "named_range_count": len(named_ranges),
+                "table_count": total_tables,
+                "chart_count": total_charts,
+                "sheets": sheets,
+                "named_ranges": named_ranges,
+            }
+
+    except WorkbookError as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to profile workbook: {e}")
         raise WorkbookError(str(e))

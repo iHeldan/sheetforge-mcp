@@ -158,6 +158,8 @@ Returns matches under `data.matches`:
   Adds a worksheet to an existing workbook.
 - `get_workbook_metadata(filepath: str, include_ranges: bool = False) -> str`
   Returns workbook metadata under the shared JSON envelope.
+- `profile_workbook(filepath: str) -> str`
+  Returns a workbook inventory with per-sheet summaries for visibility, freeze panes, autofilters, protection, tables, charts, print settings, and lightweight workbook-level counts.
 - `list_named_ranges(filepath: str) -> str`
   Returns workbook defined names, their values, and any sheet/range destinations.
 - `list_all_sheets(filepath: str) -> str`
@@ -185,6 +187,8 @@ Returns matches under `data.matches`:
   Returns exact or partial value matches across the worksheet.
 - `append_table_rows(filepath: str, sheet_name: str, rows: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Appends header-aware rows using dictionary keys that match worksheet headers. Returns `changed_cells` always, and detailed `changes` only when requested or during previews.
+- `upsert_excel_table_rows(filepath: str, table_name: str, key_column: str, rows: List[Dict[str, Any]], sheet_name: Optional[str] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
+  Updates matching rows inside a native Excel table and appends missing keys in one call. Missing rows expand the table's `ref` automatically, and the tool refuses to grow the table into already occupied cells below it.
 - `update_rows_by_key(filepath: str, sheet_name: str, key_column: str, updates: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Updates existing rows by matching a named key column, reports unmatched keys, and returns compact summaries by default.
 
@@ -275,12 +279,14 @@ Returns matches under `data.matches`:
 ## Practical Usage Notes
 
 - Use `list_all_sheets` before reading unfamiliar workbooks.
+- Use `profile_workbook` when you need a one-call inventory of sheets, tables, charts, filters, freeze panes, and print/protection state before deciding what to mutate.
 - Use `read_excel_table` when the workbook already contains native Excel tables and you want exact table semantics instead of a sheet-wide read.
 - Use `row_mode="objects"` when the agent benefits more from named fields than the smallest possible payload.
 - Use `infer_schema=True` when downstream steps need lightweight type hints without doing a second pass over the rows.
 - Use `read_excel_as_table` when the source data is tabular and headers matter.
 - Use `read_data_from_excel` when you need cell addresses or validation metadata.
 - Use `compact=True` on read tools when you want to minimize response size for agent workflows.
+- Use `upsert_excel_table_rows` when the workbook already has a native Excel table and your workflow is naturally key-based.
 - Use `format_ranges` instead of repeated `format_range` calls when you're styling a report or dashboard in several places at once.
 - Use `create_chart` as the default chart authoring entry point. Pass `data_range` for contiguous source data, or `series` plus optional `categories_range` when the chart data lives in non-adjacent columns.
 - Use `create_chart_from_series` when you want the older explicit-series entry point or need to preserve existing automation prompts unchanged.

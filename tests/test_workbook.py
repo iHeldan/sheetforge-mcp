@@ -1,5 +1,8 @@
 import pytest
-from excel_mcp.workbook import get_or_create_workbook, list_sheets
+from excel_mcp.chart import create_chart_in_sheet
+from excel_mcp.server import profile_workbook as profile_workbook_tool
+from excel_mcp.tables import create_excel_table
+from excel_mcp.workbook import get_or_create_workbook, list_sheets, profile_workbook
 
 
 def test_get_or_create_raises_on_missing_file(tmp_path):
@@ -36,3 +39,38 @@ def test_list_sheets_marks_empty_sheet(empty_workbook):
             "is_empty": True,
         }
     ]
+
+
+def test_profile_workbook_summarizes_tables_and_charts(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    create_chart_in_sheet(
+        filepath=tmp_workbook,
+        sheet_name="Sheet1",
+        chart_type="bar",
+        target_cell="E1",
+        data_range="A1:B6",
+        title="Customers by Age",
+    )
+
+    result = profile_workbook(tmp_workbook)
+
+    assert result["sheet_count"] == 1
+    assert result["table_count"] == 1
+    assert result["chart_count"] == 1
+    assert result["named_range_count"] == 0
+
+    sheet = result["sheets"][0]
+    assert sheet["name"] == "Sheet1"
+    assert sheet["used_range"] == "A1:C6"
+    assert sheet["table_count"] == 1
+    assert sheet["chart_count"] == 1
+    assert sheet["tables"][0]["table_name"] == "Customers"
+    assert sheet["charts"][0]["chart_type"] == "bar"
+    assert sheet["charts"][0]["anchor"] == "E1"
+
+
+def test_profile_workbook_tool_returns_json_envelope(tmp_workbook):
+    payload = profile_workbook_tool(tmp_workbook)
+
+    assert '"operation": "profile_workbook"' in payload
+    assert '"sheet_count": 1' in payload

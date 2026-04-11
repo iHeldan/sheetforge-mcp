@@ -2,9 +2,9 @@ import uuid
 import logging
 from typing import Any, Optional
 
-from openpyxl.utils import range_boundaries
+from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.table import Table, TableStyleInfo
-from .data import augment_tabular_payload
+from .data import _build_cell_change, _should_include_changes, augment_tabular_payload
 from .exceptions import DataError
 from .workbook import safe_workbook
 
@@ -64,6 +64,61 @@ def _build_table_metadata(
     }
     metadata.update(_get_table_style_details(table))
     return metadata
+
+
+def _range_from_bounds(min_col: int, min_row: int, max_col: int, max_row: int) -> str:
+    return f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+
+
+def _table_header_map(ws: Any, table: Table) -> dict[str, int]:
+    min_col, min_row, max_col, _ = range_boundaries(table.ref)
+    header_row_count = int(table.headerRowCount or 0)
+    if header_row_count < 1:
+        raise DataError(f"Table '{table.displayName}' does not have a header row")
+
+    header_map: dict[str, int] = {}
+    for column_index in range(min_col, max_col + 1):
+        value = ws.cell(row=min_row, column=column_index).value
+        if value is None or str(value).strip() == "":
+            raise DataError(
+                f"Table '{table.displayName}' has an empty header in column "
+                f"{get_column_letter(column_index)}"
+            )
+
+        header_name = str(value)
+        if header_name in header_map:
+            raise DataError(
+                f"Duplicate header '{header_name}' found in table '{table.displayName}'"
+            )
+        header_map[header_name] = column_index
+
+    return header_map
+
+
+def _table_data_bounds(table: Table) -> tuple[int, int, int, int, int, int]:
+    min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+    header_row_count = int(table.headerRowCount or 0)
+    totals_row_count = int(table.totalsRowCount or 0)
+    data_start_row = min_row + header_row_count
+    data_end_row = max_row - totals_row_count
+    return min_col, min_row, max_col, max_row, data_start_row, data_end_row
+
+
+def _ensure_table_append_space_clear(
+    ws: Any,
+    *,
+    start_row: int,
+    row_count: int,
+    min_col: int,
+    max_col: int,
+) -> None:
+    for row_index in range(start_row, start_row + row_count):
+        for column_index in range(min_col, max_col + 1):
+            if ws.cell(row=row_index, column=column_index).value is not None:
+                raise DataError(
+                    "Cannot expand table into occupied cells; "
+                    f"found existing value at {get_column_letter(column_index)}{row_index}"
+                )
 
 
 def _find_table(
@@ -247,4 +302,178 @@ def read_excel_table(
         raise
     except Exception as e:
         logger.error(f"Failed to read table: {e}")
+        raise DataError(str(e))
+
+
+def upsert_excel_table_rows(
+    filepath: str,
+    table_name: str,
+    key_column: str,
+    rows: list[dict[str, Any]],
+    sheet_name: Optional[str] = None,
+    dry_run: bool = False,
+    include_changes: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Update matching rows in a native Excel table and append missing keys."""
+    try:
+        if not rows:
+            raise DataError("No rows provided to upsert")
+        if not all(isinstance(row, dict) for row in rows):
+            raise DataError("Rows must be a list of objects keyed by column name")
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
+            header_map = _table_header_map(ws, table)
+            if key_column not in header_map:
+                raise DataError(
+                    f"Key column '{key_column}' not found in table '{table.displayName}'"
+                )
+
+            unknown_columns = sorted(
+                {
+                    key
+                    for row in rows
+                    for key in row.keys()
+                    if key not in header_map
+                }
+            )
+            if unknown_columns:
+                raise DataError(f"Unknown columns for upsert: {', '.join(unknown_columns)}")
+
+            min_col, min_row, max_col, max_row, data_start_row, data_end_row = _table_data_bounds(
+                table
+            )
+            totals_row_count = int(table.totalsRowCount or 0)
+            key_col_idx = header_map[key_column]
+
+            row_lookup: dict[Any, int] = {}
+            if data_start_row <= data_end_row:
+                for row_index in range(data_start_row, data_end_row + 1):
+                    key_value = ws.cell(row=row_index, column=key_col_idx).value
+                    if key_value is None:
+                        continue
+                    if key_value in row_lookup:
+                        raise DataError(
+                            f"Duplicate key '{key_value}' found in table '{table.displayName}'"
+                        )
+                    row_lookup[key_value] = row_index
+
+            seen_update_keys: set[Any] = set()
+            update_rows: list[tuple[int, dict[str, Any]]] = []
+            append_rows: list[dict[str, Any]] = []
+            changes: list[dict[str, Any]] = []
+
+            for row_data in rows:
+                if key_column not in row_data:
+                    raise DataError(f"Row is missing key column '{key_column}'")
+
+                key_value = row_data[key_column]
+                if key_value is None:
+                    raise DataError(f"Key column '{key_column}' cannot be null")
+                if key_value in seen_update_keys:
+                    raise DataError(f"Duplicate input key '{key_value}' provided")
+                seen_update_keys.add(key_value)
+
+                target_row = row_lookup.get(key_value)
+                if target_row is None:
+                    append_rows.append(row_data)
+                    continue
+
+                update_rows.append((target_row, row_data))
+                for column_name, new_value in row_data.items():
+                    if column_name == key_column:
+                        continue
+                    col_idx = header_map[column_name]
+                    old_value = ws.cell(row=target_row, column=col_idx).value
+                    if old_value == new_value:
+                        continue
+                    changes.append(
+                        _build_cell_change(
+                            sheet_name=current_sheet_name,
+                            row=target_row,
+                            col=col_idx,
+                            old_value=old_value,
+                            new_value=new_value,
+                            column_name=column_name,
+                        )
+                    )
+
+            append_start_row = data_end_row + 1
+            if totals_row_count == 0 and append_rows:
+                _ensure_table_append_space_clear(
+                    ws,
+                    start_row=append_start_row,
+                    row_count=len(append_rows),
+                    min_col=min_col,
+                    max_col=max_col,
+                )
+
+            ordered_columns = sorted(header_map.items(), key=lambda item: item[1])
+            for row_offset, row_data in enumerate(append_rows):
+                target_row = append_start_row + row_offset
+                for column_name, col_idx in ordered_columns:
+                    if column_name not in row_data:
+                        continue
+                    changes.append(
+                        _build_cell_change(
+                            sheet_name=current_sheet_name,
+                            row=target_row,
+                            col=col_idx,
+                            old_value=None,
+                            new_value=row_data[column_name],
+                            column_name=column_name,
+                        )
+                    )
+
+            previous_table_range = table.ref
+            new_max_row = max_row + len(append_rows)
+            table_range = _range_from_bounds(min_col, min_row, max_col, new_max_row)
+
+            if not dry_run:
+                if append_rows and totals_row_count > 0:
+                    ws.insert_rows(append_start_row, amount=len(append_rows))
+
+                for target_row, row_data in update_rows:
+                    for column_name, new_value in row_data.items():
+                        if column_name == key_column:
+                            continue
+                        ws.cell(row=target_row, column=header_map[column_name], value=new_value)
+
+                for row_offset, row_data in enumerate(append_rows):
+                    target_row = append_start_row + row_offset
+                    for column_name, col_idx in ordered_columns:
+                        if column_name not in row_data:
+                            continue
+                        ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
+
+                if append_rows:
+                    table.ref = table_range
+
+        appended_keys = [row[key_column] for row in append_rows]
+        updated_keys = [row_data[key_column] for _, row_data in update_rows]
+        result = {
+            "message": (
+                f"{'Previewed' if dry_run else 'Upserted'} {len(rows)} row(s) in table "
+                f"'{table_name}' on '{current_sheet_name}'"
+            ),
+            "sheet_name": current_sheet_name,
+            "table_name": table_name,
+            "key_column": key_column,
+            "updated_rows": len(update_rows),
+            "appended_rows": len(append_rows),
+            "updated_keys": updated_keys,
+            "appended_keys": appended_keys,
+            "changed_cells": len(changes),
+            "previous_table_range": previous_table_range,
+            "table_range": table_range,
+            "dry_run": dry_run,
+        }
+        if _should_include_changes(dry_run, include_changes):
+            result["changes"] = changes
+        return result
+
+    except DataError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upsert table rows: {e}")
         raise DataError(str(e))

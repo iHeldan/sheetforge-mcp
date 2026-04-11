@@ -6,8 +6,14 @@ from openpyxl import load_workbook
 from excel_mcp.server import (
     list_tables as list_tables_tool,
     read_excel_table as read_excel_table_tool,
+    upsert_excel_table_rows as upsert_excel_table_rows_tool,
 )
-from excel_mcp.tables import create_excel_table, list_excel_tables, read_excel_table
+from excel_mcp.tables import (
+    create_excel_table,
+    list_excel_tables,
+    read_excel_table,
+    upsert_excel_table_rows,
+)
 from excel_mcp.exceptions import DataError
 
 
@@ -236,3 +242,68 @@ def test_read_excel_table_tool_can_return_records_and_schema(tmp_workbook):
     assert payload["operation"] == "read_excel_table"
     assert payload["data"]["records"][0]["name"] == "Alice"
     assert payload["data"]["schema"][2]["field"] == "city"
+
+
+def test_upsert_excel_table_rows_updates_and_appends(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    result = upsert_excel_table_rows(
+        tmp_workbook,
+        "Customers",
+        key_column="Name",
+        rows=[
+            {"Name": "Alice", "Age": 31},
+            {"Name": "Frank", "Age": 29, "City": "Lahti"},
+        ],
+    )
+
+    assert result["updated_rows"] == 1
+    assert result["appended_rows"] == 1
+    assert result["updated_keys"] == ["Alice"]
+    assert result["appended_keys"] == ["Frank"]
+    assert result["previous_table_range"] == "A1:C6"
+    assert result["table_range"] == "A1:C7"
+
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    assert ws["B2"].value == 31
+    assert ws["A7"].value == "Frank"
+    assert ws["B7"].value == 29
+    assert ws["C7"].value == "Lahti"
+    assert ws.tables["Customers"].ref == "A1:C7"
+    wb.close()
+
+
+def test_upsert_excel_table_rows_rejects_occupied_space_below_table(tmp_workbook):
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["A7"] = "Occupied"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    with pytest.raises(DataError, match="Cannot expand table into occupied cells"):
+        upsert_excel_table_rows(
+            tmp_workbook,
+            "Customers",
+            key_column="Name",
+            rows=[{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+        )
+
+
+def test_upsert_excel_table_rows_tool_returns_json_envelope(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    payload = _load_tool_payload(
+        upsert_excel_table_rows_tool(
+            tmp_workbook,
+            "Customers",
+            "Name",
+            [{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+        )
+    )
+
+    assert payload["operation"] == "upsert_excel_table_rows"
+    assert payload["data"]["appended_rows"] == 1
+    assert payload["data"]["table_range"] == "A1:C7"

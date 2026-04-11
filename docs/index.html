@@ -207,9 +207,9 @@
           without launching desktop Excel.
         </p>
         <p>
-          Current release: <strong>0.4.1</strong>. The tool surface now covers 47 MCP
-          tools, compact mutation responses, object-mode reads with schema hints,
-          and a unified chart authoring entry point.
+          Current release: <strong>0.4.1</strong>. The main branch now covers 49 MCP
+          tools, including workbook profiling, native-table upserts, compact mutation
+          responses, object-mode reads with schema hints, and a unified chart authoring entry point.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/iHeldan/sheetforge-mcp">View Repository</a>
@@ -222,7 +222,7 @@
         <h2>At a glance</h2>
         <ul class="meta-list">
           <li>Python 3.10+</li>
-          <li>47 MCP tools</li>
+          <li>49 MCP tools</li>
           <li>Supports `stdio`, `streamable-http`, and deprecated `sse`</li>
           <li>Uniform JSON envelopes for every tool response</li>
           <li>No Microsoft Excel dependency</li>
@@ -247,12 +247,14 @@
         <h2>Best starting tools</h2>
         <ul class="tool-list">
           <li><strong>`list_all_sheets`</strong><br>Quick workbook overview before reading.</li>
+          <li><strong>`profile_workbook`</strong><br>One-call workbook inventory with tables, charts, filters, print settings, and protection state.</li>
           <li><strong>`quick_read`</strong><br>Single-call compact table read with automatic first-sheet selection.</li>
           <li><strong>`read_excel_table`</strong><br>Read a native Excel table by name without guessing worksheet bounds.</li>
           <li><strong>`create_chart`</strong><br>Create charts from either contiguous ranges or explicit series definitions.</li>
           <li><strong>`format_ranges`</strong><br>Apply batch formatting across multiple areas in one workbook pass.</li>
           <li><strong>`autofit_columns`</strong><br>Fit columns to content without hand-tuning widths.</li>
           <li><strong>`search_in_sheet`</strong><br>Find a value before mutating a workbook.</li>
+          <li><strong>`upsert_excel_table_rows`</strong><br>Update matching rows in a native table and append missing keys in one call.</li>
           <li><strong>`append_table_rows`</strong><br>Append rows with header names instead of cell math.</li>
           <li><strong>`update_rows_by_key`</strong><br>Update existing rows by matching a key column.</li>
         </ul>
