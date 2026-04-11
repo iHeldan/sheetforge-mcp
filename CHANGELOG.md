@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-04-11
+
+This patch release improves workbook profiling coverage, safer native-table behavior, and package discoverability for SheetForge MCP.
+
 ### Added
 
 - Added `profile_workbook` as a one-call workbook inventory for sheets, tables, charts, named ranges, and key layout/protection state.
