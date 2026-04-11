@@ -2,6 +2,7 @@ import json
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from openpyxl.chart import BarChart, Reference
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from excel_mcp.server import (
@@ -23,6 +24,37 @@ def _load_tool_payload(raw: str) -> dict:
     assert payload["ok"] is True
     assert "operation" in payload
     return payload
+
+
+def _create_workbook_with_table_and_chartsheet(tmp_path) -> str:
+    filepath = str(tmp_path / "table-and-chart-sheet.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for row in [("Name", "Value"), ("A", 1), ("B", 2)]:
+        ws.append(row)
+
+    table = Table(displayName="Metrics", ref="A1:B3")
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    ws.add_table(table)
+
+    chart = BarChart()
+    data = Reference(ws, min_col=2, min_row=1, max_row=3)
+    categories = Reference(ws, min_col=1, min_row=2, max_row=3)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(categories)
+
+    chart_sheet = wb.create_chartsheet("Charts")
+    chart_sheet.add_chart(chart)
+    wb.save(filepath)
+    wb.close()
+    return filepath
 
 
 def test_create_table_with_auto_name(tmp_workbook):
@@ -130,6 +162,33 @@ def test_list_tables_tool_returns_json_envelope(tmp_workbook):
     assert '"table_name": "Customers"' in payload
 
 
+def test_list_excel_tables_skips_chart_sheets_when_scanning_workbook(tmp_path):
+    filepath = _create_workbook_with_table_and_chartsheet(tmp_path)
+
+    result = list_excel_tables(filepath)
+
+    assert len(result) == 1
+    assert result[0]["sheet_name"] == "Data"
+    assert result[0]["table_name"] == "Metrics"
+
+
+def test_list_excel_tables_returns_empty_for_chart_sheet(tmp_path):
+    filepath = _create_workbook_with_table_and_chartsheet(tmp_path)
+
+    result = list_excel_tables(filepath, sheet_name="Charts")
+
+    assert result == []
+
+
+def test_list_tables_tool_returns_empty_for_chart_sheet(tmp_path):
+    filepath = _create_workbook_with_table_and_chartsheet(tmp_path)
+
+    payload = _load_tool_payload(list_tables_tool(filepath, "Charts"))
+
+    assert payload["operation"] == "list_tables"
+    assert payload["data"] == {"sheet_name": "Charts", "tables": []}
+
+
 def test_read_excel_table_returns_rows_by_table_name(tmp_workbook):
     create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
 
@@ -215,6 +274,13 @@ def test_read_excel_table_can_filter_by_sheet(multi_sheet_workbook):
 def test_read_excel_table_raises_for_missing_table(tmp_workbook):
     with pytest.raises(DataError, match="Table 'Missing' not found"):
         read_excel_table(tmp_workbook, "Missing")
+
+
+def test_read_excel_table_reports_missing_table_for_chart_sheet(tmp_path):
+    filepath = _create_workbook_with_table_and_chartsheet(tmp_path)
+
+    with pytest.raises(DataError, match="Table 'Missing' not found in sheet 'Charts'."):
+        read_excel_table(filepath, "Missing", sheet_name="Charts")
 
 
 def test_read_excel_table_tool_returns_json_envelope(tmp_workbook):

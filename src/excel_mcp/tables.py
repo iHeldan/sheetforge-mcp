@@ -128,6 +128,10 @@ def _reject_totals_row_appends(table: Table) -> None:
     )
 
 
+def _supports_tables(ws: Any) -> bool:
+    return hasattr(ws, "tables")
+
+
 def _find_table(
     wb: Any,
     table_name: str,
@@ -139,6 +143,8 @@ def _find_table(
     sheet_names = [sheet_name] if sheet_name is not None else list(wb.sheetnames)
     for current_sheet_name in sheet_names:
         ws = wb[current_sheet_name]
+        if not _supports_tables(ws):
+            continue
         for table in ws.tables.values():
             if table.displayName == table_name:
                 return current_sheet_name, ws, table
@@ -222,6 +228,8 @@ def list_excel_tables(
 
             for current_sheet_name in sheet_names:
                 ws = wb[current_sheet_name]
+                if not _supports_tables(ws):
+                    continue
                 for table in ws.tables.values():
                     tables.append(_build_table_metadata(current_sheet_name, ws, table))
 

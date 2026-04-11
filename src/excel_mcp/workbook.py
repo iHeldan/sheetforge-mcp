@@ -204,8 +204,12 @@ def get_workbook_info(filepath: str, include_ranges: bool = False) -> dict[str, 
                 ranges = {}
                 for sheet_name in wb.sheetnames:
                     ws = wb[sheet_name]
-                    if ws.max_row > 0 and ws.max_column > 0:
-                        ranges[sheet_name] = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
+                    if _sheet_type(ws) == "chartsheet":
+                        continue
+
+                    used_range = _get_used_range(ws)
+                    if used_range is not None:
+                        ranges[sheet_name] = used_range
                 info["used_ranges"] = ranges
 
         return info

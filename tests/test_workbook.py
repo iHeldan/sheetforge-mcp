@@ -1,13 +1,21 @@
+import json
+
 import pytest
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
 from excel_mcp.chart import create_chart_in_sheet
 from excel_mcp.server import (
+    get_workbook_metadata as get_workbook_metadata_tool,
     list_all_sheets as list_all_sheets_tool,
     profile_workbook as profile_workbook_tool,
 )
 from excel_mcp.tables import create_excel_table
-from excel_mcp.workbook import get_or_create_workbook, list_sheets, profile_workbook
+from excel_mcp.workbook import (
+    get_or_create_workbook,
+    get_workbook_info,
+    list_sheets,
+    profile_workbook,
+)
 
 
 def test_get_or_create_raises_on_missing_file(tmp_path):
@@ -183,3 +191,55 @@ def test_profile_workbook_handles_chart_sheets(tmp_path):
     assert chart_sheet["charts"][0]["chart_index"] == 1
     assert chart_sheet["charts"][0]["chart_type"] == "bar"
     assert chart_sheet["charts"][0]["series_count"] == 1
+
+
+def test_get_workbook_info_include_ranges_skips_chart_sheets(tmp_path):
+    filepath = str(tmp_path / "chartsheet-ranges.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for row in [("Name", "Value"), ("A", 1), ("B", 2)]:
+        ws.append(row)
+
+    chart = BarChart()
+    data = Reference(ws, min_col=2, min_row=1, max_row=3)
+    categories = Reference(ws, min_col=1, min_row=2, max_row=3)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(categories)
+
+    chart_sheet = wb.create_chartsheet("Charts")
+    chart_sheet.add_chart(chart)
+    wb.save(filepath)
+    wb.close()
+
+    result = get_workbook_info(filepath, include_ranges=True)
+
+    assert result["sheets"] == ["Data", "Charts"]
+    assert result["used_ranges"] == {"Data": "A1:B3"}
+
+
+def test_get_workbook_metadata_tool_handles_chart_sheets_with_ranges(tmp_path):
+    filepath = str(tmp_path / "chartsheet-metadata.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for row in [("Name", "Value"), ("A", 1), ("B", 2)]:
+        ws.append(row)
+
+    chart = BarChart()
+    data = Reference(ws, min_col=2, min_row=1, max_row=3)
+    categories = Reference(ws, min_col=1, min_row=2, max_row=3)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(categories)
+
+    chart_sheet = wb.create_chartsheet("Charts")
+    chart_sheet.add_chart(chart)
+    wb.save(filepath)
+    wb.close()
+
+    payload = json.loads(get_workbook_metadata_tool(filepath, include_ranges=True))
+
+    assert payload["ok"] is True
+    assert payload["operation"] == "get_workbook_metadata"
+    assert payload["data"]["sheets"] == ["Data", "Charts"]
+    assert payload["data"]["used_ranges"] == {"Data": "A1:B3"}
