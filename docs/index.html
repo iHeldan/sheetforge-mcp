@@ -3,7 +3,38 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SheetForge MCP</title>
+  <title>SheetForge MCP | Excel MCP Server for .xlsx Automation</title>
+  <meta name="description" content="SheetForge MCP is an Excel MCP server for AI agents and automation workflows. Read, write, search, format, chart, and automate .xlsx workbooks over the Model Context Protocol with Python and openpyxl.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="SheetForge MCP | Excel MCP Server for .xlsx Automation">
+  <meta name="twitter:description" content="Excel MCP server for AI agents and automation workflows that need structured .xlsx workbook access over the Model Context Protocol.">
+  <meta name="robots" content="index,follow">
+  <link rel="canonical" href="https://github.com/iHeldan/sheetforge-mcp">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="SheetForge MCP | Excel MCP Server for .xlsx Automation">
+  <meta property="og:description" content="Excel MCP server for AI agents and automation workflows that need structured .xlsx workbook access over the Model Context Protocol.">
+  <meta property="og:url" content="https://github.com/iHeldan/sheetforge-mcp">
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareSourceCode",
+      "name": "SheetForge MCP",
+      "description": "Excel MCP server for AI agents and automation workflows that read, write, format, and automate .xlsx workbooks over the Model Context Protocol.",
+      "codeRepository": "https://github.com/iHeldan/sheetforge-mcp",
+      "url": "https://github.com/iHeldan/sheetforge-mcp",
+      "license": "https://opensource.org/license/mit",
+      "programmingLanguage": "Python",
+      "runtimePlatform": "Python 3.10+",
+      "keywords": [
+        "Excel MCP server",
+        "Model Context Protocol",
+        "xlsx automation",
+        "spreadsheet automation",
+        "AI agents",
+        "openpyxl"
+      ]
+    }
+  </script>
   <style>
     :root {
       color-scheme: light;
@@ -199,17 +230,19 @@
         <span class="eyebrow">MCP + Excel</span>
         <h1>SheetForge MCP</h1>
         <p>
-          SheetForge MCP for reading, writing, searching, formatting, and restructuring
-          `.xlsx` workbooks with `openpyxl`.
+          An Excel MCP server for AI agents and automation workflows that need to read,
+          write, search, format, and restructure `.xlsx` workbooks with `openpyxl`.
         </p>
         <p>
-          It is designed for AI and automation workflows that need spreadsheet access
+          Use SheetForge MCP when you want spreadsheet automation, workbook inspection,
+          Excel report generation, or dashboard updates over the Model Context Protocol
           without launching desktop Excel.
         </p>
         <p>
           Current release: <strong>0.4.1</strong>. The main branch now covers 49 MCP
           tools, including workbook profiling, native-table upserts, compact mutation
-          responses, object-mode reads with schema hints, and a unified chart authoring entry point.
+          responses, object-mode reads with schema hints, placement-aware chart authoring,
+          and workbook-level chart footprint metadata.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/iHeldan/sheetforge-mcp">View Repository</a>
@@ -265,6 +298,16 @@
       <article class="card">
         <h2>Quick start</h2>
         <pre><code>uvx sheetforge-mcp stdio</code></pre>
+      </article>
+
+      <article class="card">
+        <h2>Best fit</h2>
+        <ul class="feature-list">
+          <li>AI agents that need structured Excel access through MCP</li>
+          <li>`.xlsx` report automation without hand-written workbook scripts</li>
+          <li>Workbook profiling before safe mutations</li>
+          <li>Excel dashboards with tables, charts, formatting, freeze panes, and print setup</li>
+        </ul>
       </article>
 
       <article class="card">

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "sheetforge-mcp",
   "version": "0.4.1",
-  "description": "SheetForge MCP for reading, writing, and reshaping Excel workbooks",
+  "description": "Excel MCP server for AI agents and automation workflows that read, write, format, and automate .xlsx workbooks",
   "author": {
     "name": "SheetForge",
     "url": "https://github.com/iHeldan"

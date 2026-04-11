@@ -1,12 +1,14 @@
 # SheetForge MCP
 
-SheetForge MCP exposes `.xlsx` workbook operations over the Model Context Protocol. It uses `openpyxl` under the hood, so MCP clients can inspect and modify Excel files without launching Microsoft Excel or LibreOffice.
+SheetForge MCP is an Excel MCP server for `.xlsx` automation over the Model Context Protocol. It lets AI agents, MCP clients, and automation workflows read, write, search, format, chart, and restructure Excel workbooks with Python and `openpyxl`, without launching Microsoft Excel or LibreOffice.
+
+If you are looking for an MCP server for Excel, spreadsheet automation, workbook inspection, Excel report generation, or `.xlsx` editing from AI tools, SheetForge MCP is built for that workflow.
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
 Current release: `0.4.1`
 
-## What This Project Covers
+## Excel MCP Server Features
 
 - workbook creation and metadata
 - worksheet creation, renaming, copying, deletion, and visibility
@@ -17,6 +19,14 @@ Current release: `0.4.1`
 - native Excel tables, charts, and pivot summaries
 - `stdio`, `streamable-http`, and deprecated `sse` transports
 
+## Common Use Cases
+
+- AI agents that need safe, structured Excel workbook access through MCP
+- spreadsheet automation workflows that read and update `.xlsx` reports
+- Excel dashboard generation with formatting, tables, charts, freeze panes, and print setup
+- workbook QA and inspection flows that need metadata, named ranges, tables, charts, and protection state
+- data extraction from native Excel tables or worksheet-shaped datasets without hand-written `openpyxl` scripts
+
 ## Requirements
 
 - Python `3.10+`
@@ -24,6 +34,8 @@ Current release: `0.4.1`
 - either `uvx` or a local package install
 
 ## Quick Start
+
+Install and run directly from PyPI with `uvx`, or install the package locally in your Python environment.
 
 ### Stdio
 
@@ -222,6 +234,14 @@ uv build
 - `tests/`: regression tests covering data, layout, charts, pivots, formatting, tables, and resource safety
 - `manifest.json`: packaged MCP bundle metadata
 - `docs/index.html`: static project landing page
+
+## Why SheetForge MCP
+
+- Excel-first MCP surface: the toolset is focused on real `.xlsx` workbook operations, not generic file I/O
+- agent-friendly responses: consistent JSON envelopes, compact writes, and `dry_run` previews reduce context waste
+- workbook introspection: `profile_workbook`, `list_all_sheets`, `list_tables`, and `list_charts` make unfamiliar spreadsheets easier to navigate
+- practical Excel output: formatting, print setup, worksheet protection, table upserts, chart authoring, and autofit helpers cover real reporting workflows
+- Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or remotely over HTTP
 
 ## Notes For Integrators
 

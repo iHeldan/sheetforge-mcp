@@ -4,3 +4,6 @@ excel_files/
 __pycache__/
 .notes/
 *.log
+CONTEXT.md
+context.md
+LOCAL_*.md

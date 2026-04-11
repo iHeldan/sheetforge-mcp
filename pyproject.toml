@@ -1,9 +1,22 @@
 [project]
 name = "sheetforge-mcp"
 version = "0.4.1"
-description = "SheetForge MCP for reading, writing, and reshaping Excel workbooks"
+description = "Excel MCP server for reading, writing, formatting, and automating .xlsx workbooks with Model Context Protocol and openpyxl"
 readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["mcp", "model-context-protocol", "excel", "xlsx", "spreadsheet", "openpyxl", "automation", "ai-agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Spreadsheet",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "mcp[cli]>=1.10.1",
     "fastmcp>=2.0.0,<3.0.0",
@@ -12,6 +25,12 @@ dependencies = [
 ]
 [[project.authors]]
 name = "SheetForge"
+
+[project.urls]
+Homepage = "https://github.com/iHeldan/sheetforge-mcp"
+Repository = "https://github.com/iHeldan/sheetforge-mcp"
+Documentation = "https://github.com/iHeldan/sheetforge-mcp#readme"
+Issues = "https://github.com/iHeldan/sheetforge-mcp/issues"
 
 [project.scripts]
 sheetforge-mcp = "excel_mcp.__main__:app"
