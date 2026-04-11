@@ -10,6 +10,8 @@
 ### Quality
 
 - Added regression coverage for workbook profiling and native-table upserts, including refusal to expand a table into occupied cells below it.
+- Hardened `upsert_excel_table_rows` by rejecting append attempts on totals-row tables until row-shift semantics can be modeled safely.
+- Hardened `profile_workbook` so workbooks with chart sheets no longer crash inventory reads.
 
 ## 0.4.1 - 2026-04-09
 

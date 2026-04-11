@@ -129,6 +129,7 @@ The most agent-friendly read tools are:
 The most agent-friendly write helpers for structured data are:
 
 - `upsert_excel_table_rows`: update matching rows in a native Excel table and append missing keys in one call
+  Note: totals-row tables are update-only for now; append attempts are rejected rather than shifting unrelated rows.
 - `append_table_rows`: append header-aware rows to worksheet-shaped data when you do not have a native Excel table
 - `update_rows_by_key`: update worksheet-shaped data by a named key column without appending missing keys
 
@@ -235,7 +236,7 @@ uv build
 - `get_worksheet_protection` and `set_worksheet_protection` add a safe worksheet-level wrapper around Excel protection flags.
 - `set_print_area` and `set_print_titles` make report/export setup scriptable without dropping into raw openpyxl workbook internals.
 - `list_tables` now returns lightweight schema metadata such as headers, row counts, and stripe settings in addition to table names and ranges.
-- `upsert_excel_table_rows` expands native Excel table ranges automatically when it appends missing keys, and refuses to grow a table into already occupied cells.
+- `upsert_excel_table_rows` expands native Excel table ranges automatically when it appends missing keys, refuses to grow a table into already occupied cells, and rejects append attempts when the target table has an enabled totals row.
 - Core mutation tools support `dry_run=True` so clients can preview changes before saving a workbook.
 
 ## License

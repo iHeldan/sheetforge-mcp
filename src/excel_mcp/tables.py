@@ -121,6 +121,13 @@ def _ensure_table_append_space_clear(
                 )
 
 
+def _reject_totals_row_appends(table: Table) -> None:
+    raise DataError(
+        f"Appending rows to table '{table.displayName}' is not supported while "
+        "a totals row is enabled. Remove the totals row first or update existing rows only."
+    )
+
+
 def _find_table(
     wb: Any,
     table_name: str,
@@ -398,6 +405,9 @@ def upsert_excel_table_rows(
                         )
                     )
 
+            if totals_row_count > 0 and append_rows:
+                _reject_totals_row_appends(table)
+
             append_start_row = data_end_row + 1
             if totals_row_count == 0 and append_rows:
                 _ensure_table_append_space_clear(
@@ -430,9 +440,6 @@ def upsert_excel_table_rows(
             table_range = _range_from_bounds(min_col, min_row, max_col, new_max_row)
 
             if not dry_run:
-                if append_rows and totals_row_count > 0:
-                    ws.insert_rows(append_start_row, amount=len(append_rows))
-
                 for target_row, row_data in update_rows:
                     for column_name, new_value in row_data.items():
                         if column_name == key_column:

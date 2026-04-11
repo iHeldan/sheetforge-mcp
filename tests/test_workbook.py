@@ -1,4 +1,6 @@
 import pytest
+from openpyxl import Workbook
+from openpyxl.chart import BarChart, Reference
 from excel_mcp.chart import create_chart_in_sheet
 from excel_mcp.server import profile_workbook as profile_workbook_tool
 from excel_mcp.tables import create_excel_table
@@ -74,3 +76,40 @@ def test_profile_workbook_tool_returns_json_envelope(tmp_workbook):
 
     assert '"operation": "profile_workbook"' in payload
     assert '"sheet_count": 1' in payload
+
+
+def test_profile_workbook_handles_chart_sheets(tmp_path):
+    filepath = str(tmp_path / "chartsheet.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for row in [("Name", "Value"), ("A", 1), ("B", 2), ("C", 3)]:
+        ws.append(row)
+
+    chart = BarChart()
+    data = Reference(ws, min_col=2, min_row=1, max_row=4)
+    categories = Reference(ws, min_col=1, min_row=2, max_row=4)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(categories)
+
+    chart_sheet = wb.create_chartsheet("Charts")
+    chart_sheet.add_chart(chart)
+    wb.save(filepath)
+    wb.close()
+
+    result = profile_workbook(filepath)
+
+    assert result["sheet_count"] == 2
+    assert result["chart_count"] == 1
+    assert result["table_count"] == 0
+    assert result["sheets"][0]["sheet_type"] == "worksheet"
+    chart_sheet = result["sheets"][1]
+    assert chart_sheet["name"] == "Charts"
+    assert chart_sheet["sheet_type"] == "chartsheet"
+    assert chart_sheet["visibility"] == "visible"
+    assert chart_sheet["table_count"] == 0
+    assert chart_sheet["chart_count"] == 1
+    assert chart_sheet["tables"] == []
+    assert chart_sheet["charts"][0]["chart_index"] == 1
+    assert chart_sheet["charts"][0]["chart_type"] == "bar"
+    assert chart_sheet["charts"][0]["series_count"] == 1

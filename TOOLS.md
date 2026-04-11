@@ -188,7 +188,7 @@ Returns matches under `data.matches`:
 - `append_table_rows(filepath: str, sheet_name: str, rows: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Appends header-aware rows using dictionary keys that match worksheet headers. Returns `changed_cells` always, and detailed `changes` only when requested or during previews.
 - `upsert_excel_table_rows(filepath: str, table_name: str, key_column: str, rows: List[Dict[str, Any]], sheet_name: Optional[str] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
-  Updates matching rows inside a native Excel table and appends missing keys in one call. Missing rows expand the table's `ref` automatically, and the tool refuses to grow the table into already occupied cells below it.
+  Updates matching rows inside a native Excel table and appends missing keys in one call. Missing rows expand the table's `ref` automatically, and the tool refuses to grow the table into already occupied cells below it. Tables with an enabled totals row are update-only for now; append attempts are rejected.
 - `update_rows_by_key(filepath: str, sheet_name: str, key_column: str, updates: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Updates existing rows by matching a named key column, reports unmatched keys, and returns compact summaries by default.
 

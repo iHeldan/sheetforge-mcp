@@ -35,6 +35,10 @@ def _freeze_panes_value(ws) -> str | None:
     return getattr(value, "coordinate", None)
 
 
+def _sheet_type(ws: Any) -> str:
+    return "chartsheet" if ws.__class__.__name__ == "Chartsheet" else "worksheet"
+
+
 def _serialize_named_ranges(wb: Any) -> list[dict[str, Any]]:
     ranges = []
     for name, defined_name in wb.defined_names.items():
@@ -224,12 +228,6 @@ def profile_workbook(filepath: str) -> dict[str, Any]:
 
             for sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
-                rows, columns, column_range, is_empty = _get_sheet_usage(ws)
-
-                tables = [
-                    _build_table_metadata(sheet_name, ws, table)
-                    for table in ws.tables.values()
-                ]
                 charts = []
                 for chart_index, chart in enumerate(getattr(ws, "_charts", []), start=1):
                     width, height = _extract_chart_dimensions(chart)
@@ -246,12 +244,34 @@ def profile_workbook(filepath: str) -> dict[str, Any]:
                         }
                     )
 
+                if _sheet_type(ws) == "chartsheet":
+                    total_charts += len(charts)
+                    sheets.append(
+                        {
+                            "name": sheet_name,
+                            "sheet_type": "chartsheet",
+                            "visibility": ws.sheet_state,
+                            "table_count": 0,
+                            "chart_count": len(charts),
+                            "tables": [],
+                            "charts": charts,
+                        }
+                    )
+                    continue
+
+                rows, columns, column_range, is_empty = _get_sheet_usage(ws)
+                tables = [
+                    _build_table_metadata(sheet_name, ws, table)
+                    for table in ws.tables.values()
+                ]
+
                 total_tables += len(tables)
                 total_charts += len(charts)
 
                 sheets.append(
                     {
                         "name": sheet_name,
+                        "sheet_type": "worksheet",
                         "rows": rows,
                         "columns": columns,
                         "column_range": column_range,

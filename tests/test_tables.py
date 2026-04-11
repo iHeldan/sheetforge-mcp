@@ -1,7 +1,8 @@
 import json
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from excel_mcp.server import (
     list_tables as list_tables_tool,
@@ -289,6 +290,82 @@ def test_upsert_excel_table_rows_rejects_occupied_space_below_table(tmp_workbook
             "Customers",
             key_column="Name",
             rows=[{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+        )
+
+
+def test_upsert_excel_table_rows_rejects_appends_when_totals_row_is_enabled(tmp_path):
+    filepath = str(tmp_path / "totals.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Name", "Qty"])
+    ws.append(["Alice", 1])
+    ws.append(["Bob", 2])
+    ws.append(["Total", 3])
+
+    table = Table(displayName="Sales", ref="A1:B4")
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    table.totalsRowShown = True
+    table.totalsRowCount = 1
+    ws.add_table(table)
+    ws["A5"] = "Below"
+    ws["B5"] = 99
+    wb.save(filepath)
+    wb.close()
+
+    with pytest.raises(DataError, match="totals row is enabled"):
+        upsert_excel_table_rows(
+            filepath,
+            "Sales",
+            key_column="Name",
+            rows=[{"Name": "Carol", "Qty": 5}],
+        )
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws.tables["Sales"].ref == "A1:B4"
+    assert ws["A4"].value == "Total"
+    assert ws["A5"].value == "Below"
+    wb.close()
+
+
+def test_upsert_excel_table_rows_dry_run_rejects_totals_row_appends(tmp_path):
+    filepath = str(tmp_path / "totals-dry-run.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Name", "Qty"])
+    ws.append(["Alice", 1])
+    ws.append(["Total", 1])
+
+    table = Table(displayName="Sales", ref="A1:B3")
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    table.totalsRowShown = True
+    table.totalsRowCount = 1
+    ws.add_table(table)
+    wb.save(filepath)
+    wb.close()
+
+    with pytest.raises(DataError, match="totals row is enabled"):
+        upsert_excel_table_rows(
+            filepath,
+            "Sales",
+            key_column="Name",
+            rows=[{"Name": "Bob", "Qty": 2}],
+            dry_run=True,
+            include_changes=True,
         )
 
 
