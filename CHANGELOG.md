@@ -12,6 +12,8 @@ This patch release improves workbook profiling coverage, safer native-table beha
 - Added `upsert_excel_table_rows` for key-based updates plus append-missing behavior directly on native Excel tables.
 - Added `start_row` pagination support to `quick_read` and `read_excel_as_table` for large worksheet reads that need to start below the top of the sheet.
 - Added `values_only=True` support to `read_data_from_excel` for compact 2D range reads without per-cell metadata overhead.
+- Added `include_headers=False` to tabular read tools so follow-up pages can omit repeated header payload.
+- Added `start_row` pagination support to `read_excel_table` for deeper native-table reads.
 
 ### Quality
 

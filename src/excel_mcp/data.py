@@ -139,6 +139,7 @@ def augment_tabular_payload(
     rows: List[List[Any]],
     row_mode: str = "arrays",
     infer_schema: bool = False,
+    include_headers: bool = True,
 ) -> Dict[str, Any]:
     _validate_row_mode(row_mode)
 
@@ -152,6 +153,9 @@ def augment_tabular_payload(
 
     if infer_schema and schema is not None:
         result["schema"] = schema
+
+    if not include_headers:
+        result.pop("headers", None)
 
     return result
 
@@ -545,6 +549,7 @@ def read_as_table(
     end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> Dict[str, Any]:
@@ -570,6 +575,7 @@ def read_as_table(
                 end_col=end_col,
                 max_rows=max_rows,
                 compact=compact,
+                include_headers=include_headers,
                 row_mode=row_mode,
                 infer_schema=infer_schema,
             )
@@ -590,6 +596,7 @@ def _read_table_from_worksheet(
     end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> Dict[str, Any]:
@@ -639,6 +646,7 @@ def _read_table_from_worksheet(
         payload,
         headers=headers,
         rows=rows,
+        include_headers=include_headers,
         row_mode=row_mode,
         infer_schema=infer_schema,
     )
@@ -650,6 +658,7 @@ def quick_read(
     header_row: int = 1,
     start_row: Optional[int] = None,
     max_rows: Optional[int] = None,
+    include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> Dict[str, Any]:
@@ -678,6 +687,7 @@ def quick_read(
                 header_row=header_row,
                 start_row=start_row,
                 max_rows=max_rows,
+                include_headers=include_headers,
                 row_mode=row_mode,
                 infer_schema=infer_schema,
             )

@@ -253,6 +253,8 @@ uv build
 - `read_data_from_excel(..., values_only=True)` returns a plain 2D `values` array for range reads that do not need per-cell addresses or validation metadata.
 - `read_excel_as_table(..., compact=True)` returns only `headers` and `rows` unless truncation metadata is needed.
 - `quick_read(..., start_row=...)` and `read_excel_as_table(..., start_row=...)` let agents paginate deep worksheets without first reading from the top.
+- `quick_read(..., include_headers=False)`, `read_excel_as_table(..., include_headers=False)`, and `read_excel_table(..., include_headers=False)` let follow-up pages omit repeated header payload once the first page already established the schema.
+- `read_excel_table(..., start_row=...)` now supports deeper pagination into native Excel tables instead of always reading from the top.
 - Oversized read responses now fail early with `ResponseTooLargeError` plus structured `hints`, so agents can retry with smaller ranges or pagination before the client truncates the payload.
 - `quick_read`, `read_excel_as_table`, and `read_excel_table` can now return `records` plus inferred `schema` hints when you opt into `row_mode="objects"` and `infer_schema=True`.
 - `profile_workbook` provides a single-call workbook inventory with sheet-level table, chart, protection, print, and filter metadata for faster agent orientation, and now includes chart `occupied_range` alongside anchors and dimensions for grid-anchored worksheet charts.

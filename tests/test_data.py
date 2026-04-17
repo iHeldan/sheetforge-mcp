@@ -107,6 +107,23 @@ def test_read_as_table_supports_start_row_pagination(tmp_workbook):
     assert result["truncated"] is True
 
 
+def test_read_as_table_can_omit_headers_for_followup_pages(tmp_workbook):
+    result = read_as_table(
+        tmp_workbook,
+        "Sheet1",
+        start_row=4,
+        max_rows=2,
+        include_headers=False,
+    )
+
+    assert "headers" not in result
+    assert result["rows"] == [
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+    ]
+    assert result["truncated"] is True
+
+
 def test_read_as_table_rejects_start_row_at_or_above_header(tmp_workbook):
     with pytest.raises(DataError, match="start_row must be greater than header_row"):
         read_as_table(tmp_workbook, "Sheet1", header_row=1, start_row=1)
@@ -499,6 +516,24 @@ def test_quick_read_tool_supports_start_row_pagination(tmp_workbook):
         ["Dave", 28, "Oulu"],
     ]
     assert payload["data"]["truncated"] is True
+
+
+def test_quick_read_tool_can_omit_headers_for_followup_pages(tmp_workbook):
+    payload = _load_tool_payload(
+        quick_read(
+            tmp_workbook,
+            sheet_name="Sheet1",
+            start_row=4,
+            max_rows=2,
+            include_headers=False,
+        )
+    )
+
+    assert "headers" not in payload["data"]
+    assert payload["data"]["rows"] == [
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+    ]
 
 
 def test_quick_read_skips_chartsheet_when_first_sheet_is_not_a_worksheet(tmp_path):

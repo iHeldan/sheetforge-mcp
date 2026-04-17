@@ -234,6 +234,52 @@ def test_read_excel_table_supports_max_rows_and_compact(tmp_workbook):
     }
 
 
+def test_read_excel_table_supports_start_row_pagination(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    result = read_excel_table(tmp_workbook, "Customers", start_row=3, max_rows=2, compact=True)
+
+    assert result == {
+        "sheet_name": "Sheet1",
+        "table_name": "Customers",
+        "range": "A1:C6",
+        "headers": ["Name", "Age", "City"],
+        "rows": [
+            ["Carol", 35, "Turku"],
+            ["Dave", 28, "Oulu"],
+        ],
+        "total_rows": 5,
+        "truncated": True,
+    }
+
+
+def test_read_excel_table_can_omit_headers_for_followup_pages(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    result = read_excel_table(
+        tmp_workbook,
+        "Customers",
+        start_row=3,
+        max_rows=2,
+        compact=True,
+        include_headers=False,
+    )
+
+    assert "headers" not in result
+    assert result["rows"] == [
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+    ]
+    assert result["truncated"] is True
+
+
+def test_read_excel_table_rejects_non_positive_start_row(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    with pytest.raises(DataError, match="start_row must be a positive integer"):
+        read_excel_table(tmp_workbook, "Customers", start_row=0)
+
+
 def test_read_excel_table_can_return_records_and_schema(tmp_workbook):
     create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
 
@@ -291,6 +337,27 @@ def test_read_excel_table_tool_returns_json_envelope(tmp_workbook):
     assert payload["operation"] == "read_excel_table"
     assert payload["data"]["table_name"] == "Customers"
     assert payload["data"]["truncated"] is True
+
+
+def test_read_excel_table_tool_accepts_pagination_without_headers(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    payload = _load_tool_payload(
+        read_excel_table_tool(
+            tmp_workbook,
+            "Customers",
+            start_row=3,
+            max_rows=2,
+            compact=True,
+            include_headers=False,
+        )
+    )
+
+    assert "headers" not in payload["data"]
+    assert payload["data"]["rows"] == [
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+    ]
 
 
 def test_read_excel_table_tool_can_return_records_and_schema(tmp_workbook):

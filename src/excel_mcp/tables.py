@@ -248,8 +248,10 @@ def read_excel_table(
     filepath: str,
     table_name: str,
     sheet_name: Optional[str] = None,
+    start_row: int = 1,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> dict[str, Any]:
@@ -259,6 +261,11 @@ def read_excel_table(
     hints as the compact worksheet table readers.
     """
     try:
+        if start_row <= 0:
+            raise DataError("start_row must be a positive integer")
+        if max_rows is not None and max_rows <= 0:
+            raise DataError("max_rows must be a positive integer")
+
         with safe_workbook(filepath) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
             metadata = _build_table_metadata(current_sheet_name, ws, table)
@@ -267,10 +274,13 @@ def read_excel_table(
             data_start_row = min_row + metadata["header_row_count"]
             data_end_row = max_row - metadata["totals_row_count"]
             total_rows = metadata["data_row_count"]
-            row_limit = min(total_rows, max_rows) if max_rows is not None else total_rows
+            data_row_offset = start_row - 1
+            available_rows = max(total_rows - data_row_offset, 0)
+            row_limit = min(available_rows, max_rows) if max_rows is not None else available_rows
 
             rows: list[list[Any]] = []
-            for row_index in range(data_start_row, data_start_row + row_limit):
+            first_row = data_start_row + data_row_offset
+            for row_index in range(first_row, first_row + row_limit):
                 if row_index > data_end_row:
                     break
                 rows.append(
@@ -288,7 +298,7 @@ def read_excel_table(
                 "headers": metadata["headers"],
                 "rows": rows,
                 "total_rows": total_rows,
-                "truncated": max_rows is not None and total_rows > max_rows,
+                "truncated": max_rows is not None and available_rows > max_rows,
                 "header_row_count": metadata["header_row_count"],
                 "totals_row_count": metadata["totals_row_count"],
                 "totals_row_shown": metadata["totals_row_shown"],
@@ -298,9 +308,10 @@ def read_excel_table(
                     "sheet_name": result["sheet_name"],
                     "table_name": result["table_name"],
                     "range": result["range"],
-                    "headers": result["headers"],
                     "rows": result["rows"],
                 }
+                if include_headers:
+                    payload["headers"] = result["headers"]
                 if result["truncated"]:
                     payload["total_rows"] = result["total_rows"]
                     payload["truncated"] = True
@@ -311,6 +322,7 @@ def read_excel_table(
                 payload,
                 headers=result["headers"],
                 rows=result["rows"],
+                include_headers=include_headers,
                 row_mode=row_mode,
                 infer_schema=infer_schema,
             )

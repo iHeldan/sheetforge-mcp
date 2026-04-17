@@ -157,8 +157,12 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         hints.append("use read_excel_as_table plus start_row/max_rows for tabular worksheet data")
     elif operation in {"quick_read", "read_excel_as_table", "read_excel_table"}:
         hints.append("set max_rows to request a smaller page")
-        if operation != "read_excel_table":
+        if operation == "read_excel_table":
+            hints.append("use start_row to continue from a later table row")
+        else:
             hints.append("use start_row to continue from a deeper row without rereading the top")
+        if "headers" in data_dict:
+            hints.append("set include_headers=False for follow-up pages after the first")
         if data_dict.get("row_mode") == "objects":
             hints.append("switch to row_mode='arrays' for a smaller payload")
         if operation == "read_excel_as_table" and "sheet_name" in data_dict:
@@ -513,6 +517,7 @@ def read_excel_as_table(
     start_row: Optional[int] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> str:
@@ -530,6 +535,7 @@ def read_excel_as_table(
             start_row=start_row,
             max_rows=max_rows,
             compact=compact,
+            include_headers=include_headers,
             row_mode=row_mode,
             infer_schema=infer_schema,
         ),
@@ -548,6 +554,7 @@ def quick_read(
     header_row: int = 1,
     start_row: Optional[int] = None,
     max_rows: Optional[int] = None,
+    include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> str:
@@ -564,6 +571,7 @@ def quick_read(
             header_row=header_row,
             start_row=start_row,
             max_rows=max_rows,
+            include_headers=include_headers,
             row_mode=row_mode,
             infer_schema=infer_schema,
         ),
@@ -581,8 +589,10 @@ def read_excel_table(
     filepath: str,
     table_name: str,
     sheet_name: Optional[str] = None,
+    start_row: int = 1,
     max_rows: Optional[int] = None,
     compact: bool = False,
+    include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> str:
@@ -597,8 +607,10 @@ def read_excel_table(
             get_excel_path(filepath),
             table_name,
             sheet_name=sheet_name,
+            start_row=start_row,
             max_rows=max_rows,
             compact=compact,
+            include_headers=include_headers,
             row_mode=row_mode,
             infer_schema=infer_schema,
         ),
