@@ -422,6 +422,25 @@ def test_read_excel_as_table_compact_omits_nonessential_metadata(tmp_workbook):
     }
 
 
+def test_read_excel_as_table_tool_supports_column_windowing(tmp_workbook):
+    payload = _load_tool_payload(
+        read_excel_as_table_tool(tmp_workbook, "Sheet1", start_col="B", end_col="C", compact=True)
+    )
+
+    assert payload["data"]["headers"] == ["Age", "City"]
+    assert payload["data"]["rows"][0] == [30, "Helsinki"]
+    assert payload["data"]["rows"][-1] == [32, "Espoo"]
+
+
+def test_read_excel_as_table_tool_rejects_end_col_before_start_col(tmp_workbook):
+    payload = json.loads(
+        read_excel_as_table_tool(tmp_workbook, "Sheet1", start_col="C", end_col="B")
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["message"] == "end_col must be greater than or equal to start_col"
+
+
 def test_read_excel_as_table_compact_preserves_truncation_metadata(tmp_workbook):
     payload = _load_tool_payload(read_excel_as_table_tool(tmp_workbook, "Sheet1", max_rows=2, compact=True))
 
@@ -530,6 +549,32 @@ def test_quick_read_tool_supports_start_row_pagination(tmp_workbook):
     assert payload["data"]["next_start_row"] == 6
 
 
+def test_quick_read_supports_column_windowing(tmp_workbook):
+    result = quick_read_impl(tmp_workbook, sheet_name="Sheet1", start_col="B", end_col="C")
+
+    assert result["headers"] == ["Age", "City"]
+    assert result["rows"][0] == [30, "Helsinki"]
+    assert result["rows"][-1] == [32, "Espoo"]
+
+
+def test_quick_read_tool_supports_column_windowing(tmp_workbook):
+    payload = _load_tool_payload(
+        quick_read(tmp_workbook, sheet_name="Sheet1", start_col="B", end_col="C")
+    )
+
+    assert payload["data"]["headers"] == ["Age", "City"]
+    assert payload["data"]["rows"][0] == [30, "Helsinki"]
+
+
+def test_quick_read_rejects_end_col_before_start_col(tmp_workbook):
+    payload = json.loads(
+        quick_read(tmp_workbook, sheet_name="Sheet1", start_col="C", end_col="B")
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["message"] == "end_col must be greater than or equal to start_col"
+
+
 def test_quick_read_tool_can_omit_headers_for_followup_pages(tmp_workbook):
     payload = _load_tool_payload(
         quick_read(
@@ -609,6 +654,7 @@ def test_quick_read_returns_guided_error_before_oversized_payload(
     assert payload["error"]["type"] == "ResponseTooLargeError"
     assert any("max_rows" in hint for hint in payload["error"]["hints"])
     assert any("start_row" in hint for hint in payload["error"]["hints"])
+    assert any("start_col/end_col" in hint for hint in payload["error"]["hints"])
 
 
 def test_write_data_dry_run_does_not_persist(tmp_workbook):

@@ -5,6 +5,7 @@
 ### Added
 
 - Added `next_start_row` to truncated tabular read responses so agents can continue pagination without recalculating offsets.
+- Added `start_col` / `end_col` support to `quick_read` and `read_excel_as_table` so wide worksheet reads can request a narrower column slice before pagination.
 - Added `find_free_canvas` plus `placement.relative_to="free_canvas"` so chart and dashboard workflows can discover non-overlapping layout slots automatically.
 - Added `analyze_range_impact` as a read-only preflight that reports tables, chart footprints, merges, named ranges, autofilter, print area, and formulas touched by a worksheet range.
 - Extended `analyze_range_impact` to report downstream formulas elsewhere in the workbook that reference the selected range.

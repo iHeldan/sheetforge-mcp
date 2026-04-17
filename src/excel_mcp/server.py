@@ -163,6 +163,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             hints.append("use start_row to continue from a later table row")
         else:
             hints.append("use start_row to continue from a deeper row without rereading the top")
+            hints.append("use start_col/end_col to request a narrower column slice")
         if "headers" in data_dict:
             hints.append("set include_headers=False for follow-up pages after the first")
         if data_dict.get("row_mode") == "objects":
@@ -517,6 +518,8 @@ def read_excel_as_table(
     sheet_name: str,
     header_row: int = 1,
     start_row: Optional[int] = None,
+    start_col: str = "A",
+    end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
     include_headers: bool = True,
@@ -535,6 +538,8 @@ def read_excel_as_table(
             sheet_name,
             header_row=header_row,
             start_row=start_row,
+            start_col=start_col,
+            end_col=end_col,
             max_rows=max_rows,
             compact=compact,
             include_headers=include_headers,
@@ -555,6 +560,8 @@ def quick_read(
     sheet_name: Optional[str] = None,
     header_row: int = 1,
     start_row: Optional[int] = None,
+    start_col: str = "A",
+    end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     include_headers: bool = True,
     row_mode: str = "arrays",
@@ -572,6 +579,8 @@ def quick_read(
             sheet_name=sheet_name,
             header_row=header_row,
             start_row=start_row,
+            start_col=start_col,
+            end_col=end_col,
             max_rows=max_rows,
             include_headers=include_headers,
             row_mode=row_mode,

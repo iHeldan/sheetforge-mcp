@@ -218,6 +218,13 @@ def _should_include_changes(dry_run: bool, include_changes: Optional[bool]) -> b
 def _selected_columns(start_col_idx: int, end_col_idx: int) -> List[int]:
     return list(range(start_col_idx, end_col_idx + 1))
 
+
+def _column_index(label: str, *, argument_name: str) -> int:
+    try:
+        return column_index_from_string(label.upper())
+    except ValueError as exc:
+        raise DataError(f"{argument_name} must be a valid Excel column label") from exc
+
 def read_excel_range(
     filepath: Path | str,
     sheet_name: str,
@@ -604,11 +611,13 @@ def _read_table_from_worksheet(
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> Dict[str, Any]:
-    start_col_idx = column_index_from_string(start_col.upper())
+    start_col_idx = _column_index(start_col, argument_name="start_col")
     if end_col:
-        end_col_idx = column_index_from_string(end_col.upper())
+        end_col_idx = _column_index(end_col, argument_name="end_col")
     else:
         end_col_idx = ws.max_column
+    if end_col_idx < start_col_idx:
+        raise DataError("end_col must be greater than or equal to start_col")
     if max_rows is not None and max_rows <= 0:
         raise DataError("max_rows must be a positive integer")
 
@@ -666,6 +675,8 @@ def quick_read(
     sheet_name: Optional[str] = None,
     header_row: int = 1,
     start_row: Optional[int] = None,
+    start_col: str = "A",
+    end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     include_headers: bool = True,
     row_mode: str = "arrays",
@@ -695,6 +706,8 @@ def quick_read(
                 resolved_sheet_name,
                 header_row=header_row,
                 start_row=start_row,
+                start_col=start_col,
+                end_col=end_col,
                 max_rows=max_rows,
                 include_headers=include_headers,
                 row_mode=row_mode,
