@@ -134,7 +134,7 @@ For chart authoring, prefer `create_chart` as the primary entry point:
 The most agent-friendly read tools are:
 
 - `profile_workbook`: one-call inventory for sheets, tables, charts, named ranges, and key layout/protection state, including chart `occupied_range` for grid-anchored worksheet charts
-- `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, autofilters, print areas, and formula cells
+- `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, autofilters, print areas, formula cells inside the range, and formulas elsewhere that depend on it
 - `quick_read`: single-call compact table read that auto-selects the first sheet when needed, now with `start_row` pagination for large sheets
 - `read_excel_table`: read a native Excel table by `table_name` without guessing worksheet bounds
 - `list_all_sheets`: quick workbook inventory with sheet sizes, emptiness flags, and `sheet_type` for worksheets versus chart sheets
@@ -243,7 +243,7 @@ uv build
 - Excel-first MCP surface: the toolset is focused on real `.xlsx` workbook operations, not generic file I/O
 - agent-friendly responses: consistent JSON envelopes, compact writes, and `dry_run` previews reduce context waste
 - workbook introspection: `profile_workbook`, `list_all_sheets`, `list_tables`, and `list_charts` make unfamiliar spreadsheets easier to navigate
-- safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range
+- safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range, including downstream formula dependencies elsewhere in the workbook
 - layout planning: `find_free_canvas` suggests safe empty slots for charts or dashboard blocks before you place them, defaulting to the standard chart footprint when you omit explicit sizing
 - practical Excel output: formatting, print setup, worksheet protection, table upserts, chart authoring, and autofit helpers cover real reporting workflows
 - Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or remotely over HTTP

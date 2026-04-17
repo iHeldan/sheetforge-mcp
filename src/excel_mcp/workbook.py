@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -60,6 +61,7 @@ def _intersection_bounds(
 def _parse_range_reference(
     range_ref: str,
     *,
+    worksheet: Worksheet | None = None,
     expected_sheet: str | None = None,
     error_cls: type[Exception] = WorkbookError,
 ) -> tuple[tuple[int, int, int, int], str]:
@@ -81,12 +83,21 @@ def _parse_range_reference(
     except ValueError as exc:
         raise error_cls(f"Invalid range reference: {range_ref}") from exc
 
+    if None in (min_col, min_row, max_col, max_row):
+        if worksheet is None:
+            raise error_cls(f"Range reference requires worksheet bounds: {range_ref}")
+        min_col = 1 if min_col is None else min_col
+        min_row = 1 if min_row is None else min_row
+        max_col = worksheet.max_column if max_col is None else max_col
+        max_row = worksheet.max_row if max_row is None else max_row
+
     return (min_row, min_col, max_row, max_col), _bounds_to_range(min_row, min_col, max_row, max_col)
 
 
 def _iter_range_references(
     range_ref: Any,
     *,
+    worksheet: Worksheet | None = None,
     expected_sheet: str | None = None,
 ) -> list[tuple[tuple[int, int, int, int], str]]:
     if not range_ref:
@@ -112,10 +123,117 @@ def _iter_range_references(
             min_col, min_row, max_col, max_row = range_boundaries(local_range)
         except ValueError:
             continue
+        if None in (min_col, min_row, max_col, max_row):
+            if worksheet is None:
+                continue
+            min_col = 1 if min_col is None else min_col
+            min_row = 1 if min_row is None else min_row
+            max_col = worksheet.max_column if max_col is None else max_col
+            max_row = worksheet.max_row if max_row is None else max_row
         references.append(
             ((min_row, min_col, max_row, max_col), _bounds_to_range(min_row, min_col, max_row, max_col))
         )
     return references
+
+
+def _cell_is_within_bounds(
+    sheet_name: str,
+    row_index: int,
+    column_index: int,
+    target_sheet: str,
+    target_bounds: tuple[int, int, int, int],
+) -> bool:
+    return (
+        sheet_name == target_sheet
+        and target_bounds[0] <= row_index <= target_bounds[2]
+        and target_bounds[1] <= column_index <= target_bounds[3]
+    )
+
+
+def _extract_formula_dependencies(
+    wb: Any,
+    *,
+    target_sheet: str,
+    target_bounds: tuple[int, int, int, int],
+) -> list[dict[str, Any]]:
+    dependencies: list[dict[str, Any]] = []
+
+    for formula_sheet_name in wb.sheetnames:
+        formula_ws = wb[formula_sheet_name]
+        if _sheet_type(formula_ws) == "chartsheet":
+            continue
+
+        for row in formula_ws.iter_rows():
+            for cell in row:
+                if not isinstance(cell.value, str) or not cell.value.startswith("="):
+                    continue
+                if _cell_is_within_bounds(
+                    formula_sheet_name,
+                    cell.row,
+                    cell.column,
+                    target_sheet,
+                    target_bounds,
+                ):
+                    continue
+
+                matched_references: list[dict[str, Any]] = []
+                try:
+                    tokenizer = Tokenizer(cell.value)
+                except Exception:
+                    continue
+
+                for token in tokenizer.items:
+                    if token.type != "OPERAND" or token.subtype != "RANGE":
+                        continue
+
+                    token_value = str(token.value).strip()
+                    if not token_value or "[" in token_value:
+                        continue
+
+                    reference_sheet_name = formula_sheet_name
+                    local_reference = token_value
+                    if "!" in token_value:
+                        range_sheet, local_reference = token_value.rsplit("!", 1)
+                        reference_sheet_name = range_sheet.strip().strip("'")
+
+                    if reference_sheet_name != target_sheet or reference_sheet_name not in wb.sheetnames:
+                        continue
+
+                    reference_ws = wb[reference_sheet_name]
+                    if _sheet_type(reference_ws) == "chartsheet":
+                        continue
+
+                    try:
+                        reference_bounds, normalized_reference = _parse_range_reference(
+                            local_reference,
+                            worksheet=reference_ws,
+                            error_cls=WorkbookError,
+                        )
+                    except WorkbookError:
+                        continue
+
+                    intersection = _intersection_bounds(target_bounds, reference_bounds)
+                    if intersection is None:
+                        continue
+
+                    matched_references.append(
+                        {
+                            "reference": f"{reference_sheet_name}!{normalized_reference}",
+                            "intersection_range": _bounds_to_range(*intersection),
+                        }
+                    )
+
+                if matched_references:
+                    dependencies.append(
+                        {
+                            "sheet_name": formula_sheet_name,
+                            "cell": cell.coordinate,
+                            "formula": cell.value,
+                            "references": matched_references,
+                        }
+                    )
+
+    return dependencies
 
 
 def _freeze_panes_value(ws) -> str | None:
@@ -484,6 +602,7 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
             )
             target_bounds, normalized_range = _parse_range_reference(
                 range_ref,
+                worksheet=ws,
                 expected_sheet=sheet_name,
                 error_cls=WorkbookError,
             )
@@ -575,6 +694,7 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
             for merged_range in ws.merged_cells.ranges:
                 merged_bounds, merged_ref = _parse_range_reference(
                     str(merged_range),
+                    worksheet=ws,
                     error_cls=WorkbookError,
                 )
                 intersection = _intersection_bounds(target_bounds, merged_bounds)
@@ -621,6 +741,7 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
             if ws.auto_filter.ref:
                 autofilter_bounds, autofilter_ref = _parse_range_reference(
                     ws.auto_filter.ref,
+                    worksheet=ws,
                     error_cls=WorkbookError,
                 )
                 intersection = _intersection_bounds(target_bounds, autofilter_bounds)
@@ -633,6 +754,7 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
             print_area_matches = []
             for print_bounds, print_ref in _iter_range_references(
                 ws.print_area,
+                worksheet=ws,
                 expected_sheet=sheet_name,
             ):
                 intersection = _intersection_bounds(target_bounds, print_bounds)
@@ -656,12 +778,19 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                     if isinstance(cell.value, str) and cell.value.startswith("="):
                         formula_cells.append(cell.coordinate)
 
+            dependent_formulas = _extract_formula_dependencies(
+                wb,
+                target_sheet=sheet_name,
+                target_bounds=target_bounds,
+            )
+
             impact_score = (
                 len(tables) * 3
                 + len(charts) * 3
                 + len(merged_ranges) * 2
                 + len(named_ranges) * 2
                 + (1 if formula_cells else 0)
+                + len(dependent_formulas) * 3
                 + (1 if autofilter else 0)
                 + (1 if print_area_matches else 0)
             )
@@ -691,6 +820,8 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                 hints.append("Selected range overlaps the worksheet print area.")
             if formula_cells:
                 hints.append("Selected range contains formula cells that may recalculate or break.")
+            if dependent_formulas:
+                hints.append("Formulas elsewhere in the workbook reference the selected range.")
             if not hints:
                 hints.append("No overlapping workbook structures detected for this range.")
 
@@ -705,6 +836,7 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                     "merged_range_count": len(merged_ranges),
                     "named_range_count": len(named_ranges),
                     "formula_cell_count": len(formula_cells),
+                    "dependent_formula_count": len(dependent_formulas),
                     "autofilter_overlap": autofilter is not None,
                     "print_area_overlap": bool(print_area_matches),
                 },
@@ -715,6 +847,10 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                 "formula_cells": {
                     "count": len(formula_cells),
                     "sample": formula_cells[:10],
+                },
+                "dependent_formulas": {
+                    "count": len(dependent_formulas),
+                    "sample": dependent_formulas[:10],
                 },
                 "worksheet_features": {
                     "autofilter": autofilter,

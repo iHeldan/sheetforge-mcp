@@ -185,6 +185,9 @@ def test_analyze_range_impact_reports_overlapping_structures(tmp_workbook):
     ws.auto_filter.ref = "A1:C6"
     ws.print_area = "A1:F10"
     ws["D3"] = "=SUM(B2:C2)"
+    ws["H2"] = "=SUM(B2:C3)"
+    dependent_sheet = workbook.create_sheet("Dependent")
+    dependent_sheet["A1"] = "=SUM(Sheet1!B2:C3)"
     workbook.defined_names["ImpactArea"] = DefinedName(
         "ImpactArea",
         attr_text="Sheet1!$B$2:$F$4",
@@ -200,6 +203,7 @@ def test_analyze_range_impact_reports_overlapping_structures(tmp_workbook):
     assert result["summary"]["merged_range_count"] == 1
     assert result["summary"]["named_range_count"] == 1
     assert result["summary"]["formula_cell_count"] == 1
+    assert result["summary"]["dependent_formula_count"] == 2
     assert result["summary"]["autofilter_overlap"] is True
     assert result["summary"]["print_area_overlap"] is True
     assert result["tables"][0]["covers_header"] is True
@@ -207,6 +211,12 @@ def test_analyze_range_impact_reports_overlapping_structures(tmp_workbook):
     assert result["merged_ranges"][0]["range"] == "B2:C2"
     assert result["named_ranges"][0]["name"] == "ImpactArea"
     assert result["formula_cells"]["sample"] == ["D3"]
+    assert result["dependent_formulas"]["count"] == 2
+    assert result["dependent_formulas"]["sample"][0]["references"][0]["intersection_range"] == "B2:C3"
+    dependent_cells = {
+        (item["sheet_name"], item["cell"]) for item in result["dependent_formulas"]["sample"]
+    }
+    assert dependent_cells == {("Sheet1", "H2"), ("Dependent", "A1")}
 
 
 def test_analyze_range_impact_reports_low_risk_for_empty_area(tmp_workbook):
@@ -215,6 +225,7 @@ def test_analyze_range_impact_reports_low_risk_for_empty_area(tmp_workbook):
     assert result["summary"]["risk_level"] == "low"
     assert result["summary"]["table_count"] == 0
     assert result["summary"]["chart_count"] == 0
+    assert result["summary"]["dependent_formula_count"] == 0
     assert result["hints"] == ["No overlapping workbook structures detected for this range."]
 
 
