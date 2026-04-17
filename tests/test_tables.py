@@ -156,10 +156,10 @@ def test_list_tables_can_filter_by_sheet(multi_sheet_workbook):
 def test_list_tables_tool_returns_json_envelope(tmp_workbook):
     create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
 
-    payload = list_tables_tool(tmp_workbook)
+    payload = _load_tool_payload(list_tables_tool(tmp_workbook))
 
-    assert '"operation": "list_tables"' in payload
-    assert '"table_name": "Customers"' in payload
+    assert payload["operation"] == "list_tables"
+    assert payload["data"]["tables"][0]["table_name"] == "Customers"
 
 
 def test_list_excel_tables_skips_chart_sheets_when_scanning_workbook(tmp_path):

@@ -49,6 +49,8 @@ Dry-run responses may also include `dry_run` and `changes`:
 
 Committed write operations default to compact summaries. Pass `include_changes=True` on supported tools when you want detailed per-cell or per-range diffs.
 
+Responses are serialized as compact JSON instead of pretty-printed JSON so large MCP payloads waste less context on whitespace.
+
 ### `list_all_sheets`
 
 Returns workbook inventory under `data.sheets`:
@@ -126,6 +128,8 @@ If `preview_only=True`, the payload is limited to the first 10 rows from the sel
 If `compact=True`, cells without real validation rules omit the default `validation: {"has_validation": false}` stub.
 
 If `values_only=True`, the payload returns `data.values` as a plain 2D array instead of `data.cells`, which is much smaller for large range reads that do not need per-cell metadata.
+
+If a serialized response would exceed SheetForge's practical MCP payload limit, the tool returns `ResponseTooLargeError` with structured `error.hints` instead of depending on client-side truncation.
 
 ### `search_in_sheet`
 

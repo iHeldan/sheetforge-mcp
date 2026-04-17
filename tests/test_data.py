@@ -3,6 +3,7 @@ import json
 import pytest
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, Reference
+import excel_mcp.server as server_module
 
 from excel_mcp.data import (
     append_table_rows,
@@ -524,6 +525,43 @@ def test_quick_read_rejects_invalid_row_mode(multi_sheet_workbook):
     payload = json.loads(quick_read(multi_sheet_workbook, row_mode="dicts"))
     assert payload["ok"] is False
     assert payload["error"]["message"] == "row_mode must be 'arrays' or 'objects'"
+
+
+def test_tool_responses_are_compact_json(multi_sheet_workbook):
+    raw = quick_read(multi_sheet_workbook)
+
+    assert "\n" not in raw
+    assert raw.startswith('{"ok":true')
+
+
+def test_read_data_from_excel_returns_guided_error_before_oversized_payload(
+    tmp_workbook,
+    monkeypatch,
+):
+    monkeypatch.setattr(server_module, "MCP_RESPONSE_CHAR_LIMIT", 200)
+
+    payload = json.loads(read_data_from_excel(tmp_workbook, "Sheet1"))
+
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "ResponseTooLargeError"
+    assert payload["error"]["estimated_size"] > payload["error"]["limit"]
+    assert any("values_only=True" in hint for hint in payload["error"]["hints"])
+    assert any("preview_only=True" in hint for hint in payload["error"]["hints"])
+    assert any("start_cell/end_cell" in hint for hint in payload["error"]["hints"])
+
+
+def test_quick_read_returns_guided_error_before_oversized_payload(
+    tmp_workbook,
+    monkeypatch,
+):
+    monkeypatch.setattr(server_module, "MCP_RESPONSE_CHAR_LIMIT", 120)
+
+    payload = json.loads(quick_read(tmp_workbook, sheet_name="Sheet1"))
+
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "ResponseTooLargeError"
+    assert any("max_rows" in hint for hint in payload["error"]["hints"])
+    assert any("start_row" in hint for hint in payload["error"]["hints"])
 
 
 def test_write_data_dry_run_does_not_persist(tmp_workbook):

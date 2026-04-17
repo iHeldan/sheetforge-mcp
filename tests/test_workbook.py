@@ -115,10 +115,10 @@ def test_list_all_sheets_tool_handles_chart_sheets(tmp_path):
     wb.save(filepath)
     wb.close()
 
-    payload = list_all_sheets_tool(filepath)
+    payload = json.loads(list_all_sheets_tool(filepath))
 
-    assert '"operation": "list_all_sheets"' in payload
-    assert '"sheet_type": "chartsheet"' in payload
+    assert payload["operation"] == "list_all_sheets"
+    assert payload["data"]["sheets"][1]["sheet_type"] == "chartsheet"
 
 
 def test_profile_workbook_summarizes_tables_and_charts(tmp_workbook):
@@ -151,10 +151,10 @@ def test_profile_workbook_summarizes_tables_and_charts(tmp_workbook):
 
 
 def test_profile_workbook_tool_returns_json_envelope(tmp_workbook):
-    payload = profile_workbook_tool(tmp_workbook)
+    payload = json.loads(profile_workbook_tool(tmp_workbook))
 
-    assert '"operation": "profile_workbook"' in payload
-    assert '"sheet_count": 1' in payload
+    assert payload["operation"] == "profile_workbook"
+    assert payload["data"]["sheet_count"] == 1
 
 
 def test_profile_workbook_handles_chart_sheets(tmp_path):

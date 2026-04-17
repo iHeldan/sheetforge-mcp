@@ -21,6 +21,8 @@ This patch release improves workbook profiling coverage, safer native-table beha
 - Refreshed package metadata, README messaging, and landing-page SEO copy to reflect the current Excel MCP surface for AI agents and automation workflows.
 - Added ignore rules for local workspace notes such as `CONTEXT.md` and `LOCAL_*.md` so private planning files are less likely to be committed accidentally.
 - Tightened tabular reads so selected-column windows no longer over-read trailing rows caused by unrelated data outside the requested column range.
+- Switched JSON envelopes to compact serialization to reduce MCP payload size without changing the response schema.
+- Added `ResponseTooLargeError` with structured hints so oversized read responses fail early with recovery guidance instead of relying on client-side truncation.
 
 ## 0.4.1 - 2026-04-09
 

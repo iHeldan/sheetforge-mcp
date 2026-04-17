@@ -15,7 +15,8 @@ from excel_mcp.exceptions import (
     FormattingError,
     CalculationError,
     PivotError,
-    ChartError
+    ChartError,
+    ResponseTooLargeError,
 )
 
 # Import from excel_mcp package with consistent _impl suffixes
@@ -113,9 +114,12 @@ HANDLED_TOOL_ERRORS = (
     CalculationError,
     PivotError,
     ChartError,
+    ResponseTooLargeError,
     ValueError,
     FileNotFoundError,
 )
+
+MCP_RESPONSE_CHAR_LIMIT = 50_000
 
 
 def _extract_payload_parts(result: Any) -> tuple[Optional[str], Any, Dict[str, Any]]:
@@ -133,6 +137,66 @@ def _extract_payload_parts(result: Any) -> tuple[Optional[str], Any, Dict[str, A
         return result, None, {}
 
     return None, result, {}
+
+
+def _serialize_json(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, separators=(",", ":"), default=str)
+
+
+def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
+    hints: List[str] = []
+    data = payload.get("data")
+    data_dict = data if isinstance(data, dict) else {}
+
+    if operation == "read_data_from_excel":
+        if "cells" in data_dict:
+            hints.append("use values_only=True to return a smaller 2D values array")
+        hints.append("request a smaller range via start_cell/end_cell")
+        if not data_dict.get("preview_only"):
+            hints.append("use preview_only=True to limit the response to the first 10 rows")
+        hints.append("use read_excel_as_table plus start_row/max_rows for tabular worksheet data")
+    elif operation in {"quick_read", "read_excel_as_table", "read_excel_table"}:
+        hints.append("set max_rows to request a smaller page")
+        if operation != "read_excel_table":
+            hints.append("use start_row to continue from a deeper row without rereading the top")
+        if data_dict.get("row_mode") == "objects":
+            hints.append("switch to row_mode='arrays' for a smaller payload")
+        if operation == "read_excel_as_table" and "sheet_name" in data_dict:
+            hints.append("set compact=True to trim nonessential metadata")
+    elif operation in {"profile_workbook", "list_all_sheets", "list_tables", "list_charts"}:
+        hints.append("query a smaller workbook slice, such as one sheet or one table")
+
+    if "changes" in payload:
+        hints.append("set include_changes=False to omit detailed per-cell diffs")
+
+    if not hints:
+        hints.append("request a smaller slice of workbook data")
+
+    deduped_hints: List[str] = []
+    seen_hints = set()
+    for hint in hints:
+        if hint not in seen_hints:
+            seen_hints.add(hint)
+            deduped_hints.append(hint)
+    return deduped_hints
+
+
+def _raise_if_response_too_large(operation: str, payload: Dict[str, Any]) -> None:
+    serialized = _serialize_json(payload)
+    response_size = len(serialized)
+    if response_size <= MCP_RESPONSE_CHAR_LIMIT:
+        return
+
+    hints = _response_size_hints(operation, payload)
+    raise ResponseTooLargeError(
+        (
+            f"Result would be {response_size:,} characters, exceeding the "
+            f"SheetForge MCP response limit of {MCP_RESPONSE_CHAR_LIMIT:,}."
+        ),
+        estimated_size=response_size,
+        limit=MCP_RESPONSE_CHAR_LIMIT,
+        hints=hints,
+    )
 
 
 def _success_response(
@@ -155,21 +219,27 @@ def _success_response(
     }
     payload.update({key: value for key, value in extracted_meta.items() if value is not None})
     payload.update({key: value for key, value in meta.items() if value is not None})
-    return json.dumps(payload, indent=2, default=str)
+    _raise_if_response_too_large(operation, payload)
+    return _serialize_json(payload)
 
 
 def _error_response(operation: str, error: Exception) -> str:
-    return json.dumps(
+    error_payload = {
+        "type": type(error).__name__,
+        "message": str(error),
+    }
+    if isinstance(error, ResponseTooLargeError):
+        error_payload["estimated_size"] = error.estimated_size
+        error_payload["limit"] = error.limit
+        if error.hints:
+            error_payload["hints"] = error.hints
+
+    return _serialize_json(
         {
             "ok": False,
             "operation": operation,
-            "error": {
-                "type": type(error).__name__,
-                "message": str(error),
-            },
-        },
-        indent=2,
-        default=str,
+            "error": error_payload,
+        }
     )
 
 
