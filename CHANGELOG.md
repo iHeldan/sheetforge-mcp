@@ -10,6 +10,8 @@ This patch release improves workbook profiling coverage, safer native-table beha
 
 - Added `profile_workbook` as a one-call workbook inventory for sheets, tables, charts, named ranges, and key layout/protection state.
 - Added `upsert_excel_table_rows` for key-based updates plus append-missing behavior directly on native Excel tables.
+- Added `start_row` pagination support to `quick_read` and `read_excel_as_table` for large worksheet reads that need to start below the top of the sheet.
+- Added `values_only=True` support to `read_data_from_excel` for compact 2D range reads without per-cell metadata overhead.
 
 ### Quality
 
@@ -18,6 +20,7 @@ This patch release improves workbook profiling coverage, safer native-table beha
 - Hardened `profile_workbook` so workbooks with chart sheets no longer crash inventory reads.
 - Refreshed package metadata, README messaging, and landing-page SEO copy to reflect the current Excel MCP surface for AI agents and automation workflows.
 - Added ignore rules for local workspace notes such as `CONTEXT.md` and `LOCAL_*.md` so private planning files are less likely to be committed accidentally.
+- Tightened tabular reads so selected-column windows no longer over-read trailing rows caused by unrelated data outside the requested column range.
 
 ## 0.4.1 - 2026-04-09
 

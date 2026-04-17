@@ -133,10 +133,10 @@ For chart authoring, prefer `create_chart` as the primary entry point:
 The most agent-friendly read tools are:
 
 - `profile_workbook`: one-call inventory for sheets, tables, charts, named ranges, and key layout/protection state, including chart `occupied_range` for grid-anchored worksheet charts
-- `quick_read`: single-call compact table read that auto-selects the first sheet when needed
+- `quick_read`: single-call compact table read that auto-selects the first sheet when needed, now with `start_row` pagination for large sheets
 - `read_excel_table`: read a native Excel table by `table_name` without guessing worksheet bounds
 - `list_all_sheets`: quick workbook inventory with sheet sizes, emptiness flags, and `sheet_type` for worksheets versus chart sheets
-- `read_excel_as_table`: compact `headers + rows` output for structured datasets, with `compact=True` for the smallest payload
+- `read_excel_as_table`: compact `headers + rows` output for structured datasets, with `compact=True` for the smallest payload and `start_row` for page-like reads
 - `search_in_sheet`: exact or partial value search across a worksheet
 
 Workbook inventory tools such as `list_all_sheets`, `profile_workbook`, and `list_charts` surface both worksheets and chart sheets. Grid-oriented tools such as `quick_read`, `read_excel_table`, `create_table`, formatting, formulas, and validation require a real worksheet and return a clear chartsheet error if you target the wrong sheet type.
@@ -249,7 +249,9 @@ uv build
 - All tools return structured JSON envelopes, which makes client-side parsing predictable.
 - `read_data_from_excel(..., preview_only=True)` limits the response to the first 10 rows in the selected range and marks the payload as truncated when applicable.
 - `read_data_from_excel(..., compact=True)` omits default validation stubs for cells that do not have validation rules.
+- `read_data_from_excel(..., values_only=True)` returns a plain 2D `values` array for range reads that do not need per-cell addresses or validation metadata.
 - `read_excel_as_table(..., compact=True)` returns only `headers` and `rows` unless truncation metadata is needed.
+- `quick_read(..., start_row=...)` and `read_excel_as_table(..., start_row=...)` let agents paginate deep worksheets without first reading from the top.
 - `quick_read`, `read_excel_as_table`, and `read_excel_table` can now return `records` plus inferred `schema` hints when you opt into `row_mode="objects"` and `infer_schema=True`.
 - `profile_workbook` provides a single-call workbook inventory with sheet-level table, chart, protection, print, and filter metadata for faster agent orientation, and now includes chart `occupied_range` alongside anchors and dimensions for grid-anchored worksheet charts.
 - Core mutation tools now default to compact responses on committed writes, including data writes, formatting, worksheet layout helpers, and merge/unmerge helpers. Use `include_changes=True` for detailed diffs.

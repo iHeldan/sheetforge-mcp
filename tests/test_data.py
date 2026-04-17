@@ -94,6 +94,53 @@ def test_read_as_table_with_max_rows(tmp_workbook):
     assert result["truncated"] is True
 
 
+def test_read_as_table_supports_start_row_pagination(tmp_workbook):
+    result = read_as_table(tmp_workbook, "Sheet1", start_row=4, max_rows=2)
+
+    assert result["headers"] == ["Name", "Age", "City"]
+    assert result["rows"] == [
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+    ]
+    assert result["total_rows"] == 5
+    assert result["truncated"] is True
+
+
+def test_read_as_table_rejects_start_row_at_or_above_header(tmp_workbook):
+    with pytest.raises(DataError, match="start_row must be greater than header_row"):
+        read_as_table(tmp_workbook, "Sheet1", header_row=1, start_row=1)
+
+
+def test_read_as_table_rejects_non_positive_max_rows(tmp_workbook):
+    with pytest.raises(DataError, match="max_rows must be a positive integer"):
+        read_as_table(tmp_workbook, "Sheet1", max_rows=0)
+
+
+def test_read_as_table_ignores_trailing_rows_outside_selected_columns(tmp_path):
+    filepath = tmp_path / "selected-columns.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in [
+        ("Name", "Age", "City"),
+        ("Alice", 30, "Helsinki"),
+        ("Bob", 25, "Tampere"),
+    ]:
+        ws.append(row)
+    ws["D20"] = "Ignored outside selected columns"
+    wb.save(filepath)
+    wb.close()
+
+    result = read_as_table(str(filepath), "Sheet1", start_col="A", end_col="C")
+
+    assert result["rows"] == [
+        ["Alice", 30, "Helsinki"],
+        ["Bob", 25, "Tampere"],
+    ]
+    assert result["total_rows"] == 2
+    assert result["truncated"] is False
+
+
 def test_read_as_table_custom_header_row(tmp_workbook):
     result = read_as_table(tmp_workbook, "Sheet1", header_row=2)
     assert result["headers"] == ["Alice", 30, "Helsinki"]
@@ -274,6 +321,62 @@ def test_read_data_from_excel_compact_keeps_real_validation(tmp_path):
     assert cells_by_address["A2"]["validation"]["allowed_values"] == ["Open", "Closed"]
 
 
+def test_read_excel_range_with_metadata_values_only_returns_2d_values(tmp_workbook):
+    result = read_excel_range_with_metadata(
+        tmp_workbook,
+        "Sheet1",
+        start_cell="A1",
+        end_cell="B3",
+        values_only=True,
+    )
+
+    assert result == {
+        "range": "A1:B3",
+        "sheet_name": "Sheet1",
+        "values": [
+            ["Name", "Age"],
+            ["Alice", 30],
+            ["Bob", 25],
+        ],
+    }
+
+
+def test_read_data_from_excel_values_only_preview_limits_rows(tmp_path):
+    filepath = tmp_path / "preview-values.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "Value"
+    for row in range(2, 17):
+        ws[f"A{row}"] = f"Row {row}"
+    wb.save(filepath)
+    wb.close()
+
+    payload = _load_tool_payload(
+        read_data_from_excel(str(filepath), "Sheet1", preview_only=True, values_only=True)
+    )
+
+    assert "cells" not in payload["data"]
+    assert len(payload["data"]["values"]) == 10
+    assert payload["data"]["values"][0] == ["Value"]
+    assert payload["data"]["preview_only"] is True
+    assert payload["data"]["truncated"] is True
+
+
+def test_read_data_from_excel_values_only_handles_out_of_bounds_start(tmp_workbook):
+    payload = _load_tool_payload(
+        read_data_from_excel(
+            tmp_workbook,
+            "Sheet1",
+            start_cell="Z100",
+            values_only=True,
+        )
+    )
+
+    assert payload["data"]["values"] == []
+    assert "cells" not in payload["data"]
+
+
 def test_read_excel_as_table_compact_omits_nonessential_metadata(tmp_workbook):
     payload = _load_tool_payload(read_excel_as_table_tool(tmp_workbook, "Sheet1", compact=True))
 
@@ -383,6 +486,18 @@ def test_quick_read_tool_returns_json_envelope(multi_sheet_workbook):
     assert payload["operation"] == "quick_read"
     assert payload["data"]["sheet_name"] == "Sales"
     assert payload["data"]["auto_selected_sheet"] is True
+
+
+def test_quick_read_tool_supports_start_row_pagination(tmp_workbook):
+    payload = _load_tool_payload(
+        quick_read(tmp_workbook, sheet_name="Sheet1", start_row=4, max_rows=2)
+    )
+
+    assert payload["data"]["rows"] == [
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+    ]
+    assert payload["data"]["truncated"] is True
 
 
 def test_quick_read_skips_chartsheet_when_first_sheet_is_not_a_worksheet(tmp_path):

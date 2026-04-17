@@ -206,6 +206,10 @@ def _should_include_changes(dry_run: bool, include_changes: Optional[bool]) -> b
         return dry_run
     return include_changes
 
+
+def _selected_columns(start_col_idx: int, end_col_idx: int) -> List[int]:
+    return list(range(start_col_idx, end_col_idx + 1))
+
 def read_excel_range(
     filepath: Path | str,
     sheet_name: str,
@@ -420,6 +424,7 @@ def read_excel_range_with_metadata(
     end_cell: Optional[str] = None,
     include_validation: bool = True,
     compact: bool = False,
+    values_only: bool = False,
 ) -> Dict[str, Any]:
     """Read data from Excel range with cell metadata including validation rules.
 
@@ -481,15 +486,23 @@ def read_excel_range_with_metadata(
                     f"({get_column_letter(ws.min_column)}{ws.min_row}:{get_column_letter(ws.max_column)}{ws.max_row}). "
                     f"No data will be read."
                 )
-                return {"range": f"{start_cell}:", "sheet_name": sheet_name, "cells": []}
+                empty_key = "values" if values_only else "cells"
+                return {"range": f"{start_cell}:", "sheet_name": sheet_name, empty_key: []}
 
-            # Build structured cell data
             range_str = f"{get_column_letter(start_col)}{start_row}:{get_column_letter(end_col)}{end_row}"
-            range_data = {
-                "range": range_str,
-                "sheet_name": sheet_name,
-                "cells": []
-            }
+            range_data = {"range": range_str, "sheet_name": sheet_name}
+
+            if values_only:
+                values: List[List[Any]] = []
+                for row in range(start_row, end_row + 1):
+                    row_values = []
+                    for col in range(start_col, end_col + 1):
+                        row_values.append(ws.cell(row=row, column=col).value)
+                    values.append(row_values)
+                range_data["values"] = values
+                return range_data
+
+            range_data["cells"] = []
 
             for row in range(start_row, end_row + 1):
                 for col in range(start_col, end_col + 1):
@@ -527,6 +540,7 @@ def read_as_table(
     filepath: str,
     sheet_name: str,
     header_row: int = 1,
+    start_row: Optional[int] = None,
     start_col: str = "A",
     end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
@@ -551,6 +565,7 @@ def read_as_table(
                 ws,
                 sheet_name,
                 header_row=header_row,
+                start_row=start_row,
                 start_col=start_col,
                 end_col=end_col,
                 max_rows=max_rows,
@@ -570,6 +585,7 @@ def _read_table_from_worksheet(
     sheet_name: str,
     *,
     header_row: int = 1,
+    start_row: Optional[int] = None,
     start_col: str = "A",
     end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
@@ -582,28 +598,40 @@ def _read_table_from_worksheet(
         end_col_idx = column_index_from_string(end_col.upper())
     else:
         end_col_idx = ws.max_column
+    if max_rows is not None and max_rows <= 0:
+        raise DataError("max_rows must be a positive integer")
+
+    effective_start_row = header_row + 1 if start_row is None else start_row
+    if effective_start_row <= header_row:
+        raise DataError("start_row must be greater than header_row")
+
+    selected_columns = _selected_columns(start_col_idx, end_col_idx)
+    last_data_row = _find_last_data_row(ws, header_row, selected_columns)
 
     headers = []
-    for col in range(start_col_idx, end_col_idx + 1):
+    for col in selected_columns:
         headers.append(ws.cell(row=header_row, column=col).value)
 
-    total_rows = ws.max_row - header_row
+    total_rows = last_data_row - header_row
     if total_rows < 0:
         total_rows = 0
 
-    limit = max_rows if max_rows else total_rows
     rows = []
-    for row_idx in range(header_row + 1, header_row + 1 + min(limit, total_rows)):
-        row_data = []
-        for col in range(start_col_idx, end_col_idx + 1):
-            row_data.append(ws.cell(row=row_idx, column=col).value)
-        rows.append(row_data)
+    available_rows = 0
+    if effective_start_row <= last_data_row:
+        available_rows = last_data_row - effective_start_row + 1
+        row_limit = available_rows if max_rows is None else min(max_rows, available_rows)
+        for row_idx in range(effective_start_row, effective_start_row + row_limit):
+            row_data = []
+            for col in selected_columns:
+                row_data.append(ws.cell(row=row_idx, column=col).value)
+            rows.append(row_data)
 
     result = {
         "headers": headers,
         "rows": rows,
         "total_rows": total_rows,
-        "truncated": max_rows is not None and total_rows > max_rows,
+        "truncated": max_rows is not None and available_rows > max_rows,
         "sheet_name": sheet_name,
     }
     payload = _compact_table_payload(result) if compact else result
@@ -620,6 +648,7 @@ def quick_read(
     filepath: str,
     sheet_name: Optional[str] = None,
     header_row: int = 1,
+    start_row: Optional[int] = None,
     max_rows: Optional[int] = None,
     row_mode: str = "arrays",
     infer_schema: bool = False,
@@ -647,6 +676,7 @@ def quick_read(
                 ws,
                 resolved_sheet_name,
                 header_row=header_row,
+                start_row=start_row,
                 max_rows=max_rows,
                 row_mode=row_mode,
                 infer_schema=infer_schema,

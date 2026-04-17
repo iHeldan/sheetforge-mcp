@@ -355,6 +355,7 @@ def read_data_from_excel(
     end_cell: Optional[str] = None,
     preview_only: bool = False,
     compact: bool = False,
+    values_only: bool = False,
 ) -> str:
     """
     Read data from Excel worksheet with cell metadata including validation rules.
@@ -366,10 +367,11 @@ def read_data_from_excel(
         end_cell: Ending cell (optional, auto-expands if not provided)
         preview_only: Whether to return preview only
         compact: Whether to omit default validation metadata for smaller responses
+        values_only: Whether to return a 2D value grid without per-cell metadata
     
     Returns:  
-    JSON string containing structured cell data with validation metadata.
-    Each cell includes: address, value, row, column, and validation info (if any).
+    JSON string containing either structured cell data with validation metadata
+    or a plain 2D value grid when values_only=True.
     """
     try:
         full_path = get_excel_path(filepath)
@@ -380,31 +382,44 @@ def read_data_from_excel(
             start_cell,
             end_cell,
             compact=compact,
+            values_only=values_only,
         )
         if not result:
-            result = {"range": f"{start_cell}:{end_cell}" if end_cell else start_cell, "sheet_name": sheet_name, "cells": []}
+            result = {"range": f"{start_cell}:{end_cell}" if end_cell else start_cell, "sheet_name": sheet_name}
+            result["values" if values_only else "cells"] = []
 
         if preview_only:
-            total_cells = len(result["cells"])
             preview_row_limit = 10
-            preview_cells = []
-            preview_rows = set()
+            if values_only:
+                total_rows = len(result["values"])
+                result["values"] = result["values"][:preview_row_limit]
+                result["truncated"] = len(result["values"]) < total_rows
+            else:
+                total_cells = len(result["cells"])
+                preview_cells = []
+                preview_rows = set()
 
-            for cell in result["cells"]:
-                row = cell["row"]
-                if row not in preview_rows and len(preview_rows) >= preview_row_limit:
-                    break
-                preview_rows.add(row)
-                preview_cells.append(cell)
+                for cell in result["cells"]:
+                    row = cell["row"]
+                    if row not in preview_rows and len(preview_rows) >= preview_row_limit:
+                        break
+                    preview_rows.add(row)
+                    preview_cells.append(cell)
 
-            result["cells"] = preview_cells
+                result["cells"] = preview_cells
+                result["truncated"] = len(preview_cells) < total_cells
             result["preview_only"] = True
-            result["truncated"] = len(preview_cells) < total_cells
+
+        if values_only:
+            value_count = sum(len(row) for row in result["values"])
+            message = f"Read {value_count} value(s) from '{sheet_name}'"
+        else:
+            message = f"Read {len(result['cells'])} cell(s) from '{sheet_name}'"
 
         return _success_response(
             "read_data_from_excel",
             result=result,
-            message=f"Read {len(result['cells'])} cell(s) from '{sheet_name}'",
+            message=message,
         )
 
     except HANDLED_TOOL_ERRORS as e:
@@ -425,6 +440,7 @@ def read_excel_as_table(
     filepath: str,
     sheet_name: str,
     header_row: int = 1,
+    start_row: Optional[int] = None,
     max_rows: Optional[int] = None,
     compact: bool = False,
     row_mode: str = "arrays",
@@ -441,6 +457,7 @@ def read_excel_as_table(
             get_excel_path(filepath),
             sheet_name,
             header_row=header_row,
+            start_row=start_row,
             max_rows=max_rows,
             compact=compact,
             row_mode=row_mode,
@@ -459,6 +476,7 @@ def quick_read(
     filepath: str,
     sheet_name: Optional[str] = None,
     header_row: int = 1,
+    start_row: Optional[int] = None,
     max_rows: Optional[int] = None,
     row_mode: str = "arrays",
     infer_schema: bool = False,
@@ -474,6 +492,7 @@ def quick_read(
             get_excel_path(filepath),
             sheet_name=sheet_name,
             header_row=header_row,
+            start_row=start_row,
             max_rows=max_rows,
             row_mode=row_mode,
             infer_schema=infer_schema,

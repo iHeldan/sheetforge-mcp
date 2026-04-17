@@ -125,6 +125,8 @@ If `preview_only=True`, the payload is limited to the first 10 rows from the sel
 
 If `compact=True`, cells without real validation rules omit the default `validation: {"has_validation": false}` stub.
 
+If `values_only=True`, the payload returns `data.values` as a plain 2D array instead of `data.cells`, which is much smaller for large range reads that do not need per-cell metadata.
+
 ### `search_in_sheet`
 
 Returns matches under `data.matches`:
@@ -174,12 +176,12 @@ Returns matches under `data.matches`:
 
 - `write_data_to_excel(filepath: str, sheet_name: str, data: List[List], start_cell: str = "A1", dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Writes tabular data starting at the given cell. Missing target sheets are created automatically. Returns compact summaries by default on committed writes, and detailed `changes` during previews unless explicitly disabled.
-- `read_data_from_excel(filepath: str, sheet_name: str, start_cell: str = "A1", end_cell: Optional[str] = None, preview_only: bool = False, compact: bool = False) -> str`
-  Returns cell range data with row, column, address, value, and validation metadata under the shared envelope.
-- `read_excel_as_table(filepath: str, sheet_name: str, header_row: int = 1, max_rows: Optional[int] = None, compact: bool = False, row_mode: str = "arrays", infer_schema: bool = False) -> str`
-  Returns `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`. With `compact=True`, only the selected row payload is returned unless truncation metadata is needed.
-- `quick_read(filepath: str, sheet_name: Optional[str] = None, header_row: int = 1, max_rows: Optional[int] = None, row_mode: str = "arrays", infer_schema: bool = False) -> str`
-  Returns a compact table from the requested sheet, or auto-selects the first workbook sheet when `sheet_name` is omitted.
+- `read_data_from_excel(filepath: str, sheet_name: str, start_cell: str = "A1", end_cell: Optional[str] = None, preview_only: bool = False, compact: bool = False, values_only: bool = False) -> str`
+  Returns cell range data with row, column, address, value, and validation metadata under the shared envelope, or a plain 2D `values` matrix when `values_only=True`.
+- `read_excel_as_table(filepath: str, sheet_name: str, header_row: int = 1, start_row: Optional[int] = None, max_rows: Optional[int] = None, compact: bool = False, row_mode: str = "arrays", infer_schema: bool = False) -> str`
+  Returns `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`. Use `start_row` plus `max_rows` to paginate into deeper worksheet sections without reading from the top first.
+- `quick_read(filepath: str, sheet_name: Optional[str] = None, header_row: int = 1, start_row: Optional[int] = None, max_rows: Optional[int] = None, row_mode: str = "arrays", infer_schema: bool = False) -> str`
+  Returns a compact table from the requested sheet, or auto-selects the first workbook sheet when `sheet_name` is omitted. Use `start_row` for large-sheet pagination.
 - `row_mode`
   Use `row_mode="arrays"` for the current `headers + rows` shape, or `row_mode="objects"` to receive `records` keyed by normalized field names such as `first_name`, `column_2`, or ASCII-safe transliterations like `nayttokerrat`.
 - `infer_schema`
