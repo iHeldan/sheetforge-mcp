@@ -548,7 +548,29 @@ def _extract_formula_dependencies(
     target_sheet: str,
     target_bounds: tuple[int, int, int, int],
 ) -> list[dict[str, Any]]:
-    dependencies: list[dict[str, Any]] = []
+    def _dedupe_reference_matches(references: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for reference in references:
+            key = tuple(sorted((str(item_key), str(item_value)) for item_key, item_value in reference.items()))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(reference)
+        return deduped
+
+    def _dedupe_formula_cells(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for cell in cells:
+            key = (cell["sheet_name"], cell["cell"])
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(cell)
+        return deduped
+
+    formula_entries: list[dict[str, Any]] = []
 
     for formula_sheet_name in wb.sheetnames:
         formula_ws = wb[formula_sheet_name]
@@ -574,6 +596,7 @@ def _extract_formula_dependencies(
                 except Exception:
                     continue
 
+                token_values: list[str] = []
                 for token in tokenizer.items:
                     if token.type != "OPERAND" or token.subtype != "RANGE":
                         continue
@@ -581,6 +604,8 @@ def _extract_formula_dependencies(
                     token_value = str(token.value).strip()
                     if not token_value:
                         continue
+
+                    token_values.append(token_value)
                     matched_references.extend(
                         _resolve_formula_token_references(
                             wb,
@@ -592,15 +617,104 @@ def _extract_formula_dependencies(
                         )
                     )
 
-                if matched_references:
-                    dependencies.append(
+                formula_entries.append(
+                    {
+                        "sheet_name": formula_sheet_name,
+                        "cell": cell.coordinate,
+                        "row": cell.row,
+                        "column": cell.column,
+                        "formula": cell.value,
+                        "token_values": token_values,
+                        "direct_references": _dedupe_reference_matches(matched_references),
+                    }
+                )
+
+    dependencies: list[dict[str, Any]] = []
+    formula_entry_lookup = {
+        (entry["sheet_name"], entry["cell"]): entry for entry in formula_entries
+    }
+
+    direct_frontier: set[tuple[str, str]] = set()
+    for entry in formula_entries:
+        if not entry["direct_references"]:
+            continue
+        direct_frontier.add((entry["sheet_name"], entry["cell"]))
+        dependencies.append(
+            {
+                "sheet_name": entry["sheet_name"],
+                "cell": entry["cell"],
+                "formula": entry["formula"],
+                "references": entry["direct_references"],
+                "dependency_depth": 1,
+                "dependency_type": "direct",
+            }
+        )
+
+    discovered = set(direct_frontier)
+    frontier = set(direct_frontier)
+    depth = 2
+
+    while frontier:
+        frontier_entries = [formula_entry_lookup[key] for key in frontier]
+        next_frontier: set[tuple[str, str]] = set()
+
+        for entry in formula_entries:
+            entry_key = (entry["sheet_name"], entry["cell"])
+            if entry_key in discovered:
+                continue
+
+            matched_references: list[dict[str, Any]] = []
+            transitive_via: list[dict[str, Any]] = []
+            for predecessor in frontier_entries:
+                predecessor_bounds = (
+                    predecessor["row"],
+                    predecessor["column"],
+                    predecessor["row"],
+                    predecessor["column"],
+                )
+                predecessor_matches: list[dict[str, Any]] = []
+                for token_value in entry["token_values"]:
+                    predecessor_matches.extend(
+                        _resolve_formula_token_references(
+                            wb,
+                            token_value=token_value,
+                            formula_sheet_name=entry["sheet_name"],
+                            formula_row=entry["row"],
+                            target_sheet=predecessor["sheet_name"],
+                            target_bounds=predecessor_bounds,
+                        )
+                    )
+
+                if predecessor_matches:
+                    matched_references.extend(predecessor_matches)
+                    transitive_via.append(
                         {
-                            "sheet_name": formula_sheet_name,
-                            "cell": cell.coordinate,
-                            "formula": cell.value,
-                            "references": matched_references,
+                            "sheet_name": predecessor["sheet_name"],
+                            "cell": predecessor["cell"],
                         }
                     )
+
+            matched_references = _dedupe_reference_matches(matched_references)
+            transitive_via = _dedupe_formula_cells(transitive_via)
+            if not matched_references:
+                continue
+
+            dependencies.append(
+                {
+                    "sheet_name": entry["sheet_name"],
+                    "cell": entry["cell"],
+                    "formula": entry["formula"],
+                    "references": matched_references,
+                    "dependency_depth": depth,
+                    "dependency_type": "transitive",
+                    "transitive_via": transitive_via,
+                }
+            )
+            discovered.add(entry_key)
+            next_frontier.add(entry_key)
+
+        frontier = next_frontier
+        depth += 1
 
     return dependencies
 
@@ -1379,6 +1493,10 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                 target_sheet=sheet_name,
                 target_bounds=target_bounds,
             )
+            direct_formula_count = sum(
+                1 for dependency in dependent_formulas if dependency.get("dependency_depth", 1) == 1
+            )
+            transitive_formula_count = len(dependent_formulas) - direct_formula_count
             data_validations = _extract_validation_overlaps(
                 ws,
                 sheet_name=sheet_name,
@@ -1467,6 +1585,8 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                     "conditional_format_count": len(conditional_formats),
                     "formula_cell_count": len(formula_cells),
                     "dependent_formula_count": len(dependent_formulas),
+                    "direct_formula_count": direct_formula_count,
+                    "transitive_formula_count": transitive_formula_count,
                     "dependent_validation_count": len(dependent_validations),
                     "dependent_conditional_format_count": len(dependent_conditional_formats),
                     "autofilter_overlap": autofilter is not None,
@@ -1490,6 +1610,8 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                 },
                 "dependent_formulas": {
                     "count": len(dependent_formulas),
+                    "direct_count": direct_formula_count,
+                    "transitive_count": transitive_formula_count,
                     "sample": dependent_formulas[:10],
                 },
                 "dependent_validations": {

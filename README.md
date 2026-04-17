@@ -135,7 +135,7 @@ For chart authoring, prefer `create_chart` as the primary entry point:
 The most agent-friendly read tools are:
 
 - `profile_workbook`: one-call inventory for sheets, tables, charts, named ranges, and key layout/protection state, including chart `occupied_range` for grid-anchored worksheet charts
-- `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, data validations, conditional formats, autofilters, print areas, formula cells inside the range, and formulas or rule expressions elsewhere that depend on it directly, through named ranges, or through structured table references such as `Table1[Sales]`
+- `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, data validations, conditional formats, autofilters, print areas, formula cells inside the range, and formulas or rule expressions elsewhere that depend on it directly or transitively, through named ranges, or through structured table references such as `Table1[Sales]`
 - `quick_read`: single-call compact table read that auto-selects the first sheet when needed, now with `start_row` pagination and `start_col` / `end_col` column windowing for large sheets
 - `read_excel_table`: read a native Excel table by `table_name` without guessing worksheet bounds, now with `start_row` pagination and optional `start_col` / `end_col` table column windowing
 - `list_all_sheets`: quick workbook inventory with sheet sizes, emptiness flags, and `sheet_type` for worksheets versus chart sheets
@@ -247,7 +247,7 @@ uv build
 - Excel-first MCP surface: the toolset is focused on real `.xlsx` workbook operations, not generic file I/O
 - agent-friendly responses: consistent JSON envelopes, compact writes, and `dry_run` previews reduce context waste
 - workbook introspection: `profile_workbook`, `list_all_sheets`, `list_tables`, and `list_charts` make unfamiliar spreadsheets easier to navigate
-- safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range, including downstream formula dependencies plus validation-rule and conditional-format references elsewhere in the workbook even when formulas point at the range through named ranges or structured table references
+- safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range, including downstream formula chains plus validation-rule and conditional-format references elsewhere in the workbook even when formulas point at the range through named ranges or structured table references
 - layout planning: `find_free_canvas` suggests safe empty slots for charts or dashboard blocks before you place them, defaulting to the standard chart footprint when you omit explicit sizing
 - practical Excel output: formatting, print setup, worksheet protection, table upserts, chart authoring, and autofit helpers cover real reporting workflows
 - Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or remotely over HTTP

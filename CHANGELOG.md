@@ -17,6 +17,7 @@
 - Extended `analyze_range_impact` again to catch downstream formula dependencies that reach the selected range through named ranges.
 - Extended `analyze_range_impact` to catch downstream dependencies that reach the selected range through structured table references such as `Table1[Sales]` and `Table1[@Sales]`.
 - Extended `analyze_range_impact` to report overlapping data validations and conditional formatting rules, plus downstream validation and conditional-format expressions that reference the selected range.
+- Extended `analyze_range_impact` to follow transitive formula chains, so second- and third-hop workbook formulas are now surfaced with dependency depth and predecessor cells.
 - Refreshed README, package metadata, and landing-page copy for the current 51-tool surface and the newer large-read plus impact-analysis capabilities.
 
 ## 0.4.2 - 2026-04-11

@@ -263,6 +263,44 @@ def test_analyze_range_impact_tracks_local_named_range_dependencies(tmp_workbook
     assert dependency["references"][0]["intersection_range"] == "B2:B4"
 
 
+def test_analyze_range_impact_tracks_transitive_formula_dependencies(tmp_workbook):
+    workbook = load_workbook(tmp_workbook)
+    ws = workbook["Sheet1"]
+    for row in range(2, 6):
+        ws[f"D{row}"] = f"=B{row}+1"
+    ws["D6"] = "=SUM(D2:D5)"
+    ws["E1"] = "=D6*2"
+    workbook.save(tmp_workbook)
+    workbook.close()
+
+    result = analyze_range_impact(tmp_workbook, "Sheet1", "B2:C5")
+
+    assert result["summary"]["dependent_formula_count"] == 6
+    assert result["summary"]["direct_formula_count"] == 4
+    assert result["summary"]["transitive_formula_count"] == 2
+    assert result["dependent_formulas"]["count"] == 6
+    assert result["dependent_formulas"]["direct_count"] == 4
+    assert result["dependent_formulas"]["transitive_count"] == 2
+
+    dependencies = {
+        item["cell"]: item for item in result["dependent_formulas"]["sample"]
+    }
+    assert dependencies["D2"]["dependency_depth"] == 1
+    assert dependencies["D2"]["dependency_type"] == "direct"
+    assert dependencies["D6"]["dependency_depth"] == 2
+    assert dependencies["D6"]["dependency_type"] == "transitive"
+    assert {
+        predecessor["cell"] for predecessor in dependencies["D6"]["transitive_via"]
+    } == {"D2", "D3", "D4", "D5"}
+    assert {
+        reference["intersection_range"] for reference in dependencies["D6"]["references"]
+    } == {"D2:D2", "D3:D3", "D4:D4", "D5:D5"}
+    assert dependencies["E1"]["dependency_depth"] == 3
+    assert dependencies["E1"]["dependency_type"] == "transitive"
+    assert dependencies["E1"]["transitive_via"] == [{"sheet_name": "Sheet1", "cell": "D6"}]
+    assert dependencies["E1"]["references"][0]["intersection_range"] == "D6:D6"
+
+
 def test_analyze_range_impact_tracks_table_structured_reference_dependencies(tmp_workbook):
     create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="People")
 
