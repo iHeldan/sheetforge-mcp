@@ -174,7 +174,7 @@ Returns matches under `data.matches`:
 - `list_tables(filepath: str, sheet_name: Optional[str] = None) -> str`
   Returns native Excel tables across the workbook or for one worksheet, including `sheet_name`, `table_name`, `range`, `style`, `headers`, row counts, and style flags.
 - `read_excel_table(filepath: str, table_name: str, sheet_name: Optional[str] = None, start_row: int = 1, max_rows: Optional[int] = None, compact: bool = False, include_headers: bool = True, row_mode: str = "arrays", infer_schema: bool = False) -> str`
-  Reads rows from a native Excel table by `table_name`, preserving the table's exact range instead of inferring worksheet bounds. Use `start_row` plus `max_rows` to paginate within table data rows, and `include_headers=False` for follow-up pages after the first.
+  Reads rows from a native Excel table by `table_name`, preserving the table's exact range instead of inferring worksheet bounds. Use `start_row` plus `max_rows` to paginate within table data rows, and `include_headers=False` for follow-up pages after the first. When more rows remain, the response includes `next_start_row` for the next page.
 
 ## Read, Search, And Write Tools
 
@@ -183,9 +183,9 @@ Returns matches under `data.matches`:
 - `read_data_from_excel(filepath: str, sheet_name: str, start_cell: str = "A1", end_cell: Optional[str] = None, preview_only: bool = False, compact: bool = False, values_only: bool = False) -> str`
   Returns cell range data with row, column, address, value, and validation metadata under the shared envelope, or a plain 2D `values` matrix when `values_only=True`.
 - `read_excel_as_table(filepath: str, sheet_name: str, header_row: int = 1, start_row: Optional[int] = None, max_rows: Optional[int] = None, compact: bool = False, include_headers: bool = True, row_mode: str = "arrays", infer_schema: bool = False) -> str`
-  Returns `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`. Use `start_row` plus `max_rows` to paginate into deeper worksheet sections without reading from the top first, and `include_headers=False` on follow-up pages after the first.
+  Returns `headers`, `rows`, `total_rows`, `truncated`, and `sheet_name`. Use `start_row` plus `max_rows` to paginate into deeper worksheet sections without reading from the top first, and `include_headers=False` on follow-up pages after the first. When more rows remain, the response includes `next_start_row` for the next page.
 - `quick_read(filepath: str, sheet_name: Optional[str] = None, header_row: int = 1, start_row: Optional[int] = None, max_rows: Optional[int] = None, include_headers: bool = True, row_mode: str = "arrays", infer_schema: bool = False) -> str`
-  Returns a compact table from the requested sheet, or auto-selects the first workbook sheet when `sheet_name` is omitted. Use `start_row` for large-sheet pagination and `include_headers=False` for follow-up pages.
+  Returns a compact table from the requested sheet, or auto-selects the first workbook sheet when `sheet_name` is omitted. Use `start_row` for large-sheet pagination and `include_headers=False` for follow-up pages. When more rows remain, the response includes `next_start_row` for the next page.
 - `row_mode`
   Use `row_mode="arrays"` for the current `headers + rows` shape, or `row_mode="objects"` to receive `records` keyed by normalized field names such as `first_name`, `column_2`, or ASCII-safe transliterations like `nayttokerrat`.
 - `infer_schema`

@@ -93,6 +93,7 @@ def test_read_as_table_with_max_rows(tmp_workbook):
     assert len(result["rows"]) == 2
     assert result["total_rows"] == 5
     assert result["truncated"] is True
+    assert result["next_start_row"] == 4
 
 
 def test_read_as_table_supports_start_row_pagination(tmp_workbook):
@@ -105,6 +106,7 @@ def test_read_as_table_supports_start_row_pagination(tmp_workbook):
     ]
     assert result["total_rows"] == 5
     assert result["truncated"] is True
+    assert result["next_start_row"] == 6
 
 
 def test_read_as_table_can_omit_headers_for_followup_pages(tmp_workbook):
@@ -122,6 +124,15 @@ def test_read_as_table_can_omit_headers_for_followup_pages(tmp_workbook):
         ["Dave", 28, "Oulu"],
     ]
     assert result["truncated"] is True
+    assert result["next_start_row"] == 6
+
+
+def test_read_as_table_omits_next_start_row_on_final_page(tmp_workbook):
+    result = read_as_table(tmp_workbook, "Sheet1", start_row=6, max_rows=2)
+
+    assert result["rows"] == [["Eve", 32, "Espoo"]]
+    assert result["truncated"] is False
+    assert "next_start_row" not in result
 
 
 def test_read_as_table_rejects_start_row_at_or_above_header(tmp_workbook):
@@ -516,6 +527,7 @@ def test_quick_read_tool_supports_start_row_pagination(tmp_workbook):
         ["Dave", 28, "Oulu"],
     ]
     assert payload["data"]["truncated"] is True
+    assert payload["data"]["next_start_row"] == 6
 
 
 def test_quick_read_tool_can_omit_headers_for_followup_pages(tmp_workbook):

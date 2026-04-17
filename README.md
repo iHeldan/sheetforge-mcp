@@ -154,6 +154,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - `row_mode="objects"` returns `records` keyed by normalized field names such as `first_name`
 - normalized field names are ASCII-safe transliterations, so headers like `Näyttökerrat` become `nayttokerrat`
 - `infer_schema=True` adds lightweight `schema` hints inferred from the returned rows
+- truncated pages now include `next_start_row`, which you can pass back to the same tool for the next page
 
 See [TOOLS.md](TOOLS.md) for the full reference.
 Release notes live in [CHANGELOG.md](CHANGELOG.md).
@@ -255,6 +256,7 @@ uv build
 - `quick_read(..., start_row=...)` and `read_excel_as_table(..., start_row=...)` let agents paginate deep worksheets without first reading from the top.
 - `quick_read(..., include_headers=False)`, `read_excel_as_table(..., include_headers=False)`, and `read_excel_table(..., include_headers=False)` let follow-up pages omit repeated header payload once the first page already established the schema.
 - `read_excel_table(..., start_row=...)` now supports deeper pagination into native Excel tables instead of always reading from the top.
+- Truncated tabular reads now return `next_start_row` so agents can continue paging without recalculating offsets.
 - Oversized read responses now fail early with `ResponseTooLargeError` plus structured `hints`, so agents can retry with smaller ranges or pagination before the client truncates the payload.
 - `quick_read`, `read_excel_as_table`, and `read_excel_table` can now return `records` plus inferred `schema` hints when you opt into `row_mode="objects"` and `infer_schema=True`.
 - `profile_workbook` provides a single-call workbook inventory with sheet-level table, chart, protection, print, and filter metadata for faster agent orientation, and now includes chart `occupied_range` alongside anchors and dimensions for grid-anchored worksheet charts.

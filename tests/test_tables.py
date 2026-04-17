@@ -231,6 +231,7 @@ def test_read_excel_table_supports_max_rows_and_compact(tmp_workbook):
         ],
         "total_rows": 5,
         "truncated": True,
+        "next_start_row": 3,
     }
 
 
@@ -250,6 +251,7 @@ def test_read_excel_table_supports_start_row_pagination(tmp_workbook):
         ],
         "total_rows": 5,
         "truncated": True,
+        "next_start_row": 5,
     }
 
 
@@ -271,6 +273,21 @@ def test_read_excel_table_can_omit_headers_for_followup_pages(tmp_workbook):
         ["Dave", 28, "Oulu"],
     ]
     assert result["truncated"] is True
+    assert result["next_start_row"] == 5
+
+
+def test_read_excel_table_omits_next_start_row_on_final_page(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+
+    result = read_excel_table(tmp_workbook, "Customers", start_row=5, max_rows=2, compact=True)
+
+    assert result == {
+        "sheet_name": "Sheet1",
+        "table_name": "Customers",
+        "range": "A1:C6",
+        "headers": ["Name", "Age", "City"],
+        "rows": [["Eve", 32, "Espoo"]],
+    }
 
 
 def test_read_excel_table_rejects_non_positive_start_row(tmp_workbook):
@@ -337,6 +354,7 @@ def test_read_excel_table_tool_returns_json_envelope(tmp_workbook):
     assert payload["operation"] == "read_excel_table"
     assert payload["data"]["table_name"] == "Customers"
     assert payload["data"]["truncated"] is True
+    assert payload["data"]["next_start_row"] == 3
 
 
 def test_read_excel_table_tool_accepts_pagination_without_headers(tmp_workbook):

@@ -290,6 +290,10 @@ def read_excel_table(
                     ]
                 )
 
+            next_start_row = None
+            if max_rows is not None and available_rows > max_rows:
+                next_start_row = start_row + len(rows)
+
             result = {
                 "sheet_name": current_sheet_name,
                 "table_name": table.displayName,
@@ -325,6 +329,7 @@ def read_excel_table(
                 include_headers=include_headers,
                 row_mode=row_mode,
                 infer_schema=infer_schema,
+                next_start_row=next_start_row,
             )
 
     except DataError:

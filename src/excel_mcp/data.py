@@ -140,6 +140,7 @@ def augment_tabular_payload(
     row_mode: str = "arrays",
     infer_schema: bool = False,
     include_headers: bool = True,
+    next_start_row: Optional[int] = None,
 ) -> Dict[str, Any]:
     _validate_row_mode(row_mode)
 
@@ -156,6 +157,9 @@ def augment_tabular_payload(
 
     if not include_headers:
         result.pop("headers", None)
+
+    if next_start_row is not None:
+        result["next_start_row"] = next_start_row
 
     return result
 
@@ -634,6 +638,10 @@ def _read_table_from_worksheet(
                 row_data.append(ws.cell(row=row_idx, column=col).value)
             rows.append(row_data)
 
+    next_start_row = None
+    if max_rows is not None and available_rows > max_rows:
+        next_start_row = effective_start_row + len(rows)
+
     result = {
         "headers": headers,
         "rows": rows,
@@ -649,6 +657,7 @@ def _read_table_from_worksheet(
         include_headers=include_headers,
         row_mode=row_mode,
         infer_schema=infer_schema,
+        next_start_row=next_start_row,
     )
 
 

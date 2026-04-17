@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Added `next_start_row` to truncated tabular read responses so agents can continue pagination without recalculating offsets.
+
 ## 0.4.2 - 2026-04-11
 
 This patch release improves workbook profiling coverage, safer native-table behavior, and package discoverability for SheetForge MCP.
