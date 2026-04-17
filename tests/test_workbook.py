@@ -1,21 +1,32 @@
 import json
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
+from openpyxl.workbook.defined_name import DefinedName
 from excel_mcp.chart import create_chart_in_sheet
 from excel_mcp.server import (
+    analyze_range_impact as analyze_range_impact_tool,
     get_workbook_metadata as get_workbook_metadata_tool,
     list_all_sheets as list_all_sheets_tool,
     profile_workbook as profile_workbook_tool,
 )
 from excel_mcp.tables import create_excel_table
 from excel_mcp.workbook import (
+    analyze_range_impact,
     get_or_create_workbook,
     get_workbook_info,
     list_sheets,
     profile_workbook,
 )
+
+
+def _load_tool_payload(raw: str) -> dict:
+    payload = json.loads(raw)
+    assert payload["ok"] is True
+    assert "operation" in payload
+    assert "message" in payload
+    return payload
 
 
 def test_get_or_create_raises_on_missing_file(tmp_path):
@@ -155,6 +166,63 @@ def test_profile_workbook_tool_returns_json_envelope(tmp_workbook):
 
     assert payload["operation"] == "profile_workbook"
     assert payload["data"]["sheet_count"] == 1
+
+
+def test_analyze_range_impact_reports_overlapping_structures(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    create_chart_in_sheet(
+        filepath=tmp_workbook,
+        sheet_name="Sheet1",
+        chart_type="bar",
+        target_cell="E1",
+        data_range="A1:B6",
+        title="Customers by Age",
+    )
+
+    workbook = load_workbook(tmp_workbook)
+    ws = workbook["Sheet1"]
+    ws.merge_cells("B2:C2")
+    ws.auto_filter.ref = "A1:C6"
+    ws.print_area = "A1:F10"
+    ws["D3"] = "=SUM(B2:C2)"
+    workbook.defined_names["ImpactArea"] = DefinedName(
+        "ImpactArea",
+        attr_text="Sheet1!$B$2:$F$4",
+    )
+    workbook.save(tmp_workbook)
+    workbook.close()
+
+    result = analyze_range_impact(tmp_workbook, "Sheet1", "A1:F4")
+
+    assert result["summary"]["risk_level"] == "high"
+    assert result["summary"]["table_count"] == 1
+    assert result["summary"]["chart_count"] == 1
+    assert result["summary"]["merged_range_count"] == 1
+    assert result["summary"]["named_range_count"] == 1
+    assert result["summary"]["formula_cell_count"] == 1
+    assert result["summary"]["autofilter_overlap"] is True
+    assert result["summary"]["print_area_overlap"] is True
+    assert result["tables"][0]["covers_header"] is True
+    assert result["charts"][0]["anchor"] == "E1"
+    assert result["merged_ranges"][0]["range"] == "B2:C2"
+    assert result["named_ranges"][0]["name"] == "ImpactArea"
+    assert result["formula_cells"]["sample"] == ["D3"]
+
+
+def test_analyze_range_impact_reports_low_risk_for_empty_area(tmp_workbook):
+    result = analyze_range_impact(tmp_workbook, "Sheet1", "H20:I21")
+
+    assert result["summary"]["risk_level"] == "low"
+    assert result["summary"]["table_count"] == 0
+    assert result["summary"]["chart_count"] == 0
+    assert result["hints"] == ["No overlapping workbook structures detected for this range."]
+
+
+def test_analyze_range_impact_tool_returns_json_envelope(tmp_workbook):
+    payload = _load_tool_payload(analyze_range_impact_tool(tmp_workbook, "Sheet1", "A1:C3"))
+
+    assert payload["operation"] == "analyze_range_impact"
+    assert payload["data"]["range"] == "A1:C3"
 
 
 def test_profile_workbook_handles_chart_sheets(tmp_path):

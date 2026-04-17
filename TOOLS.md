@@ -167,6 +167,8 @@ Returns matches under `data.matches`:
   Returns workbook metadata under the shared JSON envelope.
 - `profile_workbook(filepath: str) -> str`
   Returns a workbook inventory with per-sheet summaries for visibility, freeze panes, autofilters, protection, tables, charts, print settings, and lightweight workbook-level counts. Grid-anchored worksheet charts include anchor, dimensions, and `occupied_range` for layout-aware follow-up steps.
+- `analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> str`
+  Inspects workbook structures that overlap a worksheet range before mutation. Reports intersections with native Excel tables, chart footprints, merged ranges, named ranges, autofilters, print areas, and formula cells, plus a lightweight `risk_level`.
 - `list_named_ranges(filepath: str) -> str`
   Returns workbook defined names, their values, and any sheet/range destinations.
 - `list_all_sheets(filepath: str) -> str`
@@ -291,6 +293,7 @@ Returns matches under `data.matches`:
 
 - Use `list_all_sheets` before reading unfamiliar workbooks.
 - Use `profile_workbook` when you need a one-call inventory of sheets, tables, charts, filters, freeze panes, and print/protection state before deciding what to mutate.
+- Use `analyze_range_impact` before deleting, overwriting, or restructuring an important worksheet region; it gives a fast blast-radius summary without mutating the workbook.
 - Use workbook inventory tools to discover `sheet_type` first when the workbook may contain chart sheets; cell-grid tools reject chart sheets with clear worksheet-only errors.
 - Use `read_excel_table` when the workbook already contains native Excel tables and you want exact table semantics instead of a sheet-wide read.
 - Use `row_mode="objects"` when the agent benefits more from named fields than the smallest possible payload.

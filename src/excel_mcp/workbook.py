@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .exceptions import WorkbookError
@@ -25,6 +25,97 @@ def _get_used_range(ws) -> str | None:
     if is_empty or rows == 0 or columns == 0:
         return None
     return f"A1:{get_column_letter(columns)}{rows}"
+
+
+def _bounds_to_range(min_row: int, min_col: int, max_row: int, max_col: int) -> str:
+    return f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+
+
+def _bounds_intersect(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+) -> bool:
+    return not (
+        first[2] < second[0]
+        or second[2] < first[0]
+        or first[3] < second[1]
+        or second[3] < first[1]
+    )
+
+
+def _intersection_bounds(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+) -> tuple[int, int, int, int] | None:
+    if not _bounds_intersect(first, second):
+        return None
+    return (
+        max(first[0], second[0]),
+        max(first[1], second[1]),
+        min(first[2], second[2]),
+        min(first[3], second[3]),
+    )
+
+
+def _parse_range_reference(
+    range_ref: str,
+    *,
+    expected_sheet: str | None = None,
+    error_cls: type[Exception] = WorkbookError,
+) -> tuple[tuple[int, int, int, int], str]:
+    cleaned = str(range_ref).strip()
+    if not cleaned:
+        raise error_cls("Range reference is required")
+
+    if "!" in cleaned:
+        range_sheet, cleaned = cleaned.rsplit("!", 1)
+        normalized_sheet = range_sheet.strip().strip("'")
+        if expected_sheet is not None and normalized_sheet != expected_sheet:
+            raise error_cls(
+                f"Range '{range_ref}' refers to sheet '{normalized_sheet}', expected '{expected_sheet}'"
+            )
+
+    cleaned = cleaned.replace("$", "")
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(cleaned)
+    except ValueError as exc:
+        raise error_cls(f"Invalid range reference: {range_ref}") from exc
+
+    return (min_row, min_col, max_row, max_col), _bounds_to_range(min_row, min_col, max_row, max_col)
+
+
+def _iter_range_references(
+    range_ref: Any,
+    *,
+    expected_sheet: str | None = None,
+) -> list[tuple[tuple[int, int, int, int], str]]:
+    if not range_ref:
+        return []
+
+    parts = range_ref if isinstance(range_ref, (list, tuple)) else str(range_ref).split(",")
+    references: list[tuple[tuple[int, int, int, int], str]] = []
+    for part in parts:
+        cleaned = str(part).strip()
+        if not cleaned:
+            continue
+
+        if "!" in cleaned:
+            range_sheet, local_range = cleaned.rsplit("!", 1)
+            normalized_sheet = range_sheet.strip().strip("'")
+            if expected_sheet is not None and normalized_sheet != expected_sheet:
+                continue
+        else:
+            local_range = cleaned
+
+        local_range = local_range.replace("$", "")
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(local_range)
+        except ValueError:
+            continue
+        references.append(
+            ((min_row, min_col, max_row, max_col), _bounds_to_range(min_row, min_col, max_row, max_col))
+        )
+    return references
 
 
 def _freeze_panes_value(ws) -> str | None:
@@ -374,4 +465,267 @@ def profile_workbook(filepath: str) -> dict[str, Any]:
         raise
     except Exception as e:
         logger.error(f"Failed to profile workbook: {e}")
+        raise WorkbookError(str(e))
+
+
+def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict[str, Any]:
+    """Inspect workbook structures that overlap a worksheet range before mutation."""
+    try:
+        path = Path(filepath)
+        if not path.exists():
+            raise WorkbookError(f"File not found: {filepath}")
+
+        with safe_workbook(filepath) as wb:
+            ws = require_worksheet(
+                wb,
+                sheet_name,
+                error_cls=WorkbookError,
+                operation="range impact analysis",
+            )
+            target_bounds, normalized_range = _parse_range_reference(
+                range_ref,
+                expected_sheet=sheet_name,
+                error_cls=WorkbookError,
+            )
+
+            from .chart import (
+                DEFAULT_CHART_HEIGHT,
+                DEFAULT_CHART_WIDTH,
+                _chart_occupied_range,
+                _chart_type_name,
+                _extract_chart_anchor,
+                _extract_chart_dimensions,
+                _extract_title_text,
+            )
+            from .tables import _build_table_metadata
+
+            tables: list[dict[str, Any]] = []
+            for table in ws.tables.values():
+                min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+                table_bounds = (min_row, min_col, max_row, max_col)
+                intersection = _intersection_bounds(target_bounds, table_bounds)
+                if intersection is None:
+                    continue
+
+                metadata = _build_table_metadata(sheet_name, ws, table)
+                header_row_count = metadata["header_row_count"]
+                totals_row_count = metadata["totals_row_count"]
+                header_bounds = (
+                    (min_row, min_col, min_row + header_row_count - 1, max_col)
+                    if header_row_count > 0
+                    else None
+                )
+                data_start_row = min_row + header_row_count
+                data_end_row = max_row - totals_row_count
+                data_bounds = (
+                    (data_start_row, min_col, data_end_row, max_col)
+                    if data_start_row <= data_end_row
+                    else None
+                )
+                totals_bounds = (
+                    (max_row - totals_row_count + 1, min_col, max_row, max_col)
+                    if totals_row_count > 0
+                    else None
+                )
+                tables.append(
+                    {
+                        "table_name": table.displayName,
+                        "range": table.ref,
+                        "intersection_range": _bounds_to_range(*intersection),
+                        "covers_header": bool(
+                            header_bounds and _bounds_intersect(target_bounds, header_bounds)
+                        ),
+                        "covers_data": bool(
+                            data_bounds and _bounds_intersect(target_bounds, data_bounds)
+                        ),
+                        "covers_totals_row": bool(
+                            totals_bounds and _bounds_intersect(target_bounds, totals_bounds)
+                        ),
+                    }
+                )
+
+            charts: list[dict[str, Any]] = []
+            for chart_index, chart in enumerate(getattr(ws, "_charts", []), start=1):
+                anchor = _extract_chart_anchor(chart)
+                if not anchor:
+                    continue
+                width, height = _extract_chart_dimensions(chart)
+                occupied_range = _chart_occupied_range(
+                    ws,
+                    anchor,
+                    width=width or DEFAULT_CHART_WIDTH,
+                    height=height or DEFAULT_CHART_HEIGHT,
+                )
+                chart_bounds, _ = _parse_range_reference(occupied_range, error_cls=WorkbookError)
+                intersection = _intersection_bounds(target_bounds, chart_bounds)
+                if intersection is None:
+                    continue
+                charts.append(
+                    {
+                        "chart_index": chart_index,
+                        "chart_type": _chart_type_name(chart),
+                        "title": _extract_title_text(getattr(chart, "title", None)),
+                        "anchor": anchor,
+                        "occupied_range": occupied_range,
+                        "intersection_range": _bounds_to_range(*intersection),
+                    }
+                )
+
+            merged_ranges: list[dict[str, Any]] = []
+            for merged_range in ws.merged_cells.ranges:
+                merged_bounds, merged_ref = _parse_range_reference(
+                    str(merged_range),
+                    error_cls=WorkbookError,
+                )
+                intersection = _intersection_bounds(target_bounds, merged_bounds)
+                if intersection is None:
+                    continue
+                merged_ranges.append(
+                    {
+                        "range": merged_ref,
+                        "intersection_range": _bounds_to_range(*intersection),
+                    }
+                )
+
+            named_ranges: list[dict[str, Any]] = []
+            for named_range in _serialize_named_ranges(wb):
+                matching_destinations = []
+                for destination in named_range["destinations"]:
+                    if destination["sheet_name"] != sheet_name:
+                        continue
+                    for destination_bounds, destination_ref in _iter_range_references(
+                        destination["range"],
+                        expected_sheet=sheet_name,
+                    ):
+                        intersection = _intersection_bounds(target_bounds, destination_bounds)
+                        if intersection is None:
+                            continue
+                        matching_destinations.append(
+                            {
+                                "range": destination_ref,
+                                "intersection_range": _bounds_to_range(*intersection),
+                            }
+                        )
+
+                if matching_destinations:
+                    named_ranges.append(
+                        {
+                            "name": named_range["name"],
+                            "local_sheet": named_range["local_sheet"],
+                            "hidden": named_range["hidden"],
+                            "destinations": matching_destinations,
+                        }
+                    )
+
+            autofilter = None
+            if ws.auto_filter.ref:
+                autofilter_bounds, autofilter_ref = _parse_range_reference(
+                    ws.auto_filter.ref,
+                    error_cls=WorkbookError,
+                )
+                intersection = _intersection_bounds(target_bounds, autofilter_bounds)
+                if intersection is not None:
+                    autofilter = {
+                        "range": autofilter_ref,
+                        "intersection_range": _bounds_to_range(*intersection),
+                    }
+
+            print_area_matches = []
+            for print_bounds, print_ref in _iter_range_references(
+                ws.print_area,
+                expected_sheet=sheet_name,
+            ):
+                intersection = _intersection_bounds(target_bounds, print_bounds)
+                if intersection is None:
+                    continue
+                print_area_matches.append(
+                    {
+                        "range": print_ref,
+                        "intersection_range": _bounds_to_range(*intersection),
+                    }
+                )
+
+            formula_cells = []
+            for row in ws.iter_rows(
+                min_row=target_bounds[0],
+                max_row=target_bounds[2],
+                min_col=target_bounds[1],
+                max_col=target_bounds[3],
+            ):
+                for cell in row:
+                    if isinstance(cell.value, str) and cell.value.startswith("="):
+                        formula_cells.append(cell.coordinate)
+
+            impact_score = (
+                len(tables) * 3
+                + len(charts) * 3
+                + len(merged_ranges) * 2
+                + len(named_ranges) * 2
+                + (1 if formula_cells else 0)
+                + (1 if autofilter else 0)
+                + (1 if print_area_matches else 0)
+            )
+            if impact_score >= 3:
+                risk_level = "high"
+            elif impact_score >= 1:
+                risk_level = "medium"
+            else:
+                risk_level = "low"
+
+            hints: list[str] = []
+            if tables:
+                hints.append("Selected range overlaps native Excel tables.")
+                if any(table["covers_header"] for table in tables):
+                    hints.append("Table header rows are inside the selected range.")
+                if any(table["covers_totals_row"] for table in tables):
+                    hints.append("Table totals rows are inside the selected range.")
+            if charts:
+                hints.append("Selected range overlaps embedded chart footprints.")
+            if merged_ranges:
+                hints.append("Selected range touches merged cells that may need to be unmerged first.")
+            if named_ranges:
+                hints.append("Named ranges point into the selected range.")
+            if autofilter:
+                hints.append("Selected range overlaps the worksheet autofilter.")
+            if print_area_matches:
+                hints.append("Selected range overlaps the worksheet print area.")
+            if formula_cells:
+                hints.append("Selected range contains formula cells that may recalculate or break.")
+            if not hints:
+                hints.append("No overlapping workbook structures detected for this range.")
+
+            return {
+                "sheet_name": sheet_name,
+                "range": normalized_range,
+                "used_range": _get_used_range(ws),
+                "summary": {
+                    "risk_level": risk_level,
+                    "table_count": len(tables),
+                    "chart_count": len(charts),
+                    "merged_range_count": len(merged_ranges),
+                    "named_range_count": len(named_ranges),
+                    "formula_cell_count": len(formula_cells),
+                    "autofilter_overlap": autofilter is not None,
+                    "print_area_overlap": bool(print_area_matches),
+                },
+                "tables": tables,
+                "charts": charts,
+                "merged_ranges": merged_ranges,
+                "named_ranges": named_ranges,
+                "formula_cells": {
+                    "count": len(formula_cells),
+                    "sample": formula_cells[:10],
+                },
+                "worksheet_features": {
+                    "autofilter": autofilter,
+                    "print_area": print_area_matches,
+                },
+                "hints": hints,
+            }
+
+    except WorkbookError as e:
+        logger.error(str(e))
+        raise
+    except Exception as e:
+        logger.error(f"Failed to analyze range impact: {e}")
         raise WorkbookError(str(e))

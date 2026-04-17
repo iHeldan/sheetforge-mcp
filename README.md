@@ -113,9 +113,9 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 50 MCP tools across these groups:
+The server currently registers 51 MCP tools across these groups:
 
-- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `profile_workbook`, `list_named_ranges`, `list_all_sheets`, `list_tables`
+- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `profile_workbook`, `analyze_range_impact`, `list_named_ranges`, `list_all_sheets`, `list_tables`
 - data access: `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `format_ranges`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
@@ -134,6 +134,7 @@ For chart authoring, prefer `create_chart` as the primary entry point:
 The most agent-friendly read tools are:
 
 - `profile_workbook`: one-call inventory for sheets, tables, charts, named ranges, and key layout/protection state, including chart `occupied_range` for grid-anchored worksheet charts
+- `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, autofilters, print areas, and formula cells
 - `quick_read`: single-call compact table read that auto-selects the first sheet when needed, now with `start_row` pagination for large sheets
 - `read_excel_table`: read a native Excel table by `table_name` without guessing worksheet bounds
 - `list_all_sheets`: quick workbook inventory with sheet sizes, emptiness flags, and `sheet_type` for worksheets versus chart sheets
@@ -242,6 +243,7 @@ uv build
 - Excel-first MCP surface: the toolset is focused on real `.xlsx` workbook operations, not generic file I/O
 - agent-friendly responses: consistent JSON envelopes, compact writes, and `dry_run` previews reduce context waste
 - workbook introspection: `profile_workbook`, `list_all_sheets`, `list_tables`, and `list_charts` make unfamiliar spreadsheets easier to navigate
+- safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range
 - layout planning: `find_free_canvas` suggests safe empty slots for charts or dashboard blocks before you place them, defaulting to the standard chart footprint when you omit explicit sizing
 - practical Excel output: formatting, print setup, worksheet protection, table upserts, chart authoring, and autofit helpers cover real reporting workflows
 - Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or remotely over HTTP

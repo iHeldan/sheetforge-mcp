@@ -28,6 +28,7 @@
     {"name": "create_worksheet", "description": "Create a new worksheet in a workbook"},
     {"name": "get_workbook_metadata", "description": "Get workbook metadata and structure"},
     {"name": "profile_workbook", "description": "Profile workbook sheets, tables, charts, and layout state in one call"},
+    {"name": "analyze_range_impact", "description": "Inspect workbook structures that overlap a worksheet range before mutation"},
     {"name": "list_named_ranges", "description": "List workbook defined names and destinations"},
     {"name": "list_all_sheets", "description": "List all sheets with row and column counts"},
     {"name": "list_tables", "description": "List native Excel tables in a workbook or worksheet"},

@@ -31,6 +31,7 @@ from excel_mcp.chart import (
     list_charts as list_charts_impl,
 )
 from excel_mcp.workbook import (
+    analyze_range_impact as analyze_range_impact_impl,
     get_workbook_info,
     list_named_ranges as list_named_ranges_impl,
     profile_workbook as profile_workbook_impl,
@@ -986,6 +987,25 @@ def get_workbook_metadata(
     return _run_tool(
         "get_workbook_metadata",
         lambda: get_workbook_info(get_excel_path(filepath), include_ranges=include_ranges),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Analyze Range Impact",
+        readOnlyHint=True,
+    ),
+)
+def analyze_range_impact(
+    filepath: str,
+    sheet_name: str,
+    range_ref: str,
+) -> str:
+    """Inspect workbook structures that overlap a worksheet range before mutation."""
+    return _run_tool(
+        "analyze_range_impact",
+        lambda: analyze_range_impact_impl(get_excel_path(filepath), sheet_name, range_ref),
     )
 
 
