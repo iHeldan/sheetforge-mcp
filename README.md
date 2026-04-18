@@ -7,7 +7,7 @@ If you are looking for an Excel MCP server for spreadsheet automation, workbook 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
 Published package release: `0.5.0`
-Repository docs track the current main-branch tool surface, which currently exposes `57` MCP tools.
+Repository docs track the current main-branch tool surface, which currently exposes `66` MCP tools.
 
 ## Excel MCP Server Features
 
@@ -114,13 +114,13 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 57 MCP tools across these groups:
+The server currently registers 66 MCP tools across these groups:
 
-- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `profile_workbook`, `audit_workbook`, `plan_workbook_repairs`, `analyze_range_impact`, `list_named_ranges`, `list_all_sheets`, `list_tables`
+- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `profile_workbook`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
 - data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `format_ranges`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
-- formulas and validation: `apply_formula`, `validate_formula_syntax`, `validate_excel_range`, `get_data_validation_info`
+- formulas and validation: `apply_formula`, `validate_formula_syntax`, `validate_excel_range`, `get_data_validation_info`, `inspect_data_validation_rules`, `remove_data_validation_rules`, `inspect_conditional_format_rules`, `remove_conditional_format_rules`
 - analysis and structure: `create_table`, `list_charts`, `find_free_canvas`, `create_chart`, `create_chart_from_series`, `create_pivot_table`
 
 For chart authoring, prefer `create_chart` as the primary entry point:
@@ -141,7 +141,11 @@ The most agent-friendly read tools are:
 - `profile_workbook`: one-call inventory for sheets, tables, charts, named ranges, and key layout/protection state, including chart `occupied_range` for grid-anchored worksheet charts
 - `audit_workbook`: workbook-level audit for high-signal problems such as broken `#REF!` formulas, error cells, hidden sheets, header-quality issues, layout-heavy sheets, and named ranges that reference missing sheets
 - `plan_workbook_repairs`: converts workbook audit findings into prioritized next steps, including suggested SheetForge tool calls for inspection, safe dry runs, and repair workflows
+- `apply_workbook_repairs`: dry-runs or applies the safe repair subset from those plans, including broken named ranges, broken validation rules, broken conditional formats, and optional hidden-sheet reveals
+- `diff_workbooks`: compares two workbook files and reports structural changes plus sampled cell-value diffs, which is useful for before/after verification in agent workflows
 - `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, data validations, conditional formats, autofilters, print areas, formula cells inside the range, and formulas or rule expressions elsewhere that depend on it directly or transitively, through named ranges, or through structured table references such as `Table1[Sales]`
+- `explain_formula_cell`: resolves a formula cell's direct references, shows upstream formula-chain cells, and reports downstream dependents so agents can debug workbook logic without manual tracing
+- `inspect_named_range`: inspects one defined name, including its scope, destinations, and whether it points at missing sheets or broken references
 - `quick_read`: single-call compact table read that auto-selects the first sheet when needed, now with `start_row` pagination and `start_col` / `end_col` column windowing for large sheets
 - `read_excel_table`: read a native Excel table by `table_name` without guessing worksheet bounds, now with `start_row` pagination and optional `start_col` / `end_col` table column windowing
 - `list_all_sheets`: quick workbook inventory with sheet sizes, emptiness flags, and `sheet_type` for worksheets versus chart sheets
@@ -173,6 +177,8 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - `aggregate_table` lets agents compute grouped summaries directly in SheetForge instead of over-reading the full dataset into context first
 - `audit_workbook` is the fastest workbook-wide preflight when you need to know whether a spreadsheet is safe and predictable enough for autonomous editing
 - `plan_workbook_repairs` is the fastest way to turn those audit findings into an actual action queue instead of manually deciding the next tool call for every problem
+- `apply_workbook_repairs` lets agents preview or apply the safe subset of those repairs without having to orchestrate each broken workbook artifact manually
+- `diff_workbooks` is the quickest before/after QA pass when an agent has touched workbook structure and wants proof of what actually changed
 
 See [TOOLS.md](TOOLS.md) for the full reference.
 Release notes live in [CHANGELOG.md](CHANGELOG.md).

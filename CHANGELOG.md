@@ -10,7 +10,11 @@
 - Added `aggregate_table` for grouped metrics such as `count`, `sum`, `avg`, `min`, and `max` without forcing agents to over-read whole datasets into context.
 - Added `audit_workbook` as a workbook-level preflight that surfaces high-signal issues such as broken formula references, error cells, hidden sheets, layout-heavy tabs, header-quality problems, and missing-sheet named ranges.
 - Added `plan_workbook_repairs` so agents can turn workbook audit findings into a prioritized SheetForge action queue instead of manually mapping each issue to the next tool call.
-- Refreshed the manifest, README, and landing-page copy for the current 57-tool surface and the newer smart-read, query, audit, and repair-planning helpers.
+- Added `apply_workbook_repairs` so agents can dry-run or apply the safe repair subset for broken named ranges, broken validation rules, broken conditional formatting rules, and optional hidden-sheet reveals.
+- Added `diff_workbooks` so agents can compare workbook versions with structural changes plus sampled cell-level before/after diffs.
+- Added `explain_formula_cell` so agents can resolve formula inputs through named ranges and structured references, inspect upstream formula chains, and see downstream dependents in one call.
+- Added `inspect_named_range`, `delete_named_range`, `inspect_data_validation_rules`, `remove_data_validation_rules`, `inspect_conditional_format_rules`, and `remove_conditional_format_rules` to turn workbook-repair plans into inspect → dry-run → apply workflows.
+- Refreshed the manifest, README, and landing-page copy for the current 66-tool surface and the newer workbook-repair, workbook-diff, and formula-lineage helpers.
 
 ## 0.5.0 - 2026-04-18
 

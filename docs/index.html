@@ -240,12 +240,12 @@
         </p>
         <p>
           Published package release: <strong>0.5.0</strong>. The repository currently
-          exposes <strong>57 MCP tools</strong>, including smart read-strategy suggestions,
+          exposes <strong>66 MCP tools</strong>, including smart read-strategy suggestions,
           lightweight dataset summaries, declarative table queries, grouped aggregates,
-          workbook profiling, workbook audits, repair planning, native-table upserts,
-          compact mutation responses, cursor-based 2D range reads, placement-aware chart
-          authoring, and workbook-level impact analysis for formulas, validations, and
-          conditional formatting.
+          workbook profiling, repair planning and execution, workbook diffs, formula-lineage
+          debugging, native-table upserts, compact mutation responses, cursor-based 2D
+          range reads, placement-aware chart authoring, and workbook-level impact analysis
+          for formulas, validations, and conditional formatting.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/iHeldan/sheetforge-mcp">View Repository</a>
@@ -258,7 +258,7 @@
         <h2>At a glance</h2>
         <ul class="meta-list">
           <li>Python 3.10+</li>
-          <li>57 MCP tools</li>
+          <li>66 MCP tools</li>
           <li>Supports `stdio`, `streamable-http`, and deprecated `sse`</li>
           <li>Uniform JSON envelopes for every tool response</li>
           <li>No Microsoft Excel dependency</li>
@@ -286,6 +286,9 @@
           <li><strong>`profile_workbook`</strong><br>One-call workbook inventory with tables, charts, filters, print settings, and protection state.</li>
           <li><strong>`audit_workbook`</strong><br>Workbook-wide preflight for broken references, hidden sheets, header issues, and layout-heavy tabs.</li>
           <li><strong>`plan_workbook_repairs`</strong><br>Turn audit findings into a prioritized SheetForge repair and inspection queue.</li>
+          <li><strong>`apply_workbook_repairs`</strong><br>Dry-run or apply safe workbook cleanup actions with audit summaries and structural diffs.</li>
+          <li><strong>`diff_workbooks`</strong><br>Compare workbook versions and sample the actual before/after cell-value changes.</li>
+          <li><strong>`explain_formula_cell`</strong><br>Trace a formula cell through named ranges, structured references, upstream formula cells, and downstream dependents.</li>
           <li><strong>`query_table`</strong><br>Filter, sort, and trim worksheet-shaped data or native tables before it reaches agent context.</li>
           <li><strong>`aggregate_table`</strong><br>Compute grouped metrics directly in SheetForge instead of post-processing full reads.</li>
           <li><strong>`quick_read`</strong><br>Single-call compact table read with automatic first-sheet selection.</li>

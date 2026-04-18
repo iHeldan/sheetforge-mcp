@@ -328,6 +328,8 @@ def test_list_named_ranges_returns_destinations(named_range_workbook):
             "destinations": [{"sheet_name": "Sheet1", "range": "$A$1:$B$2"}],
             "local_sheet": None,
             "hidden": False,
+            "broken_reference": False,
+            "missing_sheets": [],
         }
     ]
 

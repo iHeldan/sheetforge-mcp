@@ -31,12 +31,21 @@ from excel_mcp.chart import (
     list_charts as list_charts_impl,
 )
 from excel_mcp.workbook import (
+    apply_workbook_repairs as apply_workbook_repairs_impl,
     analyze_range_impact as analyze_range_impact_impl,
     audit_workbook as audit_workbook_impl,
+    delete_named_range as delete_named_range_impl,
+    diff_workbooks as diff_workbooks_impl,
+    explain_formula_cell as explain_formula_cell_impl,
     get_workbook_info,
+    inspect_conditional_format_rules as inspect_conditional_format_rules_impl,
+    inspect_data_validation_rules as inspect_data_validation_rules_impl,
+    inspect_named_range as inspect_named_range_impl,
     list_named_ranges as list_named_ranges_impl,
     plan_workbook_repairs as plan_workbook_repairs_impl,
     profile_workbook as profile_workbook_impl,
+    remove_conditional_format_rules as remove_conditional_format_rules_impl,
+    remove_data_validation_rules as remove_data_validation_rules_impl,
     require_worksheet,
 )
 from excel_mcp.data import (
@@ -192,10 +201,27 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
     elif operation == "describe_dataset":
         hints.append("set sample_rows to inspect a smaller sample")
         hints.append("use suggest_read_strategy when you only need the recommended next tool")
-    elif operation in {"profile_workbook", "audit_workbook", "plan_workbook_repairs", "list_all_sheets", "list_tables", "list_charts"}:
-        if operation in {"audit_workbook", "plan_workbook_repairs"}:
+    elif operation in {
+        "profile_workbook",
+        "audit_workbook",
+        "plan_workbook_repairs",
+        "apply_workbook_repairs",
+        "diff_workbooks",
+        "inspect_named_range",
+        "inspect_data_validation_rules",
+        "inspect_conditional_format_rules",
+        "list_all_sheets",
+        "list_tables",
+        "list_charts",
+    }:
+        if operation in {"audit_workbook", "plan_workbook_repairs", "apply_workbook_repairs", "diff_workbooks"}:
             hints.append("set sample_limit to return a smaller audit sample")
+        if operation == "diff_workbooks":
+            hints.append("set include_cell_changes=False to skip cell-level diff sampling")
         hints.append("query a smaller workbook slice, such as one sheet or one table")
+    elif operation == "explain_formula_cell":
+        hints.append("set max_depth to a smaller number to shorten the upstream chain")
+        hints.append("inspect a single formula cell at a time")
 
     if "changes" in payload:
         hints.append("set include_changes=False to omit detailed per-cell diffs")
@@ -1183,6 +1209,31 @@ def analyze_range_impact(
 @mcp.tool(
     structured_output=False,
     annotations=ToolAnnotations(
+        title="Explain Formula Cell",
+        readOnlyHint=True,
+    ),
+)
+def explain_formula_cell(
+    filepath: str,
+    sheet_name: str,
+    cell: str,
+    max_depth: int = 3,
+) -> str:
+    """Explain a formula cell's direct references, upstream formula chain, and downstream dependents."""
+    return _run_tool(
+        "explain_formula_cell",
+        lambda: explain_formula_cell_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            cell,
+            max_depth=max_depth,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
         title="Profile Workbook",
         readOnlyHint=True,
     ),
@@ -1244,6 +1295,83 @@ def plan_workbook_repairs(
 @mcp.tool(
     structured_output=False,
     annotations=ToolAnnotations(
+        title="Apply Workbook Repairs",
+        destructiveHint=True,
+    ),
+)
+def apply_workbook_repairs(
+    filepath: str,
+    repair_types: Optional[List[str]] = None,
+    sheet_names: Optional[List[str]] = None,
+    header_row: int = 1,
+    sample_limit: int = 25,
+    dry_run: bool = True,
+) -> str:
+    """Apply safe workbook repair actions with dry-run planning and before/after diff output."""
+    return _run_tool(
+        "apply_workbook_repairs",
+        lambda: apply_workbook_repairs_impl(
+            get_excel_path(filepath),
+            repair_types=repair_types,
+            sheet_names=sheet_names,
+            header_row=header_row,
+            sample_limit=sample_limit,
+            dry_run=dry_run,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Diff Workbooks",
+        readOnlyHint=True,
+    ),
+)
+def diff_workbooks(
+    before_filepath: str,
+    after_filepath: str,
+    sample_limit: int = 25,
+    include_cell_changes: bool = True,
+) -> str:
+    """Diff two workbook files and report structural changes plus sampled cell-value changes."""
+    return _run_tool(
+        "diff_workbooks",
+        lambda: diff_workbooks_impl(
+            get_excel_path(before_filepath),
+            get_excel_path(after_filepath),
+            sample_limit=sample_limit,
+            include_cell_changes=include_cell_changes,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Inspect Named Range",
+        readOnlyHint=True,
+    ),
+)
+def inspect_named_range(
+    filepath: str,
+    name: str,
+    scope_sheet: Optional[str] = None,
+) -> str:
+    """Inspect a named range, including scope, destinations, and broken-reference signals."""
+    return _run_tool(
+        "inspect_named_range",
+        lambda: inspect_named_range_impl(
+            get_excel_path(filepath),
+            name,
+            scope_sheet=scope_sheet,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
         title="List Named Ranges",
         readOnlyHint=True,
     ),
@@ -1254,6 +1382,31 @@ def list_named_ranges(filepath: str) -> str:
         return {"named_ranges": list_named_ranges_impl(get_excel_path(filepath))}
 
     return _run_tool("list_named_ranges", action)
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Delete Named Range",
+        destructiveHint=True,
+    ),
+)
+def delete_named_range(
+    filepath: str,
+    name: str,
+    scope_sheet: Optional[str] = None,
+    dry_run: bool = False,
+) -> str:
+    """Delete a workbook-level or sheet-scoped named range."""
+    return _run_tool(
+        "delete_named_range",
+        lambda: delete_named_range_impl(
+            get_excel_path(filepath),
+            name,
+            scope_sheet=scope_sheet,
+            dry_run=dry_run,
+        ),
+    )
 
 @mcp.tool(
     structured_output=False,
@@ -1729,6 +1882,107 @@ def get_data_validation_info(
     except Exception as e:
         logger.exception("Unhandled error in get_data_validation_info")
         return _error_response("get_data_validation_info", e)
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Inspect Data Validation Rules",
+        readOnlyHint=True,
+    ),
+)
+def inspect_data_validation_rules(
+    filepath: str,
+    sheet_name: str,
+    broken_only: bool = False,
+) -> str:
+    """Inspect worksheet data validation rules with stable rule indexes."""
+    return _run_tool(
+        "inspect_data_validation_rules",
+        lambda: inspect_data_validation_rules_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            broken_only=broken_only,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Remove Data Validation Rules",
+        destructiveHint=True,
+    ),
+)
+def remove_data_validation_rules(
+    filepath: str,
+    sheet_name: str,
+    rule_indexes: Optional[List[int]] = None,
+    broken_only: bool = False,
+    dry_run: bool = False,
+) -> str:
+    """Remove worksheet data validation rules by index or remove all broken ones."""
+    return _run_tool(
+        "remove_data_validation_rules",
+        lambda: remove_data_validation_rules_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            rule_indexes=rule_indexes,
+            broken_only=broken_only,
+            dry_run=dry_run,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Inspect Conditional Format Rules",
+        readOnlyHint=True,
+    ),
+)
+def inspect_conditional_format_rules(
+    filepath: str,
+    sheet_name: str,
+    broken_only: bool = False,
+) -> str:
+    """Inspect worksheet conditional formatting rules with stable rule indexes."""
+    return _run_tool(
+        "inspect_conditional_format_rules",
+        lambda: inspect_conditional_format_rules_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            broken_only=broken_only,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Remove Conditional Format Rules",
+        destructiveHint=True,
+    ),
+)
+def remove_conditional_format_rules(
+    filepath: str,
+    sheet_name: str,
+    rule_indexes: Optional[List[int]] = None,
+    broken_only: bool = False,
+    dry_run: bool = False,
+) -> str:
+    """Remove worksheet conditional formatting rules by index or remove all broken ones."""
+    return _run_tool(
+        "remove_conditional_format_rules",
+        lambda: remove_conditional_format_rules_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            rule_indexes=rule_indexes,
+            broken_only=broken_only,
+            dry_run=dry_run,
+        ),
+    )
+
 
 @mcp.tool(
     structured_output=False,

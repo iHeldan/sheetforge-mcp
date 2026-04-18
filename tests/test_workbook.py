@@ -8,23 +8,41 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.workbook.defined_name import DefinedName
 from excel_mcp.chart import create_chart_in_sheet
 from excel_mcp.server import (
+    apply_workbook_repairs as apply_workbook_repairs_tool,
     analyze_range_impact as analyze_range_impact_tool,
     audit_workbook as audit_workbook_tool,
+    delete_named_range as delete_named_range_tool,
+    diff_workbooks as diff_workbooks_tool,
+    explain_formula_cell as explain_formula_cell_tool,
     get_workbook_metadata as get_workbook_metadata_tool,
+    inspect_conditional_format_rules as inspect_conditional_format_rules_tool,
+    inspect_data_validation_rules as inspect_data_validation_rules_tool,
+    inspect_named_range as inspect_named_range_tool,
     list_all_sheets as list_all_sheets_tool,
+    remove_conditional_format_rules as remove_conditional_format_rules_tool,
+    remove_data_validation_rules as remove_data_validation_rules_tool,
     plan_workbook_repairs as plan_workbook_repairs_tool,
     profile_workbook as profile_workbook_tool,
 )
 from excel_mcp.tables import create_excel_table
 from excel_mcp.workbook import (
+    apply_workbook_repairs,
     analyze_range_impact,
     audit_workbook,
+    delete_named_range,
+    diff_workbooks,
+    explain_formula_cell,
     get_or_create_workbook,
     get_workbook_info,
+    inspect_conditional_format_rules,
+    inspect_data_validation_rules,
+    inspect_named_range,
     list_named_ranges,
     list_sheets,
     plan_workbook_repairs,
     profile_workbook,
+    remove_conditional_format_rules,
+    remove_data_validation_rules,
 )
 
 
@@ -347,9 +365,12 @@ def test_plan_workbook_repairs_prioritizes_high_signal_actions(tmp_path):
     assert header_step["suggested_tools"][0]["tool"] == "quick_read"
 
     named_range_step = steps_by_title["Inspect and repair workbook named ranges"]
-    assert named_range_step["suggested_tools"] == [
-        {"tool": "list_named_ranges", "args": {"filepath": filepath}}
-    ]
+    assert named_range_step["suggested_tools"][0] == {
+        "tool": "list_named_ranges",
+        "args": {"filepath": filepath},
+    }
+    assert any(tool["tool"] == "inspect_named_range" for tool in named_range_step["suggested_tools"])
+    assert any(tool["tool"] == "delete_named_range" for tool in named_range_step["suggested_tools"])
 
     assert "Review hidden sheet 'Hidden' before workbook-wide automation" in result["quick_wins"]
 
@@ -370,6 +391,336 @@ def test_plan_workbook_repairs_tool_returns_json_envelope(tmp_workbook):
 
     assert payload["operation"] == "plan_workbook_repairs"
     assert payload["data"]["step_count"] == 0
+
+
+def test_inspect_named_range_reports_scope_and_breakage(tmp_path):
+    filepath = str(tmp_path / "named-range-inspect.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    wb.defined_names["BrokenRange"] = DefinedName(
+        "BrokenRange",
+        attr_text="MissingSheet!$A$1:$A$2",
+    )
+    ws.defined_names.add(
+        DefinedName(
+            "LocalRange",
+            attr_text="Data!$B$2:$B$4",
+        )
+    )
+    wb.save(filepath)
+    wb.close()
+
+    result = inspect_named_range(filepath, "BrokenRange")
+    local_result = inspect_named_range(filepath, "LocalRange", scope_sheet="Data")
+
+    assert result["match_count"] == 1
+    assert result["matches"][0]["broken_reference"] is False
+    assert result["matches"][0]["missing_sheets"] == ["MissingSheet"]
+    assert local_result["matches"][0]["local_sheet"] == "Data"
+
+    payload = _load_tool_payload(inspect_named_range_tool(filepath, "BrokenRange"))
+    assert payload["operation"] == "inspect_named_range"
+    assert payload["data"]["matches"][0]["name"] == "BrokenRange"
+
+
+def test_delete_named_range_supports_dry_run_and_apply(tmp_path):
+    filepath = str(tmp_path / "named-range-delete.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    wb.defined_names["BrokenRange"] = DefinedName(
+        "BrokenRange",
+        attr_text="MissingSheet!$A$1:$A$2",
+    )
+    wb.save(filepath)
+    wb.close()
+
+    payload = _load_tool_payload(delete_named_range_tool(filepath, "BrokenRange", dry_run=True))
+    assert payload["operation"] == "delete_named_range"
+    assert payload["dry_run"] is True
+
+    preview = delete_named_range(filepath, "BrokenRange", dry_run=True)
+    assert preview["removed_count"] == 1
+    assert list_named_ranges(filepath)[0]["name"] == "BrokenRange"
+
+    applied = delete_named_range(filepath, "BrokenRange", dry_run=False)
+    assert applied["removed_count"] == 1
+    assert list_named_ranges(filepath) == []
+
+
+def test_inspect_and_remove_broken_validation_rules(tmp_path):
+    filepath = str(tmp_path / "validation-rules.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    valid_rule = DataValidation(type="whole", formula1="1")
+    valid_rule.add("A2:A4")
+    broken_rule = DataValidation(type="list", formula1="=MissingSheet!$A$1:$A$3")
+    broken_rule.add("B2:B4")
+    ws.add_data_validation(valid_rule)
+    ws.add_data_validation(broken_rule)
+    wb.save(filepath)
+    wb.close()
+
+    inspected = inspect_data_validation_rules(filepath, "Data", broken_only=True)
+    assert inspected["rule_count"] == 1
+    assert inspected["rules"][0]["rule_index"] == 2
+    assert inspected["rules"][0]["broken_reference"] is True
+
+    preview = remove_data_validation_rules(filepath, "Data", broken_only=True, dry_run=True)
+    assert preview["removed_count"] == 1
+    assert inspect_data_validation_rules(filepath, "Data")["rule_count"] == 2
+
+    applied = remove_data_validation_rules(filepath, "Data", broken_only=True, dry_run=False)
+    assert applied["removed_count"] == 1
+    remaining = inspect_data_validation_rules(filepath, "Data")
+    assert remaining["rule_count"] == 1
+    assert remaining["rules"][0]["applies_to"] == "A2:A4"
+
+    payload = _load_tool_payload(inspect_data_validation_rules_tool(filepath, "Data", True))
+    assert payload["operation"] == "inspect_data_validation_rules"
+    payload = _load_tool_payload(remove_data_validation_rules_tool(filepath, "Data", None, True, True))
+    assert payload["operation"] == "remove_data_validation_rules"
+    assert payload["dry_run"] is True
+
+
+def test_inspect_and_remove_broken_conditional_format_rules(tmp_path):
+    filepath = str(tmp_path / "conditional-rules.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A1"] = 1
+    ws["A2"] = 2
+    ws.conditional_formatting.add("A1:A2", FormulaRule(formula=["A1>0"]))
+    ws.conditional_formatting.add("B1:B2", FormulaRule(formula=["MissingSheet!A1>0", "#REF!>0"]))
+    wb.save(filepath)
+    wb.close()
+
+    inspected = inspect_conditional_format_rules(filepath, "Data", broken_only=True)
+    assert inspected["rule_count"] == 1
+    assert inspected["rules"][0]["rule_index"] == 2
+    assert inspected["rules"][0]["broken_reference"] is True
+
+    preview = remove_conditional_format_rules(filepath, "Data", broken_only=True, dry_run=True)
+    assert preview["removed_count"] == 1
+    assert inspect_conditional_format_rules(filepath, "Data")["rule_count"] == 2
+
+    applied = remove_conditional_format_rules(filepath, "Data", broken_only=True, dry_run=False)
+    assert applied["removed_count"] == 1
+    remaining = inspect_conditional_format_rules(filepath, "Data")
+    assert remaining["rule_count"] == 1
+    assert remaining["rules"][0]["applies_to"] == "A1:A2"
+
+    payload = _load_tool_payload(inspect_conditional_format_rules_tool(filepath, "Data", True))
+    assert payload["operation"] == "inspect_conditional_format_rules"
+    payload = _load_tool_payload(
+        remove_conditional_format_rules_tool(filepath, "Data", None, True, True)
+    )
+    assert payload["operation"] == "remove_conditional_format_rules"
+    assert payload["dry_run"] is True
+
+
+def test_plan_workbook_repairs_points_to_repair_primitives(tmp_path):
+    filepath = str(tmp_path / "repair-primitives-plan.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Value"])
+    dv = DataValidation(type="list", formula1="=MissingSheet!$A$1:$A$2")
+    dv.add("A2:A4")
+    ws.add_data_validation(dv)
+    ws.conditional_formatting.add("B2:B4", FormulaRule(formula=["#REF!>0"]))
+    wb.defined_names["BrokenRange"] = DefinedName(
+        "BrokenRange",
+        attr_text="MissingSheet!$A$1:$A$2",
+    )
+    wb.save(filepath)
+    wb.close()
+
+    result = plan_workbook_repairs(filepath)
+    steps_by_title = {step["title"]: step for step in result["steps"]}
+
+    named_range_step = steps_by_title["Inspect and repair workbook named ranges"]
+    assert named_range_step["can_execute_fully_in_sheetforge"] is True
+    assert any(tool["tool"] == "inspect_named_range" for tool in named_range_step["suggested_tools"])
+    assert any(tool["tool"] == "delete_named_range" for tool in named_range_step["suggested_tools"])
+
+    validation_step = steps_by_title["Repair broken data validation rules on 'Data'"]
+    assert validation_step["can_execute_fully_in_sheetforge"] is True
+    assert validation_step["suggested_tools"][0]["tool"] == "inspect_data_validation_rules"
+    assert validation_step["suggested_tools"][1]["tool"] == "remove_data_validation_rules"
+
+    conditional_step = steps_by_title["Review broken conditional formatting rules on 'Data'"]
+    assert conditional_step["can_execute_fully_in_sheetforge"] is True
+    assert conditional_step["suggested_tools"][0]["tool"] == "inspect_conditional_format_rules"
+    assert conditional_step["suggested_tools"][1]["tool"] == "remove_conditional_format_rules"
+
+
+def test_apply_workbook_repairs_dry_run_and_apply(tmp_path):
+    filepath = str(tmp_path / "apply-repairs.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Value"])
+
+    broken_validation = DataValidation(type="list", formula1="=MissingSheet!$A$1:$A$2")
+    broken_validation.add("A2:A4")
+    ws.add_data_validation(broken_validation)
+    ws.conditional_formatting.add("B2:B4", FormulaRule(formula=["#REF!>0"]))
+
+    hidden = wb.create_sheet("Hidden")
+    hidden.sheet_state = "veryHidden"
+
+    wb.defined_names["BrokenRange"] = DefinedName(
+        "BrokenRange",
+        attr_text="MissingSheet!$A$1:$A$2",
+    )
+    wb.save(filepath)
+    wb.close()
+
+    repair_types = [
+        "remove_broken_named_ranges",
+        "remove_broken_validations",
+        "remove_broken_conditional_formats",
+        "reveal_hidden_sheets",
+    ]
+
+    preview = apply_workbook_repairs(
+        filepath,
+        repair_types=repair_types,
+        dry_run=True,
+    )
+    assert preview["action_count"] == 4
+    assert preview["audit_before"]["hidden_sheet_count"] == 1
+    assert preview["audit_after"]["hidden_sheet_count"] == 1
+    assert preview["diff"]["summary"]["named_range_change_count"] == 0
+
+    applied = apply_workbook_repairs(
+        filepath,
+        repair_types=repair_types,
+        dry_run=False,
+    )
+    assert applied["action_count"] == 4
+    assert applied["audit_after"]["hidden_sheet_count"] == 0
+    assert applied["audit_after"]["named_range_count"] == 0
+    assert applied["audit_after"]["risk_level"] == "low"
+    assert applied["audit_after"]["high_count"] == 0
+    assert applied["audit_after"]["medium_count"] == 0
+    assert applied["diff"]["summary"]["named_range_change_count"] == 1
+    assert applied["diff"]["summary"]["validation_rule_change_count"] == 1
+    assert applied["diff"]["summary"]["conditional_format_rule_change_count"] == 1
+    assert applied["diff"]["summary"]["sheet_property_change_count"] == 1
+
+    assert list_named_ranges(filepath) == []
+    assert inspect_data_validation_rules(filepath, "Data")["rule_count"] == 0
+    assert inspect_conditional_format_rules(filepath, "Data")["rule_count"] == 0
+    audit_summary = audit_workbook(filepath)["summary"]
+    assert audit_summary["risk_level"] == "low"
+    assert audit_summary["high_count"] == 0
+    assert audit_summary["medium_count"] == 0
+
+    payload = _load_tool_payload(
+        apply_workbook_repairs_tool(filepath, repair_types, None, 1, 25, True)
+    )
+    assert payload["operation"] == "apply_workbook_repairs"
+    assert payload["dry_run"] is True
+
+
+def test_diff_workbooks_reports_structural_and_cell_changes(tmp_path):
+    before_path = str(tmp_path / "before.xlsx")
+    after_path = str(tmp_path / "after.xlsx")
+
+    before_wb = Workbook()
+    before_ws = before_wb.active
+    before_ws.title = "Data"
+    before_ws["A1"] = "Value"
+    before_ws["A2"] = 10
+    before_wb.defined_names["InputRange"] = DefinedName(
+        "InputRange",
+        attr_text="Data!$A$2:$A$2",
+    )
+    before_wb.save(before_path)
+    before_wb.close()
+
+    after_wb = Workbook()
+    after_ws = after_wb.active
+    after_ws.title = "Data"
+    after_ws["A1"] = "Value"
+    after_ws["A2"] = 20
+    after_ws["B2"] = "=A2*2"
+    extra = after_wb.create_sheet("Summary")
+    extra["A1"] = "Done"
+    after_wb.save(after_path)
+    after_wb.close()
+
+    result = diff_workbooks(before_path, after_path)
+
+    assert result["summary"]["sheet_count_before"] == 1
+    assert result["summary"]["sheet_count_after"] == 2
+    assert result["summary"]["named_range_change_count"] == 1
+    assert result["cell_changes"]["count"] >= 2
+    assert any(change["sheet_name"] == "Data" and change["cell"] == "A2" for change in result["cell_changes"]["sample"])
+    assert result["sheet_changes"]["added"] == ["Summary"]
+
+    payload = _load_tool_payload(diff_workbooks_tool(before_path, after_path, 25, True))
+    assert payload["operation"] == "diff_workbooks"
+    assert payload["data"]["summary"]["sheet_count_after"] == 2
+
+
+def test_explain_formula_cell_reports_named_ranges_and_dependents(tmp_path):
+    filepath = str(tmp_path / "formula-explain.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A1"] = "Input"
+    ws["A2"] = 10
+    ws["A3"] = 20
+    ws["B2"] = "=SUM(InputRange)"
+    ws["C2"] = "=B2*2"
+    wb.defined_names["InputRange"] = DefinedName(
+        "InputRange",
+        attr_text="Data!$A$2:$A$3",
+    )
+    wb.save(filepath)
+    wb.close()
+
+    result = explain_formula_cell(filepath, "Data", "B2")
+
+    assert result["cell"] == "B2"
+    assert result["formula"] == "=SUM(InputRange)"
+    assert result["direct_reference_count"] == 1
+    assert result["direct_references"][0]["reference_type"] == "named_range"
+    assert result["direct_references"][0]["targets"][0]["reference"] == "Data!A2:A3"
+    assert result["dependent_formulas"]["count"] == 1
+    assert result["dependent_formulas"]["sample"][0]["cell"] == "C2"
+    assert "Formula depends on named ranges." in result["hints"]
+
+    payload = _load_tool_payload(explain_formula_cell_tool(filepath, "Data", "B2", 3))
+    assert payload["operation"] == "explain_formula_cell"
+    assert payload["data"]["cell"] == "B2"
+
+
+def test_explain_formula_cell_reports_transitive_formula_precedents(tmp_path):
+    filepath = str(tmp_path / "formula-transitive.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A2"] = 10
+    ws["A3"] = 20
+    ws["B2"] = "=SUM(A2:A3)"
+    ws["C2"] = "=B2*2"
+    ws["D2"] = "=C2+5"
+    wb.save(filepath)
+    wb.close()
+
+    result = explain_formula_cell(filepath, "Data", "D2", max_depth=3)
+
+    assert result["direct_formula_precedent_count"] == 1
+    assert result["direct_formula_precedents"][0]["cell"] == "C2"
+    assert result["transitive_formula_precedent_count"] == 1
+    assert result["transitive_formula_precedents"][0]["cell"] == "B2"
+    assert result["transitive_formula_precedents"][0]["depth"] == 2
 
 
 def test_analyze_range_impact_reports_overlapping_structures(tmp_workbook):

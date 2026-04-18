@@ -177,10 +177,20 @@ Returns matches under `data.matches`:
   Audits workbook structure for high-signal issues that affect agent workflows. The response includes workbook summary counts, per-sheet assessments with recommended read tools, a sampled finding list grouped by severity/code, and deduplicated recommended actions.
 - `plan_workbook_repairs(filepath: str, header_row: int = 1, sample_limit: int = 25) -> str`
   Turns workbook audit findings into prioritized next steps. The response includes ordered repair/inspection steps, suggested SheetForge tool calls, and a `quick_wins` list for issues that can be advanced entirely inside SheetForge.
+- `apply_workbook_repairs(filepath: str, repair_types: Optional[List[str]] = None, sheet_names: Optional[List[str]] = None, header_row: int = 1, sample_limit: int = 25, dry_run: bool = True) -> str`
+  Dry-runs or applies the safe workbook-repair subset currently supported inside SheetForge: broken named ranges, broken data validation rules, broken conditional formatting rules, and optional hidden-sheet reveals. The response includes planned/applied actions, audit summary before and after, and a structural diff.
+- `diff_workbooks(before_filepath: str, after_filepath: str, sample_limit: int = 25, include_cell_changes: bool = True) -> str`
+  Compares two workbook files and reports sheet/property changes, named-range changes, table/chart changes, validation and conditional-format changes, plus sampled cell-value diffs when `include_cell_changes=True`.
 - `analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> str`
   Inspects workbook structures that overlap a worksheet range before mutation. Reports intersections with native Excel tables, chart footprints, merged ranges, named ranges, worksheet data validations, conditional formatting rules, autofilters, print areas, formula cells inside the range, and downstream formulas or rule expressions elsewhere in the workbook that reference it directly or transitively, through named ranges, or through structured table references such as `Table1[Sales]`, plus a lightweight `risk_level`.
+- `explain_formula_cell(filepath: str, sheet_name: str, cell: str, max_depth: int = 3) -> str`
+  Explains a formula cell's direct references, upstream formula-chain cells, and downstream dependent formulas. Named ranges and structured references are resolved to concrete workbook ranges when possible.
+- `inspect_named_range(filepath: str, name: str, scope_sheet: Optional[str] = None) -> str`
+  Inspects a defined name, including scope, destinations, hidden state, and whether it points at missing sheets or broken references.
 - `list_named_ranges(filepath: str) -> str`
   Returns workbook defined names, their values, and any sheet/range destinations.
+- `delete_named_range(filepath: str, name: str, scope_sheet: Optional[str] = None, dry_run: bool = False) -> str`
+  Deletes a workbook-level or sheet-scoped named range. Use `dry_run=True` to preview which definition would be removed before committing.
 - `list_all_sheets(filepath: str) -> str`
   Returns one entry per sheet, including `sheet_type`. Worksheets include `rows`, `columns`, `column_range`, and `is_empty`; chart sheets are reported with `sheet_type="chartsheet"` and zero grid dimensions.
 - `list_tables(filepath: str, sheet_name: Optional[str] = None) -> str`
@@ -229,6 +239,14 @@ Returns matches under `data.matches`:
   Validates a cell or range reference against the worksheet.
 - `get_data_validation_info(filepath: str, sheet_name: str) -> str`
   Returns JSON for data-validation rules defined in the worksheet. Chart sheets are rejected with a clear worksheet-only error.
+- `inspect_data_validation_rules(filepath: str, sheet_name: str, broken_only: bool = False) -> str`
+  Returns worksheet data validation rules with stable `rule_index` values plus `broken_reference` flags so agents can inspect and target specific rules safely.
+- `remove_data_validation_rules(filepath: str, sheet_name: str, rule_indexes: Optional[List[int]] = None, broken_only: bool = False, dry_run: bool = False) -> str`
+  Removes worksheet data validation rules by explicit index or removes all broken rules when `broken_only=True`. Use `dry_run=True` to preview the exact removals first.
+- `inspect_conditional_format_rules(filepath: str, sheet_name: str, broken_only: bool = False) -> str`
+  Returns worksheet conditional formatting rules with stable `rule_index` values plus `broken_reference` flags for broken workbook references and missing-sheet formulas.
+- `remove_conditional_format_rules(filepath: str, sheet_name: str, rule_indexes: Optional[List[int]] = None, broken_only: bool = False, dry_run: bool = False) -> str`
+  Removes worksheet conditional formatting rules by explicit index or removes all broken rules when `broken_only=True`. Use `dry_run=True` to preview the exact removals first.
 
 ## Formatting And Layout Tools
 

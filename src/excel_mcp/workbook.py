@@ -1,6 +1,6 @@
 import logging
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 AUDIT_SAMPLE_ROWS = 25
 AUDIT_LARGE_DATASET_THRESHOLD = 1000
 AUDIT_SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3}
+SUPPORTED_REPAIR_TYPES = {
+    "remove_broken_named_ranges",
+    "remove_broken_validations",
+    "remove_broken_conditional_formats",
+    "reveal_hidden_sheets",
+}
 _STRUCTURED_REFERENCE_FLAG_RANGE_RE = re.compile(
     r"^\[\[(?P<flag>#[^,\]]+)\],\[(?P<start>[^\]]+)\]:\[(?P<end>[^\]]+)\]\]$"
 )
@@ -484,6 +490,216 @@ def _resolve_table_structured_reference(
     ]
 
 
+def _resolve_table_structured_reference_targets(
+    wb: Any,
+    *,
+    local_reference: str,
+    formula_sheet_name: str,
+    formula_row: int,
+    scope_sheet_name: str | None,
+) -> list[dict[str, Any]]:
+    parsed_reference = _parse_structured_reference(local_reference)
+    if parsed_reference is None:
+        return []
+
+    table_name, reference_parts = parsed_reference
+    table_match = _find_table_reference(wb, table_name=table_name, sheet_name=scope_sheet_name)
+    if table_match is None:
+        return []
+
+    table_sheet_name, table_ws, table = table_match
+    min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+    header_row_count = int(table.headerRowCount or 0)
+    totals_row_count = int(table.totalsRowCount or 0)
+    data_start_row = min_row + header_row_count
+    data_end_row = max_row - totals_row_count
+
+    row_selector = reference_parts["row_selector"]
+    if row_selector == "all":
+        row_start, row_end = min_row, max_row
+    elif row_selector == "data":
+        row_start, row_end = data_start_row, data_end_row
+    elif row_selector == "headers":
+        if header_row_count < 1:
+            return []
+        row_start, row_end = min_row, min_row + header_row_count - 1
+    elif row_selector == "totals":
+        if totals_row_count < 1:
+            return []
+        row_start, row_end = max_row - totals_row_count + 1, max_row
+    elif row_selector == "thisrow":
+        if table_sheet_name != formula_sheet_name or not (data_start_row <= formula_row <= data_end_row):
+            return []
+        row_start = row_end = formula_row
+    else:
+        return []
+
+    if row_start > row_end:
+        return []
+
+    start_column_name = reference_parts["start_column"]
+    end_column_name = reference_parts["end_column"]
+    if start_column_name is None:
+        column_start, column_end = min_col, max_col
+    else:
+        column_lookup = _table_column_lookup(table_ws, table)
+        if start_column_name not in column_lookup or end_column_name not in column_lookup:
+            return []
+        column_start = column_lookup[start_column_name]
+        column_end = column_lookup[end_column_name]
+        if column_start > column_end:
+            column_start, column_end = column_end, column_start
+
+    resolved_range = _bounds_to_range(row_start, column_start, row_end, column_end)
+    return [
+        {
+            "sheet_name": table_sheet_name,
+            "range": resolved_range,
+            "reference": f"{table_sheet_name}!{resolved_range}",
+            "reference_type": "structured_reference",
+            "table_name": table.displayName,
+            "structured_reference": local_reference,
+        }
+    ]
+
+
+def _resolve_formula_reference_targets(
+    wb: Any,
+    *,
+    token_value: str,
+    formula_sheet_name: str,
+    formula_row: int,
+) -> list[dict[str, Any]]:
+    local_reference = token_value
+    reference_scope_sheet = None
+    if "!" in token_value:
+        range_sheet, local_reference = token_value.rsplit("!", 1)
+        reference_scope_sheet = range_sheet.strip().strip("'")
+
+    table_targets = _resolve_table_structured_reference_targets(
+        wb,
+        local_reference=local_reference,
+        formula_sheet_name=formula_sheet_name,
+        formula_row=formula_row,
+        scope_sheet_name=reference_scope_sheet,
+    )
+    if table_targets:
+        return table_targets
+
+    reference_sheet_name = formula_sheet_name if reference_scope_sheet is None else reference_scope_sheet
+    if reference_scope_sheet is not None and reference_sheet_name not in wb.sheetnames:
+        return [
+            {
+                "reference": token_value,
+                "reference_type": "worksheet_range",
+                "broken_reference": True,
+                "missing_sheet": reference_sheet_name,
+            }
+        ]
+
+    if reference_sheet_name in wb.sheetnames:
+        reference_ws = wb[reference_sheet_name]
+        if _sheet_type(reference_ws) != "chartsheet":
+            try:
+                _, normalized_reference = _parse_range_reference(
+                    local_reference,
+                    worksheet=reference_ws,
+                    error_cls=WorkbookError,
+                )
+            except WorkbookError:
+                pass
+            else:
+                return [
+                    {
+                        "sheet_name": reference_sheet_name,
+                        "range": normalized_reference,
+                        "reference": f"{reference_sheet_name}!{normalized_reference}",
+                        "reference_type": "worksheet_range",
+                    }
+                ]
+
+    if "[" in local_reference:
+        return [
+            {
+                "reference": token_value,
+                "reference_type": "structured_reference",
+                "broken_reference": True,
+            }
+        ]
+
+    resolved_named_range = _resolve_defined_name(
+        wb,
+        name=local_reference,
+        formula_sheet_name=formula_sheet_name,
+        scope_sheet_name=reference_scope_sheet,
+    )
+    if resolved_named_range is None:
+        return []
+
+    defined_name, local_sheet = resolved_named_range
+    try:
+        destinations = list(defined_name.destinations)
+    except Exception:
+        destinations = []
+
+    if not destinations:
+        return [
+            {
+                "reference": local_reference,
+                "reference_type": "named_range",
+                "named_range": local_reference,
+                "local_sheet": local_sheet,
+                "broken_reference": True,
+            }
+        ]
+
+    resolved_targets: list[dict[str, Any]] = []
+    for destination_sheet_name, destination_range in destinations:
+        if destination_sheet_name not in wb.sheetnames:
+            resolved_targets.append(
+                {
+                    "reference": f"{destination_sheet_name}!{destination_range}",
+                    "reference_type": "named_range",
+                    "named_range": local_reference,
+                    "local_sheet": local_sheet,
+                    "broken_reference": True,
+                    "missing_sheet": destination_sheet_name,
+                }
+            )
+            continue
+
+        destination_ws = wb[destination_sheet_name]
+        if _sheet_type(destination_ws) == "chartsheet":
+            resolved_targets.append(
+                {
+                    "reference": f"{destination_sheet_name}!{destination_range}",
+                    "reference_type": "named_range",
+                    "named_range": local_reference,
+                    "local_sheet": local_sheet,
+                    "broken_reference": True,
+                }
+            )
+            continue
+
+        for _, normalized_reference in _iter_range_references(
+            destination_range,
+            worksheet=destination_ws,
+            expected_sheet=destination_sheet_name,
+        ):
+            resolved_targets.append(
+                {
+                    "sheet_name": destination_sheet_name,
+                    "range": normalized_reference,
+                    "reference": f"{destination_sheet_name}!{normalized_reference}",
+                    "reference_type": "named_range",
+                    "named_range": local_reference,
+                    "local_sheet": local_sheet,
+                }
+            )
+
+    return resolved_targets
+
+
 def _resolve_formula_token_references(
     wb: Any,
     *,
@@ -544,6 +760,70 @@ def _resolve_formula_token_references(
         target_bounds=target_bounds,
         scope_sheet_name=reference_scope_sheet,
     )
+
+
+def _formula_text_has_broken_reference(
+    wb: Any,
+    *,
+    formula_text: Any,
+    formula_sheet_name: str,
+) -> bool:
+    if formula_text is None:
+        return False
+
+    normalized_formula = str(formula_text).strip()
+    if not normalized_formula:
+        return False
+    if "#REF!" in normalized_formula.upper():
+        return True
+    if not normalized_formula.startswith("="):
+        normalized_formula = f"={normalized_formula}"
+
+    try:
+        tokenizer = Tokenizer(normalized_formula)
+    except Exception:
+        return False
+
+    for token in tokenizer.items:
+        if token.type != "OPERAND" or token.subtype != "RANGE":
+            continue
+
+        token_value = str(token.value).strip()
+        if not token_value:
+            continue
+        if "#REF!" in token_value.upper():
+            return True
+
+        local_reference = token_value
+        reference_scope_sheet = None
+        if "!" in token_value:
+            range_sheet, local_reference = token_value.rsplit("!", 1)
+            reference_scope_sheet = range_sheet.strip().strip("'")
+            if reference_scope_sheet and reference_scope_sheet not in wb.sheetnames:
+                return True
+
+        if "[" in local_reference:
+            continue
+
+        resolved_named_range = _resolve_defined_name(
+            wb,
+            name=local_reference,
+            formula_sheet_name=formula_sheet_name,
+            scope_sheet_name=reference_scope_sheet,
+        )
+        if resolved_named_range is None:
+            continue
+
+        defined_name, _ = resolved_named_range
+        try:
+            destinations = list(defined_name.destinations)
+        except Exception:
+            destinations = []
+
+        if any(sheet_name not in wb.sheetnames for sheet_name, _ in destinations):
+            return True
+
+    return False
 
 
 def _extract_formula_dependencies(
@@ -1019,38 +1299,49 @@ def _cells_with_error_values(ws: Worksheet) -> list[str]:
     return cells
 
 
-def _broken_validation_rules(ws: Worksheet) -> list[dict[str, Any]]:
-    broken_rules: list[dict[str, Any]] = []
-    for validation in getattr(getattr(ws, "data_validations", None), "dataValidation", []):
-        formulas = [validation.formula1, validation.formula2]
-        if not any(formula and "#REF!" in str(formula).upper() for formula in formulas):
-            continue
-        broken_rules.append(
-            {
-                "applies_to": str(validation.sqref),
-                "validation_type": validation.type,
-                "formula1": validation.formula1 or None,
-                "formula2": validation.formula2 or None,
-            }
+def _broken_validation_rules(
+    wb: Any,
+    *,
+    ws: Worksheet,
+    sheet_name: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "applies_to": rule["applies_to"],
+            "validation_type": rule["validation_type"],
+            "formula1": rule["formula1"],
+            "formula2": rule["formula2"],
+            "rule_index": rule["rule_index"],
+        }
+        for rule in _inspect_validation_rules(
+            wb,
+            ws=ws,
+            sheet_name=sheet_name,
         )
-    return broken_rules
+        if rule["broken_reference"]
+    ]
 
 
-def _broken_conditional_format_rules(ws: Worksheet) -> list[dict[str, Any]]:
-    broken_rules: list[dict[str, Any]] = []
-    for conditional_format, rules in getattr(ws.conditional_formatting, "_cf_rules", {}).items():
-        for rule in rules:
-            formulas = list(getattr(rule, "formula", None) or [])
-            if not any("#REF!" in str(formula).upper() for formula in formulas):
-                continue
-            broken_rules.append(
-                {
-                    "applies_to": str(conditional_format.sqref),
-                    "rule_type": getattr(rule, "type", None),
-                    "formula": formulas,
-                }
-            )
-    return broken_rules
+def _broken_conditional_format_rules(
+    wb: Any,
+    *,
+    ws: Worksheet,
+    sheet_name: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "applies_to": rule["applies_to"],
+            "rule_type": rule["rule_type"],
+            "formula": rule["formula"],
+            "rule_index": rule["rule_index"],
+        }
+        for rule in _inspect_conditional_format_rules(
+            wb,
+            ws=ws,
+            sheet_name=sheet_name,
+        )
+        if rule["broken_reference"]
+    ]
 
 
 def _worksheet_audit_assessment(
@@ -1297,10 +1588,294 @@ def _serialize_named_ranges(wb: Any) -> list[dict[str, Any]]:
                 "destinations": destinations,
                 "local_sheet": local_sheet,
                 "hidden": bool(getattr(defined_name, "hidden", False)),
+                "broken_reference": "#REF!" in str(defined_name.value or "").upper(),
+                "missing_sheets": sorted(
+                    {
+                        destination["sheet_name"]
+                        for destination in destinations
+                        if destination["sheet_name"] not in wb.sheetnames
+                    }
+                ),
             }
         )
 
     return sorted(ranges, key=lambda item: item["name"].lower())
+
+
+def _named_range_sources(
+    wb: Any,
+    *,
+    name: str | None = None,
+    scope_sheet: str | None = None,
+) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+
+    for defined_name, local_sheet in (
+        (
+            defined_name,
+            _defined_name_local_sheet(wb, defined_name),
+        )
+        for defined_name in wb.defined_names.values()
+    ):
+        current_name = getattr(defined_name, "name", None)
+        if current_name is None:
+            continue
+        if name is not None and current_name != name:
+            continue
+        if scope_sheet is not None and local_sheet != scope_sheet:
+            continue
+        sources.append(
+            {
+                "name": current_name,
+                "local_sheet": local_sheet,
+                "container": "workbook",
+                "defined_name": defined_name,
+            }
+        )
+
+    for ws in getattr(wb, "worksheets", []):
+        if scope_sheet is not None and ws.title != scope_sheet:
+            continue
+        for current_name, defined_name in ws.defined_names.items():
+            if name is not None and current_name != name:
+                continue
+            sources.append(
+                {
+                    "name": current_name,
+                    "local_sheet": ws.title,
+                    "container": "worksheet",
+                    "defined_name": defined_name,
+                }
+            )
+
+    return sources
+
+
+def _serialize_named_range_source(wb: Any, source: dict[str, Any]) -> dict[str, Any]:
+    defined_name = source["defined_name"]
+    destinations = []
+    try:
+        destinations = [
+            {
+                "sheet_name": sheet_name,
+                "range": cell_range,
+            }
+            for sheet_name, cell_range in defined_name.destinations
+        ]
+    except Exception:
+        destinations = []
+
+    return {
+        "name": source["name"],
+        "type": defined_name.type,
+        "value": defined_name.value,
+        "destinations": destinations,
+        "local_sheet": source["local_sheet"],
+        "hidden": bool(getattr(defined_name, "hidden", False)),
+        "container": source["container"],
+        "broken_reference": "#REF!" in str(defined_name.value or "").upper(),
+        "missing_sheets": sorted(
+            {
+                destination["sheet_name"]
+                for destination in destinations
+                if destination["sheet_name"] not in wb.sheetnames
+            }
+        ),
+    }
+
+
+def _inspect_validation_rules(
+    wb: Any,
+    *,
+    ws: Worksheet,
+    sheet_name: str,
+) -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = []
+    for rule_index, validation in enumerate(
+        getattr(getattr(ws, "data_validations", None), "dataValidation", []),
+        start=1,
+    ):
+        formulas = [validation.formula1, validation.formula2]
+        rules.append(
+            {
+                "rule_index": rule_index,
+                "applies_to": str(validation.sqref),
+                "validation_type": validation.type,
+                "operator": validation.operator or None,
+                "formula1": validation.formula1 or None,
+                "formula2": validation.formula2 or None,
+                "allow_blank": bool(validation.allowBlank),
+                "broken_reference": any(
+                    _formula_text_has_broken_reference(
+                        wb,
+                        formula_text=formula,
+                        formula_sheet_name=sheet_name,
+                    )
+                    for formula in formulas
+                ),
+            }
+        )
+    return rules
+
+
+def _inspect_conditional_format_rules(
+    wb: Any,
+    *,
+    ws: Worksheet,
+    sheet_name: str,
+) -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = []
+    rule_index = 1
+    for conditional_format, format_rules in getattr(ws.conditional_formatting, "_cf_rules", {}).items():
+        for rule in format_rules:
+            formulas = list(getattr(rule, "formula", None) or [])
+            rules.append(
+                {
+                    "rule_index": rule_index,
+                    "applies_to": str(conditional_format.sqref),
+                    "rule_type": getattr(rule, "type", None),
+                    "operator": getattr(rule, "operator", None),
+                    "priority": getattr(rule, "priority", None),
+                    "stop_if_true": bool(getattr(rule, "stopIfTrue", False)),
+                    "formula": formulas,
+                    "broken_reference": any(
+                        _formula_text_has_broken_reference(
+                            wb,
+                            formula_text=formula,
+                            formula_sheet_name=sheet_name,
+                        )
+                        for formula in formulas
+                    ),
+                }
+            )
+            rule_index += 1
+    return rules
+
+
+def _normalize_rule_indexes(
+    rule_indexes: list[int] | None,
+    *,
+    label: str,
+) -> list[int]:
+    if rule_indexes is None:
+        return []
+    if not isinstance(rule_indexes, list):
+        raise WorkbookError(f"{label} must be a list of positive integers")
+
+    normalized: list[int] = []
+    for value in rule_indexes:
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise WorkbookError(f"{label} must contain only positive integers")
+        normalized.append(value)
+    return normalized
+
+
+def _remove_named_range_sources(
+    wb: Any,
+    *,
+    name: str,
+    scope_sheet: str | None = None,
+) -> list[dict[str, Any]]:
+    matches = _named_range_sources(wb, name=name, scope_sheet=scope_sheet)
+    if not matches:
+        raise WorkbookError(
+            f"Named range '{name}'"
+            + (f" scoped to '{scope_sheet}'" if scope_sheet else "")
+            + " not found"
+        )
+    if scope_sheet is None and len(matches) > 1:
+        raise WorkbookError(
+            f"Named range '{name}' exists in multiple scopes; specify scope_sheet to remove the intended one"
+        )
+
+    removed: list[dict[str, Any]] = []
+    for match in matches:
+        removed.append(_serialize_named_range_source(wb, match))
+        if match["container"] == "worksheet":
+            ws = wb[match["local_sheet"]]
+            ws.defined_names.pop(name, None)
+        else:
+            wb.defined_names.pop(name, None)
+    return removed
+
+
+def _remove_validation_rules(
+    wb: Any,
+    ws: Worksheet,
+    *,
+    rule_indexes: list[int] | None = None,
+    broken_only: bool = False,
+) -> list[dict[str, Any]]:
+    normalized_indexes = set(_normalize_rule_indexes(rule_indexes, label="rule_indexes"))
+    if not normalized_indexes and not broken_only:
+        raise WorkbookError("Specify rule_indexes or set broken_only=True")
+
+    current_rules = _inspect_validation_rules(
+        wb,
+        ws=ws,
+        sheet_name=ws.title,
+    )
+    removed = [
+        rule
+        for rule in current_rules
+        if (rule["rule_index"] in normalized_indexes)
+        or (broken_only and rule["broken_reference"])
+    ]
+    if not removed:
+        return []
+
+    removed_indexes = {rule["rule_index"] for rule in removed}
+    kept = [
+        validation
+        for rule_index, validation in enumerate(
+            getattr(getattr(ws, "data_validations", None), "dataValidation", []),
+            start=1,
+        )
+        if rule_index not in removed_indexes
+    ]
+    ws.data_validations.dataValidation = kept
+    return removed
+
+
+def _remove_conditional_format_rules(
+    wb: Any,
+    ws: Worksheet,
+    *,
+    rule_indexes: list[int] | None = None,
+    broken_only: bool = False,
+) -> list[dict[str, Any]]:
+    normalized_indexes = set(_normalize_rule_indexes(rule_indexes, label="rule_indexes"))
+    if not normalized_indexes and not broken_only:
+        raise WorkbookError("Specify rule_indexes or set broken_only=True")
+
+    current_rules = _inspect_conditional_format_rules(
+        wb,
+        ws=ws,
+        sheet_name=ws.title,
+    )
+    removed = [
+        rule
+        for rule in current_rules
+        if (rule["rule_index"] in normalized_indexes)
+        or (broken_only and rule["broken_reference"])
+    ]
+    if not removed:
+        return []
+
+    removed_indexes = {rule["rule_index"] for rule in removed}
+    rebuilt_rules: OrderedDict[Any, list[Any]] = OrderedDict()
+    current_index = 1
+    for conditional_format, format_rules in getattr(ws.conditional_formatting, "_cf_rules", {}).items():
+        kept_rules: list[Any] = []
+        for rule in format_rules:
+            if current_index not in removed_indexes:
+                kept_rules.append(rule)
+            current_index += 1
+        if kept_rules:
+            rebuilt_rules[conditional_format] = kept_rules
+
+    ws.conditional_formatting._cf_rules = rebuilt_rules
+    return removed
 
 
 @contextmanager
@@ -1410,6 +1985,46 @@ def list_named_ranges(filepath: str) -> list[dict[str, Any]]:
             return _serialize_named_ranges(wb)
     except Exception as e:
         logger.error(f"Failed to list named ranges: {e}")
+        raise WorkbookError(str(e))
+
+
+def inspect_named_range(
+    filepath: str,
+    name: str,
+    scope_sheet: str | None = None,
+) -> dict[str, Any]:
+    """Inspect a named range and report scope, destinations, and breakage signals."""
+    try:
+        if not str(name).strip():
+            raise WorkbookError("name is required")
+
+        with safe_workbook(filepath) as wb:
+            matches = _named_range_sources(
+                wb,
+                name=str(name).strip(),
+                scope_sheet=scope_sheet,
+            )
+            if not matches:
+                raise WorkbookError(
+                    f"Named range '{name}'"
+                    + (f" scoped to '{scope_sheet}'" if scope_sheet else "")
+                    + " not found"
+                )
+
+            serialized = [
+                _serialize_named_range_source(wb, match)
+                for match in matches
+            ]
+            return {
+                "name": str(name).strip(),
+                "scope_sheet": scope_sheet,
+                "match_count": len(serialized),
+                "matches": serialized,
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to inspect named range '{name}': {e}")
         raise WorkbookError(str(e))
 
 def get_workbook_info(filepath: str, include_ranges: bool = False) -> dict[str, Any]:
@@ -1762,7 +2377,11 @@ def audit_workbook(
                         )
                     )
 
-                broken_validations = _broken_validation_rules(ws)
+                broken_validations = _broken_validation_rules(
+                    wb,
+                    ws=ws,
+                    sheet_name=sheet_name,
+                )
                 if broken_validations:
                     sheet_findings.append(
                         _audit_finding(
@@ -1778,7 +2397,11 @@ def audit_workbook(
                         )
                     )
 
-                broken_conditional_formats = _broken_conditional_format_rules(ws)
+                broken_conditional_formats = _broken_conditional_format_rules(
+                    wb,
+                    ws=ws,
+                    sheet_name=sheet_name,
+                )
                 if broken_conditional_formats:
                     sheet_findings.append(
                         _audit_finding(
@@ -1954,6 +2577,34 @@ def plan_workbook_repairs(
             if finding["code"] in {"broken_named_range_reference", "named_range_missing_sheet"}
         ]
         if workbook_named_range_findings:
+            named_range_tools = []
+            for finding in workbook_named_range_findings:
+                details = finding.get("details", {})
+                named_range_name = details.get("name")
+                local_sheet = details.get("local_sheet")
+                if not named_range_name:
+                    continue
+                named_range_tools.extend(
+                    [
+                        {
+                            "tool": "inspect_named_range",
+                            "args": {
+                                "filepath": filepath,
+                                "name": named_range_name,
+                                "scope_sheet": local_sheet,
+                            },
+                        },
+                        {
+                            "tool": "delete_named_range",
+                            "args": {
+                                "filepath": filepath,
+                                "name": named_range_name,
+                                "scope_sheet": local_sheet,
+                                "dry_run": True,
+                            },
+                        },
+                    ]
+                )
             steps.append(
                 {
                     "priority": "high",
@@ -1965,14 +2616,25 @@ def plan_workbook_repairs(
                         }
                     ),
                     "reason": "Broken or missing-sheet named ranges can silently break formulas, validations, and downstream automation.",
-                    "can_execute_fully_in_sheetforge": False,
-                    "suggested_tools": [
-                        {
-                            "tool": "list_named_ranges",
-                            "args": {"filepath": filepath},
-                        }
-                    ],
-                    "follow_up": "Repair or recreate broken defined names after identifying the intended destinations.",
+                    "can_execute_fully_in_sheetforge": True,
+                    "suggested_tools": _unique_step_tools(
+                        [
+                            {
+                                "tool": "list_named_ranges",
+                                "args": {"filepath": filepath},
+                            },
+                            {
+                                "tool": "apply_workbook_repairs",
+                                "args": {
+                                    "filepath": filepath,
+                                    "repair_types": ["remove_broken_named_ranges"],
+                                    "dry_run": True,
+                                },
+                            },
+                            *named_range_tools,
+                        ]
+                    ),
+                    "follow_up": "Inspect the broken scopes, then dry-run or apply named-range deletion for entries that are no longer valid.",
                 }
             )
 
@@ -2004,6 +2666,15 @@ def plan_workbook_repairs(
                                         "filepath": filepath,
                                         "sheet_name": sheet_name,
                                         "max_rows": 5,
+                                    },
+                                },
+                                {
+                                    "tool": "apply_workbook_repairs",
+                                    "args": {
+                                        "filepath": filepath,
+                                        "repair_types": ["reveal_hidden_sheets"],
+                                        "sheet_names": [sheet_name],
+                                        "dry_run": True,
                                     },
                                 },
                             ]
@@ -2079,14 +2750,36 @@ def plan_workbook_repairs(
                         "sheet_name": sheet_name,
                         "finding_codes": ["broken_validation_reference"],
                         "reason": "Validation formulas with #REF! can mislead users and break validation-aware automation.",
-                        "can_execute_fully_in_sheetforge": False,
+                        "can_execute_fully_in_sheetforge": True,
                         "suggested_tools": [
                             {
-                                "tool": "get_data_validation_info",
-                                "args": {"filepath": filepath, "sheet_name": sheet_name},
-                            }
+                                "tool": "inspect_data_validation_rules",
+                                "args": {
+                                    "filepath": filepath,
+                                    "sheet_name": sheet_name,
+                                    "broken_only": True,
+                                },
+                            },
+                            {
+                                "tool": "remove_data_validation_rules",
+                                "args": {
+                                    "filepath": filepath,
+                                    "sheet_name": sheet_name,
+                                    "broken_only": True,
+                                    "dry_run": True,
+                                },
+                            },
+                            {
+                                "tool": "apply_workbook_repairs",
+                                "args": {
+                                    "filepath": filepath,
+                                    "repair_types": ["remove_broken_validations"],
+                                    "sheet_names": [sheet_name],
+                                    "dry_run": True,
+                                },
+                            },
                         ],
-                        "follow_up": "Repair or recreate the affected validation rules once their intended source ranges are known.",
+                        "follow_up": "Inspect the broken validation rules, then dry-run or apply removal for the invalid entries before recreating them if needed.",
                     }
                 )
 
@@ -2102,18 +2795,36 @@ def plan_workbook_repairs(
                         "sheet_name": sheet_name,
                         "finding_codes": ["broken_conditional_format_reference"],
                         "reason": "Broken conditional formatting rules can make dashboards and visual QA misleading even when cell values still exist.",
-                        "can_execute_fully_in_sheetforge": False,
+                        "can_execute_fully_in_sheetforge": True,
                         "suggested_tools": [
                             {
-                                "tool": "audit_workbook",
+                                "tool": "inspect_conditional_format_rules",
                                 "args": {
                                     "filepath": filepath,
-                                    "header_row": header_row,
-                                    "sample_limit": sample_limit,
+                                    "sheet_name": sheet_name,
+                                    "broken_only": True,
                                 },
-                            }
+                            },
+                            {
+                                "tool": "remove_conditional_format_rules",
+                                "args": {
+                                    "filepath": filepath,
+                                    "sheet_name": sheet_name,
+                                    "broken_only": True,
+                                    "dry_run": True,
+                                },
+                            },
+                            {
+                                "tool": "apply_workbook_repairs",
+                                "args": {
+                                    "filepath": filepath,
+                                    "repair_types": ["remove_broken_conditional_formats"],
+                                    "sheet_names": [sheet_name],
+                                    "dry_run": True,
+                                },
+                            },
                         ],
-                        "follow_up": "Repair the broken conditional-format formulas in the workbook after reviewing the affected applies_to ranges.",
+                        "follow_up": "Inspect the broken conditional-format rules, then dry-run or apply removal for invalid rules before recreating them if needed.",
                     }
                 )
 
@@ -2546,4 +3257,1217 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
         raise
     except Exception as e:
         logger.error(f"Failed to analyze range impact: {e}")
+        raise WorkbookError(str(e))
+
+
+def inspect_data_validation_rules(
+    filepath: str,
+    sheet_name: str,
+    broken_only: bool = False,
+) -> dict[str, Any]:
+    """Inspect worksheet data validation rules with stable rule indexes."""
+    try:
+        if isinstance(broken_only, bool) is False:
+            raise WorkbookError("broken_only must be a boolean")
+
+        with safe_workbook(filepath) as wb:
+            ws = require_worksheet(
+                wb,
+                sheet_name,
+                error_cls=WorkbookError,
+                operation="data validation inspection",
+            )
+            rules = _inspect_validation_rules(
+                wb,
+                ws=ws,
+                sheet_name=sheet_name,
+            )
+            if broken_only:
+                rules = [rule for rule in rules if rule["broken_reference"]]
+            return {
+                "sheet_name": sheet_name,
+                "broken_only": broken_only,
+                "rule_count": len(rules),
+                "rules": rules,
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to inspect data validation rules: {e}")
+        raise WorkbookError(str(e))
+
+
+def inspect_conditional_format_rules(
+    filepath: str,
+    sheet_name: str,
+    broken_only: bool = False,
+) -> dict[str, Any]:
+    """Inspect worksheet conditional formatting rules with stable rule indexes."""
+    try:
+        if isinstance(broken_only, bool) is False:
+            raise WorkbookError("broken_only must be a boolean")
+
+        with safe_workbook(filepath) as wb:
+            ws = require_worksheet(
+                wb,
+                sheet_name,
+                error_cls=WorkbookError,
+                operation="conditional formatting inspection",
+            )
+            rules = _inspect_conditional_format_rules(
+                wb,
+                ws=ws,
+                sheet_name=sheet_name,
+            )
+            if broken_only:
+                rules = [rule for rule in rules if rule["broken_reference"]]
+            return {
+                "sheet_name": sheet_name,
+                "broken_only": broken_only,
+                "rule_count": len(rules),
+                "rules": rules,
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to inspect conditional formatting rules: {e}")
+        raise WorkbookError(str(e))
+
+
+def delete_named_range(
+    filepath: str,
+    name: str,
+    scope_sheet: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Delete a workbook-level or sheet-scoped named range."""
+    try:
+        if not str(name).strip():
+            raise WorkbookError("name is required")
+        if isinstance(dry_run, bool) is False:
+            raise WorkbookError("dry_run must be a boolean")
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            removed = _remove_named_range_sources(
+                wb,
+                name=str(name).strip(),
+                scope_sheet=scope_sheet,
+            )
+            return {
+                "message": (
+                    f"{'Previewed deletion of' if dry_run else 'Deleted'} "
+                    f"{len(removed)} named range(s)"
+                ),
+                "name": str(name).strip(),
+                "scope_sheet": scope_sheet,
+                "removed_count": len(removed),
+                "removed": removed,
+                "dry_run": dry_run,
+                "changes": [
+                    {
+                        "type": "delete_named_range",
+                        "name": item["name"],
+                        "local_sheet": item["local_sheet"],
+                        "scope": item["container"],
+                    }
+                    for item in removed
+                ],
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete named range '{name}': {e}")
+        raise WorkbookError(str(e))
+
+
+def remove_data_validation_rules(
+    filepath: str,
+    sheet_name: str,
+    rule_indexes: list[int] | None = None,
+    broken_only: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Remove selected worksheet data validation rules."""
+    try:
+        if isinstance(broken_only, bool) is False:
+            raise WorkbookError("broken_only must be a boolean")
+        if isinstance(dry_run, bool) is False:
+            raise WorkbookError("dry_run must be a boolean")
+        normalized_indexes = _normalize_rule_indexes(rule_indexes, label="rule_indexes")
+        if not normalized_indexes and not broken_only:
+            raise WorkbookError("Specify rule_indexes or set broken_only=True")
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            ws = require_worksheet(
+                wb,
+                sheet_name,
+                error_cls=WorkbookError,
+                operation="data validation removal",
+            )
+            before_rules = _inspect_validation_rules(
+                wb,
+                ws=ws,
+                sheet_name=sheet_name,
+            )
+            if dry_run:
+                removed = [
+                    rule
+                    for rule in before_rules
+                    if (rule["rule_index"] in normalized_indexes)
+                    or (broken_only and rule["broken_reference"])
+                ]
+            else:
+                removed = _remove_validation_rules(
+                    wb,
+                    ws,
+                    rule_indexes=normalized_indexes,
+                    broken_only=broken_only,
+                )
+            return {
+                "message": (
+                    f"{'Previewed removal of' if dry_run else 'Removed'} "
+                    f"{len(removed)} data validation rule(s) from '{sheet_name}'"
+                ),
+                "sheet_name": sheet_name,
+                "broken_only": broken_only,
+                "rule_indexes": normalized_indexes,
+                "removed_count": len(removed),
+                "removed_rules": removed,
+                "remaining_rule_count": len(before_rules) - len(removed),
+                "dry_run": dry_run,
+                "changes": [
+                    {
+                        "type": "remove_data_validation_rule",
+                        "sheet_name": sheet_name,
+                        "rule_index": rule["rule_index"],
+                        "applies_to": rule["applies_to"],
+                    }
+                    for rule in removed
+                ],
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to remove data validation rules: {e}")
+        raise WorkbookError(str(e))
+
+
+def remove_conditional_format_rules(
+    filepath: str,
+    sheet_name: str,
+    rule_indexes: list[int] | None = None,
+    broken_only: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Remove selected worksheet conditional formatting rules."""
+    try:
+        if isinstance(broken_only, bool) is False:
+            raise WorkbookError("broken_only must be a boolean")
+        if isinstance(dry_run, bool) is False:
+            raise WorkbookError("dry_run must be a boolean")
+        normalized_indexes = _normalize_rule_indexes(rule_indexes, label="rule_indexes")
+        if not normalized_indexes and not broken_only:
+            raise WorkbookError("Specify rule_indexes or set broken_only=True")
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            ws = require_worksheet(
+                wb,
+                sheet_name,
+                error_cls=WorkbookError,
+                operation="conditional formatting removal",
+            )
+            before_rules = _inspect_conditional_format_rules(
+                wb,
+                ws=ws,
+                sheet_name=sheet_name,
+            )
+            if dry_run:
+                removed = [
+                    rule
+                    for rule in before_rules
+                    if (rule["rule_index"] in normalized_indexes)
+                    or (broken_only and rule["broken_reference"])
+                ]
+            else:
+                removed = _remove_conditional_format_rules(
+                    wb,
+                    ws,
+                    rule_indexes=normalized_indexes,
+                    broken_only=broken_only,
+                )
+            return {
+                "message": (
+                    f"{'Previewed removal of' if dry_run else 'Removed'} "
+                    f"{len(removed)} conditional formatting rule(s) from '{sheet_name}'"
+                ),
+                "sheet_name": sheet_name,
+                "broken_only": broken_only,
+                "rule_indexes": normalized_indexes,
+                "removed_count": len(removed),
+                "removed_rules": removed,
+                "remaining_rule_count": len(before_rules) - len(removed),
+                "dry_run": dry_run,
+                "changes": [
+                    {
+                        "type": "remove_conditional_format_rule",
+                        "sheet_name": sheet_name,
+                        "rule_index": rule["rule_index"],
+                        "applies_to": rule["applies_to"],
+                    }
+                    for rule in removed
+                ],
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to remove conditional formatting rules: {e}")
+        raise WorkbookError(str(e))
+
+
+def _normalize_string_list(
+    values: list[str] | None,
+    *,
+    label: str,
+) -> list[str]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise WorkbookError(f"{label} must be a list of strings")
+
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise WorkbookError(f"{label} must contain only non-empty strings")
+        normalized.append(value.strip())
+    return normalized
+
+
+def _normalize_repair_types(repair_types: list[str] | None) -> list[str]:
+    normalized = _normalize_string_list(repair_types, label="repair_types")
+    invalid = sorted(set(normalized) - SUPPORTED_REPAIR_TYPES)
+    if invalid:
+        raise WorkbookError(
+            "Unsupported repair_types: " + ", ".join(invalid)
+        )
+    return normalized
+
+
+def _snapshot_workbook_state(
+    wb: Any,
+) -> dict[str, Any]:
+    from .chart import (
+        DEFAULT_CHART_HEIGHT,
+        DEFAULT_CHART_WIDTH,
+        _chart_occupied_range,
+        _chart_type_name,
+        _extract_chart_anchor,
+        _extract_chart_dimensions,
+        _extract_title_text,
+    )
+    from .tables import _build_table_metadata
+
+    sheets: dict[str, dict[str, Any]] = {}
+    total_tables = 0
+    total_charts = 0
+    total_validation_rules = 0
+    total_conditional_rules = 0
+    hidden_sheet_count = 0
+
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        visibility = getattr(ws, "sheet_state", "visible")
+        if visibility != "visible":
+            hidden_sheet_count += 1
+
+        if _sheet_type(ws) == "chartsheet":
+            charts = []
+            for chart_index, chart in enumerate(getattr(ws, "_charts", []), start=1):
+                width, height = _extract_chart_dimensions(chart)
+                anchor = _extract_chart_anchor(chart)
+                chart_info = {
+                    "chart_index": chart_index,
+                    "chart_type": _chart_type_name(chart),
+                    "anchor": anchor,
+                    "title": _extract_title_text(getattr(chart, "title", None)),
+                    "width": width,
+                    "height": height,
+                }
+                if anchor:
+                    chart_info["occupied_range"] = _chart_occupied_range(
+                        ws,
+                        anchor,
+                        width=width or DEFAULT_CHART_WIDTH,
+                        height=height or DEFAULT_CHART_HEIGHT,
+                    )
+                charts.append(chart_info)
+
+            total_charts += len(charts)
+            sheets[sheet_name] = {
+                "sheet_name": sheet_name,
+                "sheet_type": "chartsheet",
+                "visibility": visibility,
+                "charts": charts,
+            }
+            continue
+
+        rows, columns, _, _ = _get_sheet_usage(ws)
+        tables = [
+            {
+                "table_name": metadata["table_name"],
+                "range": metadata["range"],
+                "data_row_count": metadata["data_row_count"],
+                "column_count": metadata["column_count"],
+            }
+            for metadata in (
+                _build_table_metadata(sheet_name, ws, table)
+                for table in ws.tables.values()
+            )
+        ]
+        charts = []
+        for chart_index, chart in enumerate(getattr(ws, "_charts", []), start=1):
+            width, height = _extract_chart_dimensions(chart)
+            anchor = _extract_chart_anchor(chart)
+            chart_info = {
+                "chart_index": chart_index,
+                "chart_type": _chart_type_name(chart),
+                "anchor": anchor,
+                "title": _extract_title_text(getattr(chart, "title", None)),
+                "width": width,
+                "height": height,
+            }
+            if anchor:
+                chart_info["occupied_range"] = _chart_occupied_range(
+                    ws,
+                    anchor,
+                    width=width or DEFAULT_CHART_WIDTH,
+                    height=height or DEFAULT_CHART_HEIGHT,
+                )
+            charts.append(chart_info)
+
+        validation_rules = _inspect_validation_rules(
+            wb,
+            ws=ws,
+            sheet_name=sheet_name,
+        )
+        conditional_rules = _inspect_conditional_format_rules(
+            wb,
+            ws=ws,
+            sheet_name=sheet_name,
+        )
+
+        total_tables += len(tables)
+        total_charts += len(charts)
+        total_validation_rules += len(validation_rules)
+        total_conditional_rules += len(conditional_rules)
+
+        sheets[sheet_name] = {
+            "sheet_name": sheet_name,
+            "sheet_type": "worksheet",
+            "visibility": visibility,
+            "rows": rows,
+            "columns": columns,
+            "used_range": _get_used_range(ws),
+            "tables": tables,
+            "charts": charts,
+            "validation_rules": validation_rules,
+            "conditional_format_rules": conditional_rules,
+        }
+
+    named_ranges = _serialize_named_ranges(wb)
+    return {
+        "summary": {
+            "sheet_count": len(wb.sheetnames),
+            "table_count": total_tables,
+            "chart_count": total_charts,
+            "named_range_count": len(named_ranges),
+            "validation_rule_count": total_validation_rules,
+            "conditional_format_rule_count": total_conditional_rules,
+            "hidden_sheet_count": hidden_sheet_count,
+        },
+        "sheet_order": list(wb.sheetnames),
+        "sheets": sheets,
+        "named_ranges": named_ranges,
+    }
+
+
+def _signature_map(
+    items: list[dict[str, Any]],
+    *,
+    key_fields: tuple[str, ...],
+) -> dict[tuple[Any, ...], dict[str, Any]]:
+    return {
+        tuple(item.get(field) for field in key_fields): item
+        for item in items
+    }
+
+
+def _strip_rule_index(rule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in rule.items()
+        if key != "rule_index"
+    }
+
+
+def _freeze_signature_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return tuple(_freeze_signature_value(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(
+            (key, _freeze_signature_value(item))
+            for key, item in sorted(value.items())
+        )
+    return value
+
+
+def _diff_named_ranges(
+    before_snapshot: dict[str, Any],
+    after_snapshot: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    before_map = _signature_map(
+        before_snapshot["named_ranges"],
+        key_fields=("name", "local_sheet"),
+    )
+    after_map = _signature_map(
+        after_snapshot["named_ranges"],
+        key_fields=("name", "local_sheet"),
+    )
+
+    added = [
+        item for key, item in after_map.items()
+        if key not in before_map
+    ]
+    removed = [
+        item for key, item in before_map.items()
+        if key not in after_map
+    ]
+    changed = [
+        {
+            "name": key[0],
+            "local_sheet": key[1],
+            "before": before_map[key],
+            "after": after_map[key],
+        }
+        for key in before_map.keys() & after_map.keys()
+        if before_map[key] != after_map[key]
+    ]
+    return {
+        "added": sorted(added, key=lambda item: (item["name"], str(item["local_sheet"]))),
+        "removed": sorted(removed, key=lambda item: (item["name"], str(item["local_sheet"]))),
+        "changed": sorted(changed, key=lambda item: (item["name"], str(item["local_sheet"]))),
+    }
+
+
+def _diff_workbook_snapshots(
+    before_snapshot: dict[str, Any],
+    after_snapshot: dict[str, Any],
+    *,
+    sample_limit: int,
+) -> dict[str, Any]:
+    before_sheets = before_snapshot["sheets"]
+    after_sheets = after_snapshot["sheets"]
+
+    added_sheet_names = sorted(set(after_sheets) - set(before_sheets))
+    removed_sheet_names = sorted(set(before_sheets) - set(after_sheets))
+
+    sheet_property_changes: list[dict[str, Any]] = []
+    table_changes: list[dict[str, Any]] = []
+    chart_changes: list[dict[str, Any]] = []
+    validation_changes: list[dict[str, Any]] = []
+    conditional_changes: list[dict[str, Any]] = []
+
+    for sheet_name in sorted(set(before_sheets) & set(after_sheets)):
+        before_sheet = before_sheets[sheet_name]
+        after_sheet = after_sheets[sheet_name]
+
+        for field in ("sheet_type", "visibility", "used_range", "rows", "columns"):
+            if before_sheet.get(field) != after_sheet.get(field):
+                sheet_property_changes.append(
+                    {
+                        "sheet_name": sheet_name,
+                        "field": field,
+                        "before": before_sheet.get(field),
+                        "after": after_sheet.get(field),
+                    }
+                )
+
+        before_tables = _signature_map(
+            before_sheet.get("tables", []),
+            key_fields=("table_name",),
+        )
+        after_tables = _signature_map(
+            after_sheet.get("tables", []),
+            key_fields=("table_name",),
+        )
+        for table_name in sorted(set(after_tables) - set(before_tables)):
+            table_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "added",
+                    "table": after_tables[table_name],
+                }
+            )
+        for table_name in sorted(set(before_tables) - set(after_tables)):
+            table_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "removed",
+                    "table": before_tables[table_name],
+                }
+            )
+        for table_name in sorted(set(before_tables) & set(after_tables)):
+            if before_tables[table_name] != after_tables[table_name]:
+                table_changes.append(
+                    {
+                        "sheet_name": sheet_name,
+                        "change_type": "changed",
+                        "before": before_tables[table_name],
+                        "after": after_tables[table_name],
+                    }
+                )
+
+        before_charts = _signature_map(
+            before_sheet.get("charts", []),
+            key_fields=("anchor", "chart_type", "title"),
+        )
+        after_charts = _signature_map(
+            after_sheet.get("charts", []),
+            key_fields=("anchor", "chart_type", "title"),
+        )
+        for chart_key in sorted(set(after_charts) - set(before_charts)):
+            chart_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "added",
+                    "chart": after_charts[chart_key],
+                }
+            )
+        for chart_key in sorted(set(before_charts) - set(after_charts)):
+            chart_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "removed",
+                    "chart": before_charts[chart_key],
+                }
+            )
+        for chart_key in sorted(set(before_charts) & set(after_charts)):
+            if before_charts[chart_key] != after_charts[chart_key]:
+                chart_changes.append(
+                    {
+                        "sheet_name": sheet_name,
+                        "change_type": "changed",
+                        "before": before_charts[chart_key],
+                        "after": after_charts[chart_key],
+                    }
+                )
+
+        before_validation = {
+            tuple(
+                (key, _freeze_signature_value(value))
+                for key, value in _strip_rule_index(rule).items()
+            ): _strip_rule_index(rule)
+            for rule in before_sheet.get("validation_rules", [])
+        }
+        after_validation = {
+            tuple(
+                (key, _freeze_signature_value(value))
+                for key, value in _strip_rule_index(rule).items()
+            ): _strip_rule_index(rule)
+            for rule in after_sheet.get("validation_rules", [])
+        }
+        for rule_key in sorted(set(after_validation) - set(before_validation)):
+            validation_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "added",
+                    "rule": after_validation[rule_key],
+                }
+            )
+        for rule_key in sorted(set(before_validation) - set(after_validation)):
+            validation_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "removed",
+                    "rule": before_validation[rule_key],
+                }
+            )
+
+        before_conditional = {
+            tuple(
+                (key, _freeze_signature_value(value))
+                for key, value in _strip_rule_index(rule).items()
+            ): _strip_rule_index(rule)
+            for rule in before_sheet.get("conditional_format_rules", [])
+        }
+        after_conditional = {
+            tuple(
+                (key, _freeze_signature_value(value))
+                for key, value in _strip_rule_index(rule).items()
+            ): _strip_rule_index(rule)
+            for rule in after_sheet.get("conditional_format_rules", [])
+        }
+        for rule_key in sorted(set(after_conditional) - set(before_conditional)):
+            conditional_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "added",
+                    "rule": after_conditional[rule_key],
+                }
+            )
+        for rule_key in sorted(set(before_conditional) - set(after_conditional)):
+            conditional_changes.append(
+                {
+                    "sheet_name": sheet_name,
+                    "change_type": "removed",
+                    "rule": before_conditional[rule_key],
+                }
+            )
+
+    named_range_diff = _diff_named_ranges(before_snapshot, after_snapshot)
+    summary = {
+        "sheet_count_before": before_snapshot["summary"]["sheet_count"],
+        "sheet_count_after": after_snapshot["summary"]["sheet_count"],
+        "named_range_count_before": before_snapshot["summary"]["named_range_count"],
+        "named_range_count_after": after_snapshot["summary"]["named_range_count"],
+        "validation_rule_count_before": before_snapshot["summary"]["validation_rule_count"],
+        "validation_rule_count_after": after_snapshot["summary"]["validation_rule_count"],
+        "conditional_format_rule_count_before": before_snapshot["summary"]["conditional_format_rule_count"],
+        "conditional_format_rule_count_after": after_snapshot["summary"]["conditional_format_rule_count"],
+        "hidden_sheet_count_before": before_snapshot["summary"]["hidden_sheet_count"],
+        "hidden_sheet_count_after": after_snapshot["summary"]["hidden_sheet_count"],
+        "sheet_property_change_count": len(sheet_property_changes),
+        "named_range_change_count": (
+            len(named_range_diff["added"])
+            + len(named_range_diff["removed"])
+            + len(named_range_diff["changed"])
+        ),
+        "table_change_count": len(table_changes),
+        "chart_change_count": len(chart_changes),
+        "validation_rule_change_count": len(validation_changes),
+        "conditional_format_rule_change_count": len(conditional_changes),
+    }
+
+    return {
+        "summary": summary,
+        "sheet_changes": {
+            "added": added_sheet_names[:sample_limit],
+            "removed": removed_sheet_names[:sample_limit],
+            "property_changes": sheet_property_changes[:sample_limit],
+        },
+        "named_range_changes": {
+            "added": named_range_diff["added"][:sample_limit],
+            "removed": named_range_diff["removed"][:sample_limit],
+            "changed": named_range_diff["changed"][:sample_limit],
+        },
+        "table_changes": table_changes[:sample_limit],
+        "chart_changes": chart_changes[:sample_limit],
+        "validation_rule_changes": validation_changes[:sample_limit],
+        "conditional_format_rule_changes": conditional_changes[:sample_limit],
+    }
+
+
+def _diff_workbook_cell_values(
+    before_wb: Any,
+    after_wb: Any,
+    *,
+    sample_limit: int,
+) -> dict[str, Any]:
+    cell_changes: list[dict[str, Any]] = []
+    change_count = 0
+
+    for sheet_name in sorted(set(before_wb.sheetnames) & set(after_wb.sheetnames)):
+        before_ws = before_wb[sheet_name]
+        after_ws = after_wb[sheet_name]
+        if _sheet_type(before_ws) == "chartsheet" or _sheet_type(after_ws) == "chartsheet":
+            continue
+
+        before_rows, before_cols, _, _ = _get_sheet_usage(before_ws)
+        after_rows, after_cols, _, _ = _get_sheet_usage(after_ws)
+        max_row = max(before_rows, after_rows)
+        max_col = max(before_cols, after_cols)
+        if max_row == 0 or max_col == 0:
+            continue
+
+        for row_index in range(1, max_row + 1):
+            for column_index in range(1, max_col + 1):
+                before_value = (
+                    before_ws.cell(row=row_index, column=column_index).value
+                    if row_index <= before_ws.max_row and column_index <= before_ws.max_column
+                    else None
+                )
+                after_value = (
+                    after_ws.cell(row=row_index, column=column_index).value
+                    if row_index <= after_ws.max_row and column_index <= after_ws.max_column
+                    else None
+                )
+                if before_value == after_value:
+                    continue
+                change_count += 1
+                if len(cell_changes) < sample_limit:
+                    cell_changes.append(
+                        {
+                            "sheet_name": sheet_name,
+                            "cell": f"{get_column_letter(column_index)}{row_index}",
+                            "before": before_value,
+                            "after": after_value,
+                        }
+                    )
+
+    return {
+        "count": change_count,
+        "sample": cell_changes,
+        "truncated": change_count > sample_limit,
+    }
+
+
+def apply_workbook_repairs(
+    filepath: str,
+    repair_types: list[str] | None = None,
+    sheet_names: list[str] | None = None,
+    header_row: int = 1,
+    sample_limit: int = 25,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """Execute safe workbook repairs with an audit summary and before/after structural diff."""
+    try:
+        if not isinstance(header_row, int) or isinstance(header_row, bool) or header_row <= 0:
+            raise WorkbookError("header_row must be a positive integer")
+        if not isinstance(sample_limit, int) or isinstance(sample_limit, bool) or sample_limit <= 0:
+            raise WorkbookError("sample_limit must be a positive integer")
+        if not isinstance(dry_run, bool):
+            raise WorkbookError("dry_run must be a boolean")
+
+        normalized_repair_types = _normalize_repair_types(repair_types)
+        if not normalized_repair_types:
+            normalized_repair_types = [
+                "remove_broken_named_ranges",
+                "remove_broken_validations",
+                "remove_broken_conditional_formats",
+            ]
+        normalized_sheet_names = _normalize_string_list(sheet_names, label="sheet_names")
+        sheet_name_filter = set(normalized_sheet_names)
+
+        audit_before = audit_workbook(
+            filepath,
+            header_row=header_row,
+            sample_limit=sample_limit,
+        )
+
+        with safe_workbook(filepath, save=not dry_run) as wb:
+            before_snapshot = _snapshot_workbook_state(wb)
+            actions: list[dict[str, Any]] = []
+
+            if "remove_broken_named_ranges" in normalized_repair_types:
+                for named_range in _serialize_named_ranges(wb):
+                    destinations = named_range.get("destinations", [])
+                    destination_sheets = {
+                        destination["sheet_name"]
+                        for destination in destinations
+                    }
+                    if sheet_name_filter:
+                        if (
+                            named_range.get("local_sheet") not in sheet_name_filter
+                            and not (destination_sheets & sheet_name_filter)
+                        ):
+                            continue
+                    if not (
+                        named_range["broken_reference"]
+                        or named_range["missing_sheets"]
+                    ):
+                        continue
+
+                    actions.append(
+                        {
+                            "repair_type": "remove_broken_named_ranges",
+                            "name": named_range["name"],
+                            "scope_sheet": named_range.get("local_sheet"),
+                            "status": "planned" if dry_run else "applied",
+                        }
+                    )
+                    if not dry_run:
+                        _remove_named_range_sources(
+                            wb,
+                            name=named_range["name"],
+                            scope_sheet=named_range.get("local_sheet"),
+                        )
+
+            for sheet_name in wb.sheetnames:
+                if sheet_name_filter and sheet_name not in sheet_name_filter:
+                    continue
+
+                ws = wb[sheet_name]
+
+                if "reveal_hidden_sheets" in normalized_repair_types:
+                    visibility = getattr(ws, "sheet_state", "visible")
+                    if visibility != "visible":
+                        actions.append(
+                            {
+                                "repair_type": "reveal_hidden_sheets",
+                                "sheet_name": sheet_name,
+                                "old_visibility": visibility,
+                                "new_visibility": "visible",
+                                "status": "planned" if dry_run else "applied",
+                            }
+                        )
+                        if not dry_run:
+                            ws.sheet_state = "visible"
+
+                if _sheet_type(ws) == "chartsheet":
+                    continue
+
+                if "remove_broken_validations" in normalized_repair_types:
+                    broken_validations = _broken_validation_rules(
+                        wb,
+                        ws=ws,
+                        sheet_name=sheet_name,
+                    )
+                    if broken_validations:
+                        actions.append(
+                            {
+                                "repair_type": "remove_broken_validations",
+                                "sheet_name": sheet_name,
+                                "rule_count": len(broken_validations),
+                                "rules": broken_validations[:sample_limit],
+                                "status": "planned" if dry_run else "applied",
+                            }
+                        )
+                        if not dry_run:
+                            _remove_validation_rules(
+                                wb,
+                                ws,
+                                broken_only=True,
+                            )
+
+                if "remove_broken_conditional_formats" in normalized_repair_types:
+                    broken_conditional_formats = _broken_conditional_format_rules(
+                        wb,
+                        ws=ws,
+                        sheet_name=sheet_name,
+                    )
+                    if broken_conditional_formats:
+                        actions.append(
+                            {
+                                "repair_type": "remove_broken_conditional_formats",
+                                "sheet_name": sheet_name,
+                                "rule_count": len(broken_conditional_formats),
+                                "rules": broken_conditional_formats[:sample_limit],
+                                "status": "planned" if dry_run else "applied",
+                            }
+                        )
+                        if not dry_run:
+                            _remove_conditional_format_rules(
+                                wb,
+                                ws,
+                                broken_only=True,
+                            )
+
+            after_snapshot = before_snapshot if dry_run else _snapshot_workbook_state(wb)
+
+        audit_after = audit_before if dry_run else audit_workbook(
+            filepath,
+            header_row=header_row,
+            sample_limit=sample_limit,
+        )
+
+        return {
+            "repair_types": normalized_repair_types,
+            "sheet_names": normalized_sheet_names or None,
+            "dry_run": dry_run,
+            "action_count": len(actions),
+            "actions": actions[:sample_limit],
+            "truncated": len(actions) > sample_limit,
+            "audit_before": audit_before["summary"],
+            "audit_after": audit_after["summary"],
+            "diff": _diff_workbook_snapshots(
+                before_snapshot,
+                after_snapshot,
+                sample_limit=sample_limit,
+            ),
+        }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to apply workbook repairs: {e}")
+        raise WorkbookError(str(e))
+
+
+def diff_workbooks(
+    before_filepath: str,
+    after_filepath: str,
+    sample_limit: int = 25,
+    include_cell_changes: bool = True,
+) -> dict[str, Any]:
+    """Diff two workbook files and report structural changes plus sampled cell-value changes."""
+    try:
+        if not isinstance(sample_limit, int) or isinstance(sample_limit, bool) or sample_limit <= 0:
+            raise WorkbookError("sample_limit must be a positive integer")
+        if not isinstance(include_cell_changes, bool):
+            raise WorkbookError("include_cell_changes must be a boolean")
+
+        before_path = Path(before_filepath)
+        after_path = Path(after_filepath)
+        if not before_path.exists():
+            raise WorkbookError(f"File not found: {before_filepath}")
+        if not after_path.exists():
+            raise WorkbookError(f"File not found: {after_filepath}")
+
+        with safe_workbook(before_filepath) as before_wb, safe_workbook(after_filepath) as after_wb:
+            before_snapshot = _snapshot_workbook_state(before_wb)
+            after_snapshot = _snapshot_workbook_state(after_wb)
+            diff = _diff_workbook_snapshots(
+                before_snapshot,
+                after_snapshot,
+                sample_limit=sample_limit,
+            )
+            if include_cell_changes:
+                diff["cell_changes"] = _diff_workbook_cell_values(
+                    before_wb,
+                    after_wb,
+                    sample_limit=sample_limit,
+                )
+            else:
+                diff["cell_changes"] = {
+                    "count": 0,
+                    "sample": [],
+                    "truncated": False,
+                }
+            return {
+                "before_file": before_path.name,
+                "after_file": after_path.name,
+                "sample_limit": sample_limit,
+                "include_cell_changes": include_cell_changes,
+                **diff,
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to diff workbooks: {e}")
+        raise WorkbookError(str(e))
+
+
+def explain_formula_cell(
+    filepath: str,
+    sheet_name: str,
+    cell: str,
+    max_depth: int = 3,
+) -> dict[str, Any]:
+    """Explain a formula cell's direct references, upstream formula chain, and downstream dependents."""
+    try:
+        if not isinstance(max_depth, int) or isinstance(max_depth, bool) or max_depth <= 0:
+            raise WorkbookError("max_depth must be a positive integer")
+
+        with safe_workbook(filepath) as wb:
+            ws = require_worksheet(
+                wb,
+                sheet_name,
+                error_cls=WorkbookError,
+                operation="formula explanation",
+            )
+            formula_cell = ws[cell]
+            if not isinstance(formula_cell.value, str) or not formula_cell.value.startswith("="):
+                raise WorkbookError(f"Cell '{cell}' does not contain a formula")
+
+            tokenizer = Tokenizer(formula_cell.value)
+            direct_references: list[dict[str, Any]] = []
+            seen_reference_keys: set[tuple[str, str]] = set()
+            for token in tokenizer.items:
+                if token.type != "OPERAND" or token.subtype != "RANGE":
+                    continue
+
+                token_value = str(token.value).strip()
+                if not token_value:
+                    continue
+                resolved_targets = _resolve_formula_reference_targets(
+                    wb,
+                    token_value=token_value,
+                    formula_sheet_name=sheet_name,
+                    formula_row=formula_cell.row,
+                )
+                if not resolved_targets:
+                    direct_references.append(
+                        {
+                            "token": token_value,
+                            "reference_type": "unresolved",
+                            "targets": [],
+                        }
+                    )
+                    continue
+
+                deduped_targets: list[dict[str, Any]] = []
+                for target in resolved_targets:
+                    key = (target.get("reference", ""), target.get("reference_type", ""))
+                    if key in seen_reference_keys:
+                        continue
+                    seen_reference_keys.add(key)
+                    deduped_targets.append(target)
+
+                direct_references.append(
+                    {
+                        "token": token_value,
+                        "reference_type": deduped_targets[0].get("reference_type"),
+                        "targets": deduped_targets,
+                    }
+                )
+
+            direct_formula_precedents: list[dict[str, Any]] = []
+            seen_formula_cells: set[tuple[str, str]] = set()
+            frontier: list[tuple[int, dict[str, Any]]] = []
+            for reference in direct_references:
+                for target in reference["targets"]:
+                    target_sheet_name = target.get("sheet_name")
+                    target_range = target.get("range")
+                    if not target_sheet_name or not target_range or target_sheet_name not in wb.sheetnames:
+                        continue
+                    target_ws = wb[target_sheet_name]
+                    if _sheet_type(target_ws) == "chartsheet":
+                        continue
+                    target_bounds, _ = _parse_range_reference(
+                        target_range,
+                        worksheet=target_ws,
+                        expected_sheet=target_sheet_name,
+                        error_cls=WorkbookError,
+                    )
+                    for row in target_ws.iter_rows(
+                        min_row=target_bounds[0],
+                        max_row=target_bounds[2],
+                        min_col=target_bounds[1],
+                        max_col=target_bounds[3],
+                    ):
+                        for precedent_cell in row:
+                            if not isinstance(precedent_cell.value, str) or not precedent_cell.value.startswith("="):
+                                continue
+                            precedent_key = (target_sheet_name, precedent_cell.coordinate)
+                            if precedent_key in seen_formula_cells:
+                                continue
+                            seen_formula_cells.add(precedent_key)
+                            precedent_entry = {
+                                "sheet_name": target_sheet_name,
+                                "cell": precedent_cell.coordinate,
+                                "formula": precedent_cell.value,
+                                "depth": 1,
+                                "reached_via": target["reference"],
+                            }
+                            direct_formula_precedents.append(precedent_entry)
+                            frontier.append((1, precedent_entry))
+
+            transitive_formula_precedents: list[dict[str, Any]] = []
+            while frontier:
+                depth, precedent_entry = frontier.pop(0)
+                if depth >= max_depth:
+                    continue
+
+                precedent_ws = wb[precedent_entry["sheet_name"]]
+                precedent_cell = precedent_ws[precedent_entry["cell"]]
+                precedent_tokenizer = Tokenizer(precedent_cell.value)
+                for token in precedent_tokenizer.items:
+                    if token.type != "OPERAND" or token.subtype != "RANGE":
+                        continue
+                    token_value = str(token.value).strip()
+                    if not token_value:
+                        continue
+
+                    resolved_targets = _resolve_formula_reference_targets(
+                        wb,
+                        token_value=token_value,
+                        formula_sheet_name=precedent_entry["sheet_name"],
+                        formula_row=precedent_cell.row,
+                    )
+                    for target in resolved_targets:
+                        target_sheet_name = target.get("sheet_name")
+                        target_range = target.get("range")
+                        if not target_sheet_name or not target_range or target_sheet_name not in wb.sheetnames:
+                            continue
+                        target_ws = wb[target_sheet_name]
+                        if _sheet_type(target_ws) == "chartsheet":
+                            continue
+                        target_bounds, _ = _parse_range_reference(
+                            target_range,
+                            worksheet=target_ws,
+                            expected_sheet=target_sheet_name,
+                            error_cls=WorkbookError,
+                        )
+                        for row in target_ws.iter_rows(
+                            min_row=target_bounds[0],
+                            max_row=target_bounds[2],
+                            min_col=target_bounds[1],
+                            max_col=target_bounds[3],
+                        ):
+                            for nested_cell in row:
+                                if not isinstance(nested_cell.value, str) or not nested_cell.value.startswith("="):
+                                    continue
+                                nested_key = (target_sheet_name, nested_cell.coordinate)
+                                if nested_key in seen_formula_cells:
+                                    continue
+                                seen_formula_cells.add(nested_key)
+                                nested_entry = {
+                                    "sheet_name": target_sheet_name,
+                                    "cell": nested_cell.coordinate,
+                                    "formula": nested_cell.value,
+                                    "depth": depth + 1,
+                                    "reached_via": target["reference"],
+                                    "parent_formula_cell": {
+                                        "sheet_name": precedent_entry["sheet_name"],
+                                        "cell": precedent_entry["cell"],
+                                    },
+                                }
+                                transitive_formula_precedents.append(nested_entry)
+                                frontier.append((depth + 1, nested_entry))
+
+            target_bounds = (
+                formula_cell.row,
+                formula_cell.column,
+                formula_cell.row,
+                formula_cell.column,
+            )
+            dependents = _extract_formula_dependencies(
+                wb,
+                target_sheet=sheet_name,
+                target_bounds=target_bounds,
+            )
+
+            hints: list[str] = []
+            if any(
+                target.get("reference_type") == "named_range"
+                for reference in direct_references
+                for target in reference["targets"]
+            ):
+                hints.append("Formula depends on named ranges.")
+            if any(
+                target.get("reference_type") == "structured_reference"
+                for reference in direct_references
+                for target in reference["targets"]
+            ):
+                hints.append("Formula depends on Excel table structured references.")
+            if any(
+                target.get("broken_reference")
+                for reference in direct_references
+                for target in reference["targets"]
+            ):
+                hints.append("At least one formula reference is broken or points to a missing sheet.")
+            if dependents:
+                hints.append("Other formulas in the workbook depend on this cell.")
+            if not hints:
+                hints.append("Formula references were resolved without broken workbook links.")
+
+            return {
+                "sheet_name": sheet_name,
+                "cell": formula_cell.coordinate,
+                "formula": formula_cell.value,
+                "max_depth": max_depth,
+                "direct_reference_count": len(direct_references),
+                "direct_references": direct_references,
+                "direct_formula_precedent_count": len(direct_formula_precedents),
+                "direct_formula_precedents": direct_formula_precedents,
+                "transitive_formula_precedent_count": len(transitive_formula_precedents),
+                "transitive_formula_precedents": transitive_formula_precedents,
+                "dependent_formulas": {
+                    "count": len(dependents),
+                    "sample": dependents[:10],
+                },
+                "hints": hints,
+            }
+    except WorkbookError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to explain formula cell: {e}")
         raise WorkbookError(str(e))
