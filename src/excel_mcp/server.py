@@ -47,6 +47,10 @@ from excel_mcp.data import (
     update_rows_by_key as update_rows_by_key_impl,
     write_data,
 )
+from excel_mcp.query import (
+    aggregate_table as aggregate_table_impl,
+    query_table as query_table_impl,
+)
 from excel_mcp.pivot import create_pivot_table as create_pivot_table_impl
 from excel_mcp.tables import (
     create_excel_table as create_table_impl,
@@ -161,15 +165,23 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         if not data_dict.get("preview_only"):
             hints.append("use preview_only=True to limit the response to the first 10 rows")
         hints.append("use read_excel_as_table plus start_row/max_rows for tabular worksheet data")
-    elif operation in {"quick_read", "read_excel_as_table", "read_excel_table"}:
-        hints.append("set max_rows to request a smaller page")
+    elif operation in {"quick_read", "read_excel_as_table", "read_excel_table", "query_table", "aggregate_table"}:
         if operation == "read_excel_table":
+            hints.append("set max_rows to request a smaller page")
             hints.append("use start_row to continue from a later table row")
             hints.append("use start_col/end_col to request a narrower table column slice")
+        elif operation == "query_table":
+            hints.append("use select to return fewer columns")
+            hints.append("use filters to narrow the matched rows before returning them")
+            hints.append("use limit to cap the number of returned rows")
+        elif operation == "aggregate_table":
+            hints.append("use filters to narrow the matched source rows before grouping")
+            hints.append("use limit to cap the number of returned groups")
         else:
+            hints.append("set max_rows to request a smaller page")
             hints.append("use start_row to continue from a deeper row without rereading the top")
             hints.append("use start_col/end_col to request a narrower column slice")
-        if "headers" in data_dict:
+        if operation in {"quick_read", "read_excel_as_table", "read_excel_table"} and "headers" in data_dict:
             hints.append("set include_headers=False for follow-up pages after the first")
         if data_dict.get("row_mode") == "objects":
             hints.append("switch to row_mode='arrays' for a smaller payload")
@@ -647,6 +659,86 @@ def suggest_read_strategy(
             table_name=table_name,
             header_row=header_row,
             sample_rows=sample_rows,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Query Table",
+        readOnlyHint=True,
+    ),
+)
+def query_table(
+    filepath: str,
+    sheet_name: Optional[str] = None,
+    table_name: Optional[str] = None,
+    header_row: int = 1,
+    select: Optional[List[str]] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    sort_by: Optional[str] = None,
+    sort_desc: bool = False,
+    limit: Optional[int] = None,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> str:
+    """Filter, project, sort, and limit worksheet-shaped data or a native Excel table."""
+    return _run_tool(
+        "query_table",
+        lambda: query_table_impl(
+            get_excel_path(filepath),
+            sheet_name=sheet_name,
+            table_name=table_name,
+            header_row=header_row,
+            select=select,
+            filters=filters,
+            sort_by=sort_by,
+            sort_desc=sort_desc,
+            limit=limit,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Aggregate Table",
+        readOnlyHint=True,
+    ),
+)
+def aggregate_table(
+    filepath: str,
+    sheet_name: Optional[str] = None,
+    table_name: Optional[str] = None,
+    header_row: int = 1,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    group_by: Optional[List[str]] = None,
+    metrics: Optional[List[Dict[str, Any]]] = None,
+    sort_by: Optional[str] = None,
+    sort_desc: bool = False,
+    limit: Optional[int] = None,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> str:
+    """Compute grouped metrics over worksheet-shaped data or a native Excel table."""
+    return _run_tool(
+        "aggregate_table",
+        lambda: aggregate_table_impl(
+            get_excel_path(filepath),
+            sheet_name=sheet_name,
+            table_name=table_name,
+            header_row=header_row,
+            filters=filters,
+            group_by=group_by,
+            metrics=metrics,
+            sort_by=sort_by,
+            sort_desc=sort_desc,
+            limit=limit,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
         ),
     )
 

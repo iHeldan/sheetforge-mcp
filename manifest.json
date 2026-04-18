@@ -34,6 +34,8 @@
     {"name": "list_tables", "description": "List native Excel tables in a workbook or worksheet"},
     {"name": "suggest_read_strategy", "description": "Recommend the best SheetForge read path for a workbook target"},
     {"name": "describe_dataset", "description": "Summarize a worksheet or native Excel table for agent-friendly orientation"},
+    {"name": "query_table", "description": "Filter, project, sort, and limit worksheet-shaped data or native Excel tables"},
+    {"name": "aggregate_table", "description": "Compute grouped metrics over worksheet-shaped data or native Excel tables"},
     {"name": "read_excel_table", "description": "Read rows from a native Excel table by table name"},
     {"name": "quick_read", "description": "Read a compact table from an explicit sheet or the first workbook sheet"},
     {"name": "write_data_to_excel", "description": "Write data to Excel cells"},
