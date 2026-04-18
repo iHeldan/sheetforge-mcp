@@ -240,13 +240,14 @@
         </p>
         <p>
           Published package release: <strong>0.5.0</strong>. The repository currently
-          exposes <strong>70 MCP tools</strong>, including smart read-strategy suggestions,
+          exposes <strong>71 MCP tools</strong>, including smart read-strategy suggestions,
           lightweight dataset summaries, declarative table queries, grouped aggregates,
-          workbook profiling, repair planning and execution, workbook diffs, formula-lineage
-          debugging, formula-string inspection, circular-dependency detection, native-table
-          upserts, compact mutation responses, grouped formatting readback, sheet-layout
-          summaries, cursor-based 2D range reads, placement-aware chart authoring, and
-          workbook-level impact analysis for formulas, validations, and conditional formatting.
+          cross-workbook aggregation, workbook profiling, repair planning and execution,
+          workbook diffs, formula-lineage debugging, formula-string inspection,
+          circular-dependency detection, native-table upserts, compact mutation responses,
+          grouped formatting readback, sheet-layout summaries, cursor-based 2D range reads,
+          placement-aware chart authoring, and workbook-level impact analysis for formulas,
+          validations, and conditional formatting.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/iHeldan/sheetforge-mcp">View Repository</a>
@@ -259,7 +260,7 @@
         <h2>At a glance</h2>
         <ul class="meta-list">
           <li>Python 3.10+</li>
-          <li>70 MCP tools</li>
+          <li>71 MCP tools</li>
           <li>Supports `stdio`, `streamable-http`, and deprecated `sse`</li>
           <li>Uniform JSON envelopes for every tool response</li>
           <li>No Microsoft Excel dependency</li>
@@ -294,6 +295,7 @@
           <li><strong>`inspect_formula`</strong><br>Inspect a formula string for functions, reference token types, volatile functions, and risky patterns.</li>
           <li><strong>`query_table`</strong><br>Filter, sort, and trim worksheet-shaped data or native tables before it reaches agent context.</li>
           <li><strong>`aggregate_table`</strong><br>Compute grouped metrics directly in SheetForge instead of post-processing full reads.</li>
+          <li><strong>`bulk_aggregate_workbooks`</strong><br>Roll up comparable workbook files with explicit `strict` / `intersect` / `union` schema handling.</li>
           <li><strong>`quick_read`</strong><br>Single-call compact table read with automatic first-sheet selection.</li>
           <li><strong>`read_excel_table`</strong><br>Read a native Excel table by name without guessing worksheet bounds.</li>
           <li><strong>`read_data_from_excel`</strong><br>Read non-tabular ranges with compact payloads and cursor-based continuations.</li>

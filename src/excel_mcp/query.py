@@ -1,6 +1,7 @@
 import logging
 from collections import defaultdict
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .data import (
@@ -41,6 +42,7 @@ AGGREGATE_OPERATORS = {
     "min",
     "max",
 }
+SCHEMA_MODES = {"strict", "intersect", "union"}
 
 
 def _is_numeric(value: Any) -> bool:
@@ -56,6 +58,19 @@ def _validate_positive_integer(value: Optional[int], *, argument_name: str) -> N
         return
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise DataError(f"{argument_name} must be a positive integer")
+
+
+def _validate_schema_mode(schema_mode: str) -> None:
+    if schema_mode not in SCHEMA_MODES:
+        raise DataError("schema_mode must be 'strict', 'intersect', or 'union'")
+
+
+def _validate_filepaths(filepaths: List[str]) -> None:
+    if not isinstance(filepaths, list) or not filepaths:
+        raise DataError("filepaths must be a non-empty list of workbook paths")
+    for index, filepath in enumerate(filepaths, start=1):
+        if not isinstance(filepath, str) or not filepath.strip():
+            raise DataError(f"filepaths[{index}] must be a non-empty string")
 
 
 def _load_source_dataset(
@@ -113,6 +128,50 @@ def _load_source_dataset(
     }
 
 
+def _field_keys(schema: List[Dict[str, Any]]) -> set[str]:
+    return {str(column["field"]).casefold() for column in schema}
+
+
+def _collect_aggregate_input_refs(
+    *,
+    filters: Optional[List[Dict[str, Any]]],
+    group_by: Optional[List[str]],
+    metrics: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    refs: List[str] = []
+    seen_refs: set[str] = set()
+
+    def add_ref(value: Any) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        normalized = value.strip()
+        ref_key = normalized.casefold()
+        if ref_key in seen_refs:
+            return
+        seen_refs.add(ref_key)
+        refs.append(normalized)
+
+    if isinstance(filters, list):
+        for filter_spec in filters:
+            if isinstance(filter_spec, dict):
+                add_ref(filter_spec.get("field"))
+
+    if isinstance(group_by, list):
+        for field_ref in group_by:
+            add_ref(field_ref)
+
+    if isinstance(metrics, list):
+        for metric in metrics:
+            if not isinstance(metric, dict):
+                continue
+            operator = str(metric.get("op", "")).strip().lower()
+            if operator == "count":
+                continue
+            add_ref(metric.get("field"))
+
+    return refs
+
+
 def _column_lookup(headers: List[Any], schema: List[Dict[str, Any]]) -> Dict[str, int]:
     lookup: Dict[str, int] = {}
     casefold_headers: Dict[str, List[int]] = defaultdict(list)
@@ -163,6 +222,22 @@ def _resolve_column(
             return index, "" if header is None else str(header)
 
     raise DataError(f"{argument_name} '{column_ref}' was not found in the selected dataset")
+
+
+def _resolve_column_or_none(
+    column_ref: str,
+    headers: List[Any],
+    schema: List[Dict[str, Any]],
+) -> Optional[tuple[int, str]]:
+    try:
+        return _resolve_column(
+            column_ref,
+            headers,
+            schema,
+            argument_name="column",
+        )
+    except DataError:
+        return None
 
 
 def _normalize_string(value: Any, *, case_sensitive: bool) -> Optional[str]:
@@ -546,6 +621,126 @@ def _finalize_tabular_result(
     )
 
 
+def _aggregate_dataset(
+    *,
+    headers: List[Any],
+    rows: List[List[Any]],
+    target_kind: str,
+    sheet_name: Optional[str],
+    table_name: Optional[str],
+    auto_selected_sheet: bool,
+    filters: Optional[List[Dict[str, Any]]],
+    group_by: Optional[List[str]],
+    metrics: Optional[List[Dict[str, Any]]],
+    sort_by: Optional[str],
+    sort_desc: bool,
+    limit: Optional[int],
+    row_mode: str,
+    infer_schema: bool,
+    extra_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    schema = _build_schema(headers, rows)
+    normalized_filters = _normalize_filters(filters, headers, schema)
+    matched_rows = _apply_filters(rows, normalized_filters)
+    normalized_groups = _group_by_indexes(group_by, headers, schema)
+    normalized_metrics = _normalize_metrics(
+        metrics,
+        headers,
+        schema,
+        reserved_aliases={
+            group["resolved_header"].casefold()
+            for group in normalized_groups
+            if group["resolved_header"]
+        },
+    )
+
+    grouped_rows: Dict[tuple[Any, ...], List[List[Any]]] = defaultdict(list)
+    if normalized_groups:
+        for row in matched_rows:
+            key = tuple(
+                row[group["column_index"]] if group["column_index"] < len(row) else None
+                for group in normalized_groups
+            )
+            grouped_rows[key].append(row)
+    else:
+        grouped_rows[tuple()] = list(matched_rows)
+
+    result_headers = [group["resolved_header"] for group in normalized_groups] + [
+        metric["as"] for metric in normalized_metrics
+    ]
+    result_rows: List[List[Any]] = []
+    for key, grouped in grouped_rows.items():
+        output_row = list(key)
+        for metric in normalized_metrics:
+            output_row.append(_compute_metric(metric, grouped))
+        result_rows.append(output_row)
+
+    resolved_sort_by = None
+    if sort_by is not None:
+        aggregate_schema = _build_schema(result_headers, result_rows)
+        sort_index, resolved_sort_by = _resolve_column(
+            sort_by,
+            result_headers,
+            aggregate_schema,
+            argument_name="sort_by",
+        )
+        result_rows = _sort_rows(
+            result_rows,
+            sort_index,
+            sort_desc=sort_desc,
+            field_name=resolved_sort_by,
+        )
+
+    total_groups = len(result_rows)
+    if limit is not None:
+        result_rows = result_rows[:limit]
+
+    result: Dict[str, Any] = {
+        "target_kind": target_kind,
+        "sheet_name": sheet_name,
+        "table_name": table_name,
+        "auto_selected_sheet": auto_selected_sheet,
+        "headers": result_headers,
+        "rows": result_rows,
+        "group_by": [group["resolved_header"] for group in normalized_groups],
+        "metrics": [
+            {
+                "op": metric["op"],
+                "field": metric["resolved_header"],
+                "as": metric["as"],
+            }
+            for metric in normalized_metrics
+        ],
+        "group_count": total_groups,
+        "returned_groups": len(result_rows),
+        "source_row_count": len(rows),
+        "matched_rows": len(matched_rows),
+        "truncated": limit is not None and total_groups > len(result_rows),
+        "filters": [
+            {
+                "field": item["resolved_header"],
+                "op": item["op"],
+                **({"value": item["value"]} if "value" in item else {}),
+                **({"values": item["values"]} if "values" in item else {}),
+                **({"case_sensitive": True} if item["case_sensitive"] else {}),
+            }
+            for item in normalized_filters
+        ],
+        "sort_by": resolved_sort_by,
+        "sort_desc": sort_desc,
+    }
+    if extra_payload:
+        result.update(extra_payload)
+
+    return _finalize_tabular_result(
+        payload=result,
+        headers=result_headers,
+        rows=result_rows,
+        row_mode=row_mode,
+        infer_schema=infer_schema,
+    )
+
+
 def query_table(
     filepath: str,
     *,
@@ -672,109 +867,182 @@ def aggregate_table(
             table_name=table_name,
             header_row=header_row,
         )
-        headers = source["headers"]
-        rows = source["rows"]
-        schema = source["schema"]
-
-        normalized_filters = _normalize_filters(filters, headers, schema)
-        matched_rows = _apply_filters(rows, normalized_filters)
-        normalized_groups = _group_by_indexes(group_by, headers, schema)
-        normalized_metrics = _normalize_metrics(
-            metrics,
-            headers,
-            schema,
-            reserved_aliases={
-                group["resolved_header"].casefold()
-                for group in normalized_groups
-                if group["resolved_header"]
-            },
-        )
-
-        grouped_rows: Dict[tuple[Any, ...], List[List[Any]]] = defaultdict(list)
-        if normalized_groups:
-            for row in matched_rows:
-                key = tuple(
-                    row[group["column_index"]] if group["column_index"] < len(row) else None
-                    for group in normalized_groups
-                )
-                grouped_rows[key].append(row)
-        else:
-            grouped_rows[tuple()] = list(matched_rows)
-
-        result_headers = [group["resolved_header"] for group in normalized_groups] + [
-            metric["as"] for metric in normalized_metrics
-        ]
-        result_rows: List[List[Any]] = []
-        for key, grouped in grouped_rows.items():
-            output_row = list(key)
-            for metric in normalized_metrics:
-                output_row.append(_compute_metric(metric, grouped))
-            result_rows.append(output_row)
-
-        resolved_sort_by = None
-        if sort_by is not None:
-            aggregate_schema = _build_schema(result_headers, result_rows)
-            sort_index, resolved_sort_by = _resolve_column(
-                sort_by,
-                result_headers,
-                aggregate_schema,
-                argument_name="sort_by",
-            )
-            result_rows = _sort_rows(
-                result_rows,
-                sort_index,
-                sort_desc=sort_desc,
-                field_name=resolved_sort_by,
-            )
-
-        total_groups = len(result_rows)
-        if limit is not None:
-            result_rows = result_rows[:limit]
-
-        result: Dict[str, Any] = {
-            "target_kind": source["target_kind"],
-            "sheet_name": source["sheet_name"],
-            "table_name": source["table_name"],
-            "auto_selected_sheet": source.get("auto_selected_sheet", False),
-            "headers": result_headers,
-            "rows": result_rows,
-            "group_by": [group["resolved_header"] for group in normalized_groups],
-            "metrics": [
-                {
-                    "op": metric["op"],
-                    "field": metric["resolved_header"],
-                    "as": metric["as"],
-                }
-                for metric in normalized_metrics
-            ],
-            "group_count": total_groups,
-            "returned_groups": len(result_rows),
-            "source_row_count": source["total_rows"],
-            "matched_rows": len(matched_rows),
-            "truncated": limit is not None and total_groups > len(result_rows),
-            "filters": [
-                {
-                    "field": item["resolved_header"],
-                    "op": item["op"],
-                    **({"value": item["value"]} if "value" in item else {}),
-                    **({"values": item["values"]} if "values" in item else {}),
-                    **({"case_sensitive": True} if item["case_sensitive"] else {}),
-                }
-                for item in normalized_filters
-            ],
-            "sort_by": resolved_sort_by,
-            "sort_desc": sort_desc,
-        }
-
-        return _finalize_tabular_result(
-            payload=result,
-            headers=result_headers,
-            rows=result_rows,
+        return _aggregate_dataset(
+            headers=source["headers"],
+            rows=source["rows"],
+            target_kind=source["target_kind"],
+            sheet_name=source["sheet_name"],
+            table_name=source["table_name"],
+            auto_selected_sheet=source.get("auto_selected_sheet", False),
+            filters=filters,
+            group_by=group_by,
+            metrics=metrics,
+            sort_by=sort_by,
+            sort_desc=sort_desc,
+            limit=limit,
             row_mode=row_mode,
             infer_schema=infer_schema,
+            extra_payload={
+                "source_row_count": source["total_rows"],
+            },
         )
     except DataError:
         raise
     except Exception as e:
         logger.error(f"Failed to aggregate table data: {e}")
+        raise DataError(str(e))
+
+
+def bulk_aggregate_workbooks(
+    filepaths: List[str],
+    *,
+    sheet_name: Optional[str] = None,
+    table_name: Optional[str] = None,
+    header_row: int = 1,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    group_by: Optional[List[str]] = None,
+    metrics: Optional[List[Dict[str, Any]]] = None,
+    sort_by: Optional[str] = None,
+    sort_desc: bool = False,
+    limit: Optional[int] = None,
+    schema_mode: str = "strict",
+    source_sample_limit: int = 10,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> Dict[str, Any]:
+    """Aggregate comparable worksheet or table data across multiple workbooks."""
+    try:
+        _validate_filepaths(filepaths)
+        _validate_row_mode(row_mode)
+        _validate_positive_integer(header_row, argument_name="header_row")
+        _validate_positive_integer(limit, argument_name="limit")
+        _validate_positive_integer(source_sample_limit, argument_name="source_sample_limit")
+        _validate_schema_mode(schema_mode)
+
+        sources: List[Dict[str, Any]] = []
+        for filepath in filepaths:
+            source = _load_source_dataset(
+                filepath,
+                sheet_name=sheet_name,
+                table_name=table_name,
+                header_row=header_row,
+            )
+            source["filepath"] = filepath
+            source["file_name"] = Path(filepath).name
+            sources.append(source)
+
+        schema_key_sets = [_field_keys(source["schema"]) for source in sources]
+        shared_field_keys = set.intersection(*schema_key_sets) if schema_key_sets else set()
+        union_field_keys = set().union(*schema_key_sets)
+        strict_compatible = all(
+            key_set == schema_key_sets[0]
+            for key_set in schema_key_sets[1:]
+        ) if schema_key_sets else True
+        if schema_mode == "strict" and not strict_compatible:
+            baseline = sources[0]["file_name"]
+            for source, key_set in zip(sources[1:], schema_key_sets[1:]):
+                if key_set != schema_key_sets[0]:
+                    raise DataError(
+                        "schema_mode 'strict' requires identical columns across workbooks; "
+                        f"'{source['file_name']}' differs from '{baseline}'"
+                    )
+
+        input_refs = _collect_aggregate_input_refs(
+            filters=filters,
+            group_by=group_by,
+            metrics=metrics,
+        )
+
+        combined_headers: List[Any] = []
+        for ref in input_refs:
+            resolved_header = None
+            for source in sources:
+                resolved = _resolve_column_or_none(ref, source["headers"], source["schema"])
+                if resolved is not None:
+                    _, resolved_header = resolved
+                    break
+            if resolved_header is None:
+                raise DataError(f"Column '{ref}' was not found in any selected workbook")
+            combined_headers.append(resolved_header)
+
+        combined_rows: List[List[Any]] = []
+        source_rows_by_file: Dict[str, List[List[Any]]] = {}
+        for source in sources:
+            resolved_indexes: List[Optional[int]] = []
+            for ref in input_refs:
+                resolved = _resolve_column_or_none(ref, source["headers"], source["schema"])
+                if resolved is None:
+                    if schema_mode == "union":
+                        resolved_indexes.append(None)
+                        continue
+                    raise DataError(
+                        f"schema_mode '{schema_mode}' requires column '{ref}' in workbook "
+                        f"'{source['file_name']}'"
+                    )
+                resolved_indexes.append(resolved[0])
+
+            unified_rows: List[List[Any]] = []
+            for row in source["rows"]:
+                unified_row = [
+                    row[column_index] if column_index is not None and column_index < len(row) else None
+                    for column_index in resolved_indexes
+                ]
+                unified_rows.append(unified_row)
+            source_rows_by_file[source["filepath"]] = unified_rows
+            combined_rows.extend(unified_rows)
+
+        combined_schema = _build_schema(combined_headers, combined_rows)
+        normalized_filters = _normalize_filters(filters, combined_headers, combined_schema)
+        source_workbook_sample = []
+        for source in sources[:source_sample_limit]:
+            unified_rows = source_rows_by_file[source["filepath"]]
+            matched_rows = _apply_filters(unified_rows, normalized_filters)
+            source_workbook_sample.append(
+                {
+                    "filepath": source["filepath"],
+                    "file_name": source["file_name"],
+                    "target_kind": source["target_kind"],
+                    "sheet_name": source["sheet_name"],
+                    "table_name": source["table_name"],
+                    "source_row_count": source["total_rows"],
+                    "matched_rows": len(matched_rows),
+                    "auto_selected_sheet": source.get("auto_selected_sheet", False),
+                }
+            )
+
+        return _aggregate_dataset(
+            headers=combined_headers,
+            rows=combined_rows,
+            target_kind="multi_workbook",
+            sheet_name=sheet_name,
+            table_name=table_name,
+            auto_selected_sheet=False,
+            filters=filters,
+            group_by=group_by,
+            metrics=metrics,
+            sort_by=sort_by,
+            sort_desc=sort_desc,
+            limit=limit,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
+            extra_payload={
+                "workbook_count": len(sources),
+                "processed_workbooks": len(sources),
+                "schema_mode": schema_mode,
+                "schema_summary": {
+                    "strict_compatible": strict_compatible,
+                    "shared_field_count": len(shared_field_keys),
+                    "union_field_count": len(union_field_keys),
+                },
+                "source_workbooks": {
+                    "count": len(sources),
+                    "sample": source_workbook_sample,
+                    "truncated": len(sources) > source_sample_limit,
+                },
+            },
+        )
+    except DataError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to aggregate multiple workbooks: {e}")
         raise DataError(str(e))
