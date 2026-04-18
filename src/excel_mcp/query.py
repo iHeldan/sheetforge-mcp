@@ -43,6 +43,15 @@ AGGREGATE_OPERATORS = {
     "max",
 }
 SCHEMA_MODES = {"strict", "intersect", "union"}
+MULTI_WORKBOOK_SOURCE_HEADERS = ["_source_file", "_source_sheet", "_source_table"]
+MULTI_WORKBOOK_SOURCE_REF_KEYS = {
+    "_source_file",
+    "_source_sheet",
+    "_source_table",
+    "source_file",
+    "source_sheet",
+    "source_table",
+}
 
 
 def _is_numeric(value: Any) -> bool:
@@ -71,6 +80,18 @@ def _validate_filepaths(filepaths: List[str]) -> None:
     for index, filepath in enumerate(filepaths, start=1):
         if not isinstance(filepath, str) or not filepath.strip():
             raise DataError(f"filepaths[{index}] must be a non-empty string")
+
+
+def _is_multi_workbook_source_ref(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().casefold() in MULTI_WORKBOOK_SOURCE_REF_KEYS
+
+
+def _reject_source_column_ref(column_ref: Any, *, argument_name: str) -> None:
+    if _is_multi_workbook_source_ref(column_ref):
+        raise DataError(
+            f"{argument_name} cannot reference multi-workbook source columns directly; "
+            "use include_source_columns=True to include source provenance in the output"
+        )
 
 
 def _load_source_dataset(
@@ -172,6 +193,38 @@ def _collect_aggregate_input_refs(
     return refs
 
 
+def _collect_query_input_refs(
+    *,
+    filters: Optional[List[Dict[str, Any]]],
+    select: Optional[List[str]],
+    sort_by: Optional[str],
+) -> List[str]:
+    refs: List[str] = []
+    seen_refs: set[str] = set()
+
+    def add_ref(value: Any) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        normalized = value.strip()
+        ref_key = normalized.casefold()
+        if ref_key in seen_refs:
+            return
+        seen_refs.add(ref_key)
+        refs.append(normalized)
+
+    if isinstance(filters, list):
+        for filter_spec in filters:
+            if isinstance(filter_spec, dict):
+                add_ref(filter_spec.get("field"))
+
+    if isinstance(select, list):
+        for column_ref in select:
+            add_ref(column_ref)
+
+    add_ref(sort_by)
+    return refs
+
+
 def _column_lookup(headers: List[Any], schema: List[Dict[str, Any]]) -> Dict[str, int]:
     lookup: Dict[str, int] = {}
     casefold_headers: Dict[str, List[int]] = defaultdict(list)
@@ -238,6 +291,99 @@ def _resolve_column_or_none(
         )
     except DataError:
         return None
+
+
+def _source_field_key_to_index(source: Dict[str, Any]) -> Dict[str, int]:
+    return {
+        str(column["field"]).casefold(): index
+        for index, column in enumerate(source["schema"])
+    }
+
+
+def _default_multi_workbook_columns(
+    sources: List[Dict[str, Any]],
+    *,
+    schema_mode: str,
+    shared_field_keys: set[str],
+) -> List[Dict[str, Any]]:
+    columns: List[Dict[str, Any]] = []
+
+    if not sources:
+        return columns
+
+    if schema_mode in {"strict", "intersect"}:
+        for index, column in enumerate(sources[0]["schema"]):
+            field_key = str(column["field"]).casefold()
+            if schema_mode == "intersect" and field_key not in shared_field_keys:
+                continue
+            columns.append(
+                {
+                    "field_key": field_key,
+                    "header": sources[0]["headers"][index],
+                }
+            )
+        return columns
+
+    seen_field_keys: set[str] = set()
+    for source in sources:
+        for index, column in enumerate(source["schema"]):
+            field_key = str(column["field"]).casefold()
+            if field_key in seen_field_keys:
+                continue
+            seen_field_keys.add(field_key)
+            columns.append(
+                {
+                    "field_key": field_key,
+                    "header": source["headers"][index],
+                }
+            )
+    return columns
+
+
+def _resolve_multi_workbook_columns(
+    refs: List[str],
+    sources: List[Dict[str, Any]],
+    *,
+    schema_mode: str,
+) -> List[Dict[str, Any]]:
+    columns: List[Dict[str, Any]] = []
+    seen_field_keys: set[str] = set()
+
+    for ref in refs:
+        _reject_source_column_ref(ref, argument_name="column reference")
+        resolved_header = None
+        resolved_field_key = None
+
+        for source in sources:
+            resolved = _resolve_column_or_none(ref, source["headers"], source["schema"])
+            if resolved is None:
+                continue
+            resolved_index, resolved_header = resolved
+            resolved_field_key = str(source["schema"][resolved_index]["field"]).casefold()
+            break
+
+        if resolved_header is None or resolved_field_key is None:
+            raise DataError(f"Column '{ref}' was not found in any selected workbook")
+
+        if schema_mode != "union":
+            for source in sources:
+                if resolved_field_key not in _field_keys(source["schema"]):
+                    raise DataError(
+                        f"schema_mode '{schema_mode}' requires column '{ref}' in workbook "
+                        f"'{source['file_name']}'"
+                    )
+
+        if resolved_field_key in seen_field_keys:
+            continue
+        seen_field_keys.add(resolved_field_key)
+        columns.append(
+            {
+                "field_key": resolved_field_key,
+                "header": resolved_header,
+            }
+        )
+
+    return columns
 
 
 def _normalize_string(value: Any, *, case_sensitive: bool) -> Optional[str]:
@@ -837,6 +983,238 @@ def query_table(
         raise
     except Exception as e:
         logger.error(f"Failed to query table data: {e}")
+        raise DataError(str(e))
+
+
+def bulk_filter_workbooks(
+    filepaths: List[str],
+    *,
+    sheet_name: Optional[str] = None,
+    table_name: Optional[str] = None,
+    header_row: int = 1,
+    select: Optional[List[str]] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    sort_by: Optional[str] = None,
+    sort_desc: bool = False,
+    limit: Optional[int] = None,
+    schema_mode: str = "strict",
+    source_sample_limit: int = 10,
+    include_source_columns: bool = True,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> Dict[str, Any]:
+    """Filter comparable worksheet or table data across multiple workbooks."""
+    try:
+        _validate_filepaths(filepaths)
+        _validate_row_mode(row_mode)
+        _validate_positive_integer(header_row, argument_name="header_row")
+        _validate_positive_integer(limit, argument_name="limit")
+        _validate_positive_integer(source_sample_limit, argument_name="source_sample_limit")
+        _validate_schema_mode(schema_mode)
+
+        sources: List[Dict[str, Any]] = []
+        for filepath in filepaths:
+            source = _load_source_dataset(
+                filepath,
+                sheet_name=sheet_name,
+                table_name=table_name,
+                header_row=header_row,
+            )
+            source["filepath"] = filepath
+            source["file_name"] = Path(filepath).name
+            source["field_key_to_index"] = _source_field_key_to_index(source)
+            sources.append(source)
+
+        schema_key_sets = [_field_keys(source["schema"]) for source in sources]
+        shared_field_keys = set.intersection(*schema_key_sets) if schema_key_sets else set()
+        union_field_keys = set().union(*schema_key_sets)
+        strict_compatible = all(
+            key_set == schema_key_sets[0]
+            for key_set in schema_key_sets[1:]
+        ) if schema_key_sets else True
+        if schema_mode == "strict" and not strict_compatible:
+            baseline = sources[0]["file_name"]
+            for source, key_set in zip(sources[1:], schema_key_sets[1:]):
+                if key_set != schema_key_sets[0]:
+                    raise DataError(
+                        "schema_mode 'strict' requires identical columns across workbooks; "
+                        f"'{source['file_name']}' differs from '{baseline}'"
+                    )
+
+        if isinstance(filters, list):
+            for index, filter_spec in enumerate(filters, start=1):
+                if isinstance(filter_spec, dict):
+                    _reject_source_column_ref(
+                        filter_spec.get("field"),
+                        argument_name=f"filters[{index}].field",
+                    )
+        if isinstance(select, list):
+            for index, column_ref in enumerate(select, start=1):
+                _reject_source_column_ref(column_ref, argument_name=f"select[{index}]")
+        _reject_source_column_ref(sort_by, argument_name="sort_by")
+
+        query_refs = _collect_query_input_refs(
+            filters=filters,
+            select=select,
+            sort_by=sort_by,
+        )
+        if select is None:
+            data_columns = _default_multi_workbook_columns(
+                sources,
+                schema_mode=schema_mode,
+                shared_field_keys=shared_field_keys,
+            )
+        else:
+            data_columns = _resolve_multi_workbook_columns(
+                query_refs,
+                sources,
+                schema_mode=schema_mode,
+            )
+        if not data_columns and not include_source_columns:
+            raise DataError("No data columns are available to return for the selected workbooks")
+
+        combined_headers = list(MULTI_WORKBOOK_SOURCE_HEADERS) + [
+            column["header"] for column in data_columns
+        ]
+        combined_rows: List[List[Any]] = []
+        source_rows_by_file: Dict[str, List[List[Any]]] = {}
+        for source in sources:
+            source_rows: List[List[Any]] = []
+            for row in source["rows"]:
+                output_row = [
+                    source["file_name"],
+                    source["sheet_name"],
+                    source["table_name"],
+                ]
+                output_row.extend(
+                    row[source["field_key_to_index"][column["field_key"]]]
+                    if column["field_key"] in source["field_key_to_index"]
+                    else None
+                    for column in data_columns
+                )
+                source_rows.append(output_row)
+            source_rows_by_file[source["filepath"]] = source_rows
+            combined_rows.extend(source_rows)
+
+        combined_schema = _build_schema(combined_headers, combined_rows)
+        normalized_filters = _normalize_filters(filters, combined_headers, combined_schema)
+        matched_rows = _apply_filters(combined_rows, normalized_filters)
+
+        resolved_sort_by = None
+        if sort_by is not None:
+            sort_index, resolved_sort_by = _resolve_column(
+                sort_by,
+                combined_headers,
+                combined_schema,
+                argument_name="sort_by",
+            )
+            matched_rows = _sort_rows(
+                matched_rows,
+                sort_index,
+                sort_desc=sort_desc,
+                field_name=resolved_sort_by,
+            )
+
+        matched_row_count = len(matched_rows)
+        if limit is not None:
+            matched_rows = matched_rows[:limit]
+
+        effective_select: Optional[List[str]]
+        if select is None:
+            if include_source_columns:
+                effective_select = None
+            else:
+                effective_select = [column["header"] for column in data_columns]
+        else:
+            effective_select = list(select)
+            if include_source_columns:
+                effective_select = list(MULTI_WORKBOOK_SOURCE_HEADERS) + effective_select
+
+        output_headers = combined_headers
+        output_rows = matched_rows
+        if effective_select is not None:
+            output_headers, output_rows, _ = _select_columns(
+                combined_headers,
+                matched_rows,
+                combined_schema,
+                effective_select,
+            )
+
+        source_workbook_sample = []
+        for source in sources[:source_sample_limit]:
+            source_matched_rows = _apply_filters(
+                source_rows_by_file[source["filepath"]],
+                normalized_filters,
+            )
+            source_workbook_sample.append(
+                {
+                    "filepath": source["filepath"],
+                    "file_name": source["file_name"],
+                    "target_kind": source["target_kind"],
+                    "sheet_name": source["sheet_name"],
+                    "table_name": source["table_name"],
+                    "source_row_count": source["total_rows"],
+                    "matched_rows": len(source_matched_rows),
+                    "auto_selected_sheet": source.get("auto_selected_sheet", False),
+                }
+            )
+
+        result = {
+            "target_kind": "multi_workbook",
+            "sheet_name": sheet_name,
+            "table_name": table_name,
+            "auto_selected_sheet": any(
+                source.get("auto_selected_sheet", False) for source in sources
+            ),
+            "headers": output_headers,
+            "rows": output_rows,
+            "matched_rows": matched_row_count,
+            "returned_rows": len(output_rows),
+            "source_row_count": len(combined_rows),
+            "truncated": limit is not None and matched_row_count > len(output_rows),
+            "filters": [
+                {
+                    "field": item["resolved_header"],
+                    "op": item["op"],
+                    **({"value": item["value"]} if "value" in item else {}),
+                    **({"values": item["values"]} if "values" in item else {}),
+                    **({"case_sensitive": True} if item["case_sensitive"] else {}),
+                }
+                for item in normalized_filters
+            ],
+            "select": select,
+            "sort_by": resolved_sort_by,
+            "sort_desc": sort_desc,
+            "workbook_count": len(sources),
+            "processed_workbooks": len(sources),
+            "include_source_columns": include_source_columns,
+            "source_columns": list(MULTI_WORKBOOK_SOURCE_HEADERS)
+            if include_source_columns
+            else [],
+            "schema_mode": schema_mode,
+            "schema_summary": {
+                "strict_compatible": strict_compatible,
+                "shared_field_count": len(shared_field_keys),
+                "union_field_count": len(union_field_keys),
+            },
+            "source_workbooks": {
+                "count": len(sources),
+                "sample": source_workbook_sample,
+                "truncated": len(sources) > source_sample_limit,
+            },
+        }
+
+        return _finalize_tabular_result(
+            payload=result,
+            headers=output_headers,
+            rows=output_rows,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
+        )
+    except DataError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to filter multiple workbooks: {e}")
         raise DataError(str(e))
 
 

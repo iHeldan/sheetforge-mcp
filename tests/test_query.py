@@ -7,11 +7,13 @@ from excel_mcp.exceptions import DataError
 from excel_mcp.query import (
     aggregate_table as aggregate_table_impl,
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_impl,
+    bulk_filter_workbooks as bulk_filter_workbooks_impl,
     query_table as query_table_impl,
 )
 from excel_mcp.server import (
     aggregate_table as aggregate_table_tool,
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_tool,
+    bulk_filter_workbooks as bulk_filter_workbooks_tool,
     query_table as query_table_tool,
 )
 
@@ -377,3 +379,194 @@ def test_bulk_aggregate_workbooks_tool_returns_json_envelope(tmp_path):
         ["North", 10],
         ["South", 8],
     ]
+
+
+def test_bulk_filter_workbooks_returns_records_with_source_columns(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Name", "Age", "City"],
+        [
+            ("Alice", 30, "Helsinki"),
+            ("Bob", 25, "Tampere"),
+        ],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Name", "Age", "City"],
+        [
+            ("Carol", 35, "Turku"),
+            ("Dave", 28, "Oulu"),
+        ],
+    )
+
+    result = bulk_filter_workbooks_impl(
+        [january, february],
+        sheet_name="Sheet1",
+        filters=[{"field": "Age", "op": "gte", "value": 28}],
+        select=["Name", "Age"],
+        sort_by="Age",
+        sort_desc=True,
+        row_mode="objects",
+        infer_schema=True,
+    )
+
+    assert result["target_kind"] == "multi_workbook"
+    assert result["schema_mode"] == "strict"
+    assert result["workbook_count"] == 2
+    assert result["matched_rows"] == 3
+    assert result["returned_rows"] == 3
+    assert result["source_columns"] == ["_source_file", "_source_sheet", "_source_table"]
+    assert result["records"] == [
+        {
+            "source_file": "february.xlsx",
+            "source_sheet": "Sheet1",
+            "source_table": None,
+            "name": "Carol",
+            "age": 35,
+        },
+        {
+            "source_file": "january.xlsx",
+            "source_sheet": "Sheet1",
+            "source_table": None,
+            "name": "Alice",
+            "age": 30,
+        },
+        {
+            "source_file": "february.xlsx",
+            "source_sheet": "Sheet1",
+            "source_table": None,
+            "name": "Dave",
+            "age": 28,
+        },
+    ]
+
+
+def test_bulk_filter_workbooks_can_omit_source_columns(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Name", "Age"],
+        [("Alice", 30)],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Name", "Age"],
+        [("Bob", 25)],
+    )
+
+    result = bulk_filter_workbooks_impl(
+        [january, february],
+        sheet_name="Sheet1",
+        include_source_columns=False,
+    )
+
+    assert result["source_columns"] == []
+    assert result["headers"] == ["Name", "Age"]
+    assert result["rows"] == [
+        ["Alice", 30],
+        ["Bob", 25],
+    ]
+
+
+def test_bulk_filter_workbooks_union_mode_fills_missing_values_with_none(tmp_path):
+    primary = _create_query_workbook(
+        tmp_path,
+        "primary.xlsx",
+        ["Region", "Sales", "Bonus"],
+        [("North", 10, 1)],
+    )
+    secondary = _create_query_workbook(
+        tmp_path,
+        "secondary.xlsx",
+        ["Region", "Sales"],
+        [("South", 6)],
+    )
+
+    result = bulk_filter_workbooks_impl(
+        [primary, secondary],
+        sheet_name="Sheet1",
+        select=["Region", "Bonus"],
+        schema_mode="union",
+        include_source_columns=False,
+        sort_by="Region",
+    )
+
+    assert result["schema_mode"] == "union"
+    assert result["rows"] == [
+        ["North", 1],
+        ["South", None],
+    ]
+
+
+def test_bulk_filter_workbooks_rejects_source_column_filters(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Name", "Age"],
+        [("Alice", 30)],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Name", "Age"],
+        [("Bob", 25)],
+    )
+
+    with pytest.raises(DataError, match="cannot reference multi-workbook source columns directly"):
+        bulk_filter_workbooks_impl(
+            [january, february],
+            sheet_name="Sheet1",
+            filters=[{"field": "_source_file", "op": "eq", "value": "january.xlsx"}],
+        )
+
+
+def test_bulk_filter_workbooks_strict_rejects_schema_drift(tmp_path):
+    baseline = _create_query_workbook(
+        tmp_path,
+        "baseline.xlsx",
+        ["Name", "Age"],
+        [("Alice", 30)],
+    )
+    drifted = _create_query_workbook(
+        tmp_path,
+        "drifted.xlsx",
+        ["Name", "Age", "City"],
+        [("Bob", 25, "Turku")],
+    )
+
+    with pytest.raises(DataError, match="schema_mode 'strict' requires identical columns across workbooks"):
+        bulk_filter_workbooks_impl(
+            [baseline, drifted],
+            sheet_name="Sheet1",
+        )
+
+
+def test_bulk_filter_workbooks_tool_returns_json_envelope(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Name", "Age"],
+        [("Alice", 30)],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Name", "Age"],
+        [("Bob", 25)],
+    )
+
+    payload = _load_tool_payload(
+        bulk_filter_workbooks_tool(
+            [january, february],
+            sheet_name="Sheet1",
+            filters=[{"field": "Age", "op": "gte", "value": 26}],
+            select=["Name"],
+        )
+    )
+
+    assert payload["operation"] == "bulk_filter_workbooks"
+    assert payload["data"]["matched_rows"] == 1
+    assert payload["data"]["rows"] == [["january.xlsx", "Sheet1", None, "Alice"]]

@@ -64,6 +64,7 @@ from excel_mcp.data import (
 from excel_mcp.query import (
     aggregate_table as aggregate_table_impl,
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_impl,
+    bulk_filter_workbooks as bulk_filter_workbooks_impl,
     query_table as query_table_impl,
 )
 from excel_mcp.pivot import create_pivot_table as create_pivot_table_impl
@@ -180,7 +181,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         if not data_dict.get("preview_only"):
             hints.append("use preview_only=True to limit the response to the first 10 rows")
         hints.append("use read_excel_as_table plus start_row/max_rows for tabular worksheet data")
-    elif operation in {"quick_read", "read_excel_as_table", "read_excel_table", "query_table", "aggregate_table", "bulk_aggregate_workbooks"}:
+    elif operation in {"quick_read", "read_excel_as_table", "read_excel_table", "query_table", "aggregate_table", "bulk_aggregate_workbooks", "bulk_filter_workbooks"}:
         if operation == "read_excel_table":
             hints.append("set max_rows to request a smaller page")
             hints.append("use start_row to continue from a later table row")
@@ -192,6 +193,13 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         elif operation == "aggregate_table":
             hints.append("use filters to narrow the matched source rows before grouping")
             hints.append("use limit to cap the number of returned groups")
+        elif operation == "bulk_filter_workbooks":
+            hints.append("use select to return fewer columns")
+            hints.append("use filters to narrow the matched rows before returning them")
+            hints.append("use limit to cap the number of returned rows")
+            hints.append("set include_source_columns=False to trim provenance columns from every row")
+            hints.append("reduce the number of filepaths per call when filtering many workbooks")
+            hints.append("set source_sample_limit to trim per-workbook metadata")
         elif operation == "bulk_aggregate_workbooks":
             hints.append("use filters to narrow the matched source rows before grouping")
             hints.append("use limit to cap the number of returned groups")
@@ -781,6 +789,51 @@ def query_table(
             sort_by=sort_by,
             sort_desc=sort_desc,
             limit=limit,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Bulk Filter Workbooks",
+        readOnlyHint=True,
+    ),
+)
+def bulk_filter_workbooks(
+    filepaths: List[str],
+    sheet_name: Optional[str] = None,
+    table_name: Optional[str] = None,
+    header_row: int = 1,
+    select: Optional[List[str]] = None,
+    filters: Optional[List[Dict[str, Any]]] = None,
+    sort_by: Optional[str] = None,
+    sort_desc: bool = False,
+    limit: Optional[int] = None,
+    schema_mode: str = "strict",
+    source_sample_limit: int = 10,
+    include_source_columns: bool = True,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> str:
+    """Filter comparable worksheet or table data across multiple workbooks."""
+    return _run_tool(
+        "bulk_filter_workbooks",
+        lambda: bulk_filter_workbooks_impl(
+            [get_excel_path(filepath) for filepath in filepaths],
+            sheet_name=sheet_name,
+            table_name=table_name,
+            header_row=header_row,
+            select=select,
+            filters=filters,
+            sort_by=sort_by,
+            sort_desc=sort_desc,
+            limit=limit,
+            schema_mode=schema_mode,
+            source_sample_limit=source_sample_limit,
+            include_source_columns=include_source_columns,
             row_mode=row_mode,
             infer_schema=infer_schema,
         ),
