@@ -8,6 +8,7 @@ from excel_mcp.query import (
     aggregate_table as aggregate_table_impl,
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_impl,
     bulk_filter_workbooks as bulk_filter_workbooks_impl,
+    cross_workbook_lookup as cross_workbook_lookup_impl,
     query_table as query_table_impl,
     union_tables as union_tables_impl,
 )
@@ -15,6 +16,7 @@ from excel_mcp.server import (
     aggregate_table as aggregate_table_tool,
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_tool,
     bulk_filter_workbooks as bulk_filter_workbooks_tool,
+    cross_workbook_lookup as cross_workbook_lookup_tool,
     query_table as query_table_tool,
     union_tables as union_tables_tool,
 )
@@ -763,3 +765,270 @@ def test_union_tables_tool_returns_json_envelope(tmp_path):
     assert payload["operation"] == "union_tables"
     assert payload["data"]["union_row_count"] == 2
     assert payload["data"]["returned_rows"] == 1
+
+
+def test_cross_workbook_lookup_left_join_enriches_rows(tmp_path):
+    source = _create_query_workbook(
+        tmp_path,
+        "source.xlsx",
+        ["Code", "Name"],
+        [
+            ("A001", "Alpha"),
+            ("B002", "Beta"),
+            ("D004", "Delta"),
+        ],
+    )
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["CustomerCode", "Status", "Updated"],
+        [
+            ("a001", "draft", 20260401),
+            ("B002", "open", 20260402),
+        ],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["CustomerCode", "Status", "Updated"],
+        [
+            ("A001", "published", 20260405),
+            ("C003", "archived", 20260403),
+        ],
+    )
+
+    result = cross_workbook_lookup_impl(
+        source,
+        [january, february],
+        source_sheet_name="Sheet1",
+        lookup_sheet_name="Sheet1",
+        source_key="Code",
+        lookup_key="CustomerCode",
+        lookup_select=["Status", "Updated"],
+        lookup_sort_by="Updated",
+        lookup_sort_desc=True,
+        row_mode="objects",
+        infer_schema=True,
+    )
+
+    assert result["target_kind"] == "cross_workbook_lookup"
+    assert result["source_key"] == "Code"
+    assert result["lookup_key"] == "CustomerCode"
+    assert result["matched_source_rows"] == 2
+    assert result["unmatched_source_rows"] == 1
+    assert result["lookup_key_summary"] == {
+        "distinct_keys": 3,
+        "duplicate_keys": 1,
+        "blank_keys_ignored": 0,
+    }
+    assert result["records"] == [
+        {
+            "code": "A001",
+            "name": "Alpha",
+            "lookup_match_count": 2,
+            "lookup_source_file": "february.xlsx",
+            "lookup_source_sheet": "Sheet1",
+            "lookup_source_table": None,
+            "lookup_status": "published",
+            "lookup_updated": 20260405,
+        },
+        {
+            "code": "B002",
+            "name": "Beta",
+            "lookup_match_count": 1,
+            "lookup_source_file": "january.xlsx",
+            "lookup_source_sheet": "Sheet1",
+            "lookup_source_table": None,
+            "lookup_status": "open",
+            "lookup_updated": 20260402,
+        },
+        {
+            "code": "D004",
+            "name": "Delta",
+            "lookup_match_count": 0,
+            "lookup_source_file": None,
+            "lookup_source_sheet": None,
+            "lookup_source_table": None,
+            "lookup_status": None,
+            "lookup_updated": None,
+        },
+    ]
+
+
+def test_cross_workbook_lookup_inner_join_drops_unmatched_source_rows(tmp_path):
+    source = _create_query_workbook(
+        tmp_path,
+        "source.xlsx",
+        ["Id", "Name"],
+        [
+            (1, "One"),
+            (2, "Two"),
+            (3, "Three"),
+        ],
+    )
+    lookup = _create_query_workbook(
+        tmp_path,
+        "lookup.xlsx",
+        ["Id", "Status"],
+        [
+            (1, "active"),
+            (3, "pending"),
+        ],
+    )
+
+    result = cross_workbook_lookup_impl(
+        source,
+        [lookup],
+        source_sheet_name="Sheet1",
+        lookup_sheet_name="Sheet1",
+        source_key="Id",
+        lookup_select=["Status"],
+        join_type="inner",
+        include_lookup_source_columns=False,
+        include_lookup_match_count=False,
+    )
+
+    assert result["matched_source_rows"] == 2
+    assert result["unmatched_source_rows"] == 1
+    assert result["rows"] == [
+        [1, "One", "active"],
+        [3, "Three", "pending"],
+    ]
+
+
+def test_cross_workbook_lookup_match_mode_all_repeats_matching_rows(tmp_path):
+    source = _create_query_workbook(
+        tmp_path,
+        "source.xlsx",
+        ["Id", "Name"],
+        [(1, "One")],
+    )
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Id", "Status"],
+        [(1, "draft")],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Id", "Status"],
+        [(1, "published")],
+    )
+
+    result = cross_workbook_lookup_impl(
+        source,
+        [january, february],
+        source_sheet_name="Sheet1",
+        lookup_sheet_name="Sheet1",
+        source_key="Id",
+        lookup_select=["Status"],
+        match_mode="all",
+        include_lookup_source_columns=False,
+    )
+
+    assert result["output_row_count"] == 2
+    assert result["rows"] == [
+        [1, "One", 2, "draft"],
+        [1, "One", 2, "published"],
+    ]
+
+
+def test_cross_workbook_lookup_match_mode_error_rejects_duplicate_lookup_matches(tmp_path):
+    source = _create_query_workbook(
+        tmp_path,
+        "source.xlsx",
+        ["Id", "Name"],
+        [(1, "One")],
+    )
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Id", "Status"],
+        [(1, "draft")],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Id", "Status"],
+        [(1, "published")],
+    )
+
+    with pytest.raises(DataError, match="matched multiple rows"):
+        cross_workbook_lookup_impl(
+            source,
+            [january, february],
+            source_sheet_name="Sheet1",
+            lookup_sheet_name="Sheet1",
+            source_key="Id",
+            lookup_select=["Status"],
+            match_mode="error",
+        )
+
+
+def test_cross_workbook_lookup_union_mode_fills_missing_lookup_values_with_none(tmp_path):
+    source = _create_query_workbook(
+        tmp_path,
+        "source.xlsx",
+        ["Id"],
+        [(1,), (2,)],
+    )
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Id", "Owner"],
+        [(1, "Ada")],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Id", "Status"],
+        [(2, "open")],
+    )
+
+    result = cross_workbook_lookup_impl(
+        source,
+        [january, february],
+        source_sheet_name="Sheet1",
+        lookup_sheet_name="Sheet1",
+        source_key="Id",
+        lookup_select=["Owner"],
+        schema_mode="union",
+        include_lookup_source_columns=False,
+    )
+
+    assert result["schema_mode"] == "union"
+    assert result["rows"] == [
+        [1, 1, "Ada"],
+        [2, 1, None],
+    ]
+
+
+def test_cross_workbook_lookup_tool_returns_json_envelope(tmp_path):
+    source = _create_query_workbook(
+        tmp_path,
+        "source.xlsx",
+        ["Id", "Name"],
+        [(1, "One"), (2, "Two")],
+    )
+    lookup = _create_query_workbook(
+        tmp_path,
+        "lookup.xlsx",
+        ["Id", "Status"],
+        [(1, "active")],
+    )
+
+    payload = _load_tool_payload(
+        cross_workbook_lookup_tool(
+            source,
+            [lookup],
+            source_key="Id",
+            source_sheet_name="Sheet1",
+            lookup_sheet_name="Sheet1",
+            lookup_select=["Status"],
+        )
+    )
+
+    assert payload["operation"] == "cross_workbook_lookup"
+    assert payload["data"]["matched_source_rows"] == 1
+    assert payload["data"]["returned_rows"] == 2

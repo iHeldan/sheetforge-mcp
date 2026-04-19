@@ -64,6 +64,7 @@ from excel_mcp.data import (
 from excel_mcp.query import (
     aggregate_table as aggregate_table_impl,
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_impl,
+    cross_workbook_lookup as cross_workbook_lookup_impl,
     bulk_filter_workbooks as bulk_filter_workbooks_impl,
     query_table as query_table_impl,
     union_tables as union_tables_impl,
@@ -182,7 +183,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         if not data_dict.get("preview_only"):
             hints.append("use preview_only=True to limit the response to the first 10 rows")
         hints.append("use read_excel_as_table plus start_row/max_rows for tabular worksheet data")
-    elif operation in {"quick_read", "read_excel_as_table", "read_excel_table", "query_table", "aggregate_table", "bulk_aggregate_workbooks", "bulk_filter_workbooks", "union_tables"}:
+    elif operation in {"quick_read", "read_excel_as_table", "read_excel_table", "query_table", "aggregate_table", "bulk_aggregate_workbooks", "bulk_filter_workbooks", "union_tables", "cross_workbook_lookup"}:
         if operation == "read_excel_table":
             hints.append("set max_rows to request a smaller page")
             hints.append("use start_row to continue from a later table row")
@@ -207,6 +208,14 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             hints.append("set include_source_columns=False to trim provenance columns from every row")
             hints.append("reduce the number of filepaths per call when unioning many workbooks")
             hints.append("set source_sample_limit to trim per-workbook metadata")
+        elif operation == "cross_workbook_lookup":
+            hints.append("use select to return fewer source columns")
+            hints.append("use lookup_select to return fewer lookup columns")
+            hints.append("use limit to cap the number of returned joined rows")
+            hints.append("set include_lookup_source_columns=False to trim provenance columns from every row")
+            hints.append("set include_lookup_match_count=False if per-row match counts are not needed")
+            hints.append("reduce the number of lookup_filepaths per call when joining many workbooks")
+            hints.append("set lookup_sample_limit to trim per-workbook metadata")
         elif operation == "bulk_aggregate_workbooks":
             hints.append("use filters to narrow the matched source rows before grouping")
             hints.append("use limit to cap the number of returned groups")
@@ -886,6 +895,71 @@ def union_tables(
             source_sample_limit=source_sample_limit,
             include_source_columns=include_source_columns,
             dedupe_on=dedupe_on,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Cross Workbook Lookup",
+        readOnlyHint=True,
+    ),
+)
+def cross_workbook_lookup(
+    source_filepath: str,
+    lookup_filepaths: List[str],
+    source_key: str,
+    source_sheet_name: Optional[str] = None,
+    source_table_name: Optional[str] = None,
+    lookup_sheet_name: Optional[str] = None,
+    lookup_table_name: Optional[str] = None,
+    source_header_row: int = 1,
+    lookup_header_row: int = 1,
+    lookup_key: Optional[str] = None,
+    select: Optional[List[str]] = None,
+    lookup_select: Optional[List[str]] = None,
+    join_type: str = "left",
+    match_mode: str = "first",
+    lookup_sort_by: Optional[str] = None,
+    lookup_sort_desc: bool = False,
+    limit: Optional[int] = None,
+    schema_mode: str = "strict",
+    lookup_sample_limit: int = 10,
+    include_lookup_source_columns: bool = True,
+    include_lookup_match_count: bool = True,
+    case_sensitive: bool = False,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> str:
+    """Enrich one workbook dataset from matching rows in one or more lookup workbooks."""
+    return _run_tool(
+        "cross_workbook_lookup",
+        lambda: cross_workbook_lookup_impl(
+            get_excel_path(source_filepath),
+            [get_excel_path(filepath) for filepath in lookup_filepaths],
+            source_sheet_name=source_sheet_name,
+            source_table_name=source_table_name,
+            lookup_sheet_name=lookup_sheet_name,
+            lookup_table_name=lookup_table_name,
+            source_header_row=source_header_row,
+            lookup_header_row=lookup_header_row,
+            source_key=source_key,
+            lookup_key=lookup_key,
+            select=select,
+            lookup_select=lookup_select,
+            join_type=join_type,
+            match_mode=match_mode,
+            lookup_sort_by=lookup_sort_by,
+            lookup_sort_desc=lookup_sort_desc,
+            limit=limit,
+            schema_mode=schema_mode,
+            lookup_sample_limit=lookup_sample_limit,
+            include_lookup_source_columns=include_lookup_source_columns,
+            include_lookup_match_count=include_lookup_match_count,
+            case_sensitive=case_sensitive,
             row_mode=row_mode,
             infer_schema=infer_schema,
         ),

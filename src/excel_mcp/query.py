@@ -52,6 +52,10 @@ MULTI_WORKBOOK_SOURCE_REF_KEYS = {
     "source_sheet",
     "source_table",
 }
+LOOKUP_SOURCE_HEADERS = ["_lookup_source_file", "_lookup_source_sheet", "_lookup_source_table"]
+LOOKUP_OUTPUT_PREFIX = "lookup_"
+LOOKUP_JOIN_TYPES = {"left", "inner"}
+LOOKUP_MATCH_MODES = {"first", "all", "error"}
 
 
 def _is_numeric(value: Any) -> bool:
@@ -86,11 +90,16 @@ def _is_multi_workbook_source_ref(value: Any) -> bool:
     return isinstance(value, str) and value.strip().casefold() in MULTI_WORKBOOK_SOURCE_REF_KEYS
 
 
-def _reject_source_column_ref(column_ref: Any, *, argument_name: str) -> None:
+def _reject_source_column_ref(
+    column_ref: Any,
+    *,
+    argument_name: str,
+    suggested_flag_name: str = "include_source_columns",
+) -> None:
     if _is_multi_workbook_source_ref(column_ref):
         raise DataError(
             f"{argument_name} cannot reference multi-workbook source columns directly; "
-            "use include_source_columns=True to include source provenance in the output"
+            f"use {suggested_flag_name}=True to include source provenance in the output"
         )
 
 
@@ -350,6 +359,7 @@ def _default_multi_workbook_columns(
             columns.append(
                 {
                     "field_key": field_key,
+                    "field": sources[0]["schema"][index]["field"],
                     "header": sources[0]["headers"][index],
                 }
             )
@@ -365,6 +375,7 @@ def _default_multi_workbook_columns(
             columns.append(
                 {
                     "field_key": field_key,
+                    "field": source["schema"][index]["field"],
                     "header": source["headers"][index],
                 }
             )
@@ -376,14 +387,20 @@ def _resolve_multi_workbook_columns(
     sources: List[Dict[str, Any]],
     *,
     schema_mode: str,
+    source_column_flag_name: str = "include_source_columns",
 ) -> List[Dict[str, Any]]:
     columns: List[Dict[str, Any]] = []
     seen_field_keys: set[str] = set()
 
     for ref in refs:
-        _reject_source_column_ref(ref, argument_name="column reference")
+        _reject_source_column_ref(
+            ref,
+            argument_name="column reference",
+            suggested_flag_name=source_column_flag_name,
+        )
         resolved_header = None
         resolved_field_key = None
+        resolved_field = None
 
         for source in sources:
             resolved = _resolve_column_or_none(ref, source["headers"], source["schema"])
@@ -391,9 +408,10 @@ def _resolve_multi_workbook_columns(
                 continue
             resolved_index, resolved_header = resolved
             resolved_field_key = str(source["schema"][resolved_index]["field"]).casefold()
+            resolved_field = source["schema"][resolved_index]["field"]
             break
 
-        if resolved_header is None or resolved_field_key is None:
+        if resolved_header is None or resolved_field_key is None or resolved_field is None:
             raise DataError(f"Column '{ref}' was not found in any selected workbook")
 
         if schema_mode != "union":
@@ -410,6 +428,7 @@ def _resolve_multi_workbook_columns(
         columns.append(
             {
                 "field_key": resolved_field_key,
+                "field": resolved_field,
                 "header": resolved_header,
             }
         )
@@ -684,6 +703,32 @@ def _deduplicate_rows(
         [header_name for _, header_name in dedupe_specs],
         duplicates_removed,
     )
+
+
+def _validate_lookup_join_type(join_type: str) -> None:
+    if join_type not in LOOKUP_JOIN_TYPES:
+        raise DataError("join_type must be 'left' or 'inner'")
+
+
+def _validate_lookup_match_mode(match_mode: str) -> None:
+    if match_mode not in LOOKUP_MATCH_MODES:
+        raise DataError("match_mode must be 'first', 'all', or 'error'")
+
+
+def _normalize_lookup_key_value(value: Any, *, case_sensitive: bool) -> Any:
+    if _is_blank(value):
+        return None
+    normalized = _stringify_value_for_uniqueness(value)
+    if isinstance(normalized, str) and not case_sensitive:
+        return normalized.casefold()
+    return normalized
+
+
+def _lookup_output_header(column: Dict[str, Any]) -> str:
+    header_text = "" if column.get("header") is None else str(column["header"]).strip()
+    if not header_text:
+        header_text = str(column.get("field") or column["field_key"])
+    return f"{LOOKUP_OUTPUT_PREFIX}{header_text}"
 
 
 def _normalize_metrics(
@@ -1506,6 +1551,385 @@ def union_tables(
         raise
     except Exception as e:
         logger.error(f"Failed to union multiple workbooks: {e}")
+        raise DataError(str(e))
+
+
+def cross_workbook_lookup(
+    source_filepath: str,
+    lookup_filepaths: List[str],
+    *,
+    source_sheet_name: Optional[str] = None,
+    source_table_name: Optional[str] = None,
+    lookup_sheet_name: Optional[str] = None,
+    lookup_table_name: Optional[str] = None,
+    source_header_row: int = 1,
+    lookup_header_row: int = 1,
+    source_key: str,
+    lookup_key: Optional[str] = None,
+    select: Optional[List[str]] = None,
+    lookup_select: Optional[List[str]] = None,
+    join_type: str = "left",
+    match_mode: str = "first",
+    lookup_sort_by: Optional[str] = None,
+    lookup_sort_desc: bool = False,
+    limit: Optional[int] = None,
+    schema_mode: str = "strict",
+    lookup_sample_limit: int = 10,
+    include_lookup_source_columns: bool = True,
+    include_lookup_match_count: bool = True,
+    case_sensitive: bool = False,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> Dict[str, Any]:
+    """Enrich one workbook dataset from matching rows in one or more lookup workbooks."""
+    try:
+        if not isinstance(source_filepath, str) or not source_filepath.strip():
+            raise DataError("source_filepath must be a non-empty workbook path")
+        _validate_filepaths(lookup_filepaths)
+        _validate_row_mode(row_mode)
+        _validate_positive_integer(source_header_row, argument_name="source_header_row")
+        _validate_positive_integer(lookup_header_row, argument_name="lookup_header_row")
+        _validate_positive_integer(limit, argument_name="limit")
+        _validate_positive_integer(lookup_sample_limit, argument_name="lookup_sample_limit")
+        _validate_schema_mode(schema_mode)
+        _validate_lookup_join_type(join_type)
+        _validate_lookup_match_mode(match_mode)
+
+        if lookup_select is not None and (not isinstance(lookup_select, list) or not lookup_select):
+            raise DataError("lookup_select must be a non-empty list of column references")
+
+        source = _load_source_dataset(
+            source_filepath,
+            sheet_name=source_sheet_name,
+            table_name=source_table_name,
+            header_row=source_header_row,
+        )
+        source_headers = source["headers"]
+        source_rows = source["rows"]
+        source_schema = source["schema"]
+        source_key_index, resolved_source_key = _resolve_column(
+            source_key,
+            source_headers,
+            source_schema,
+            argument_name="source_key",
+        )
+        selected_source_headers, selected_source_rows, _ = _select_columns(
+            source_headers,
+            source_rows,
+            source_schema,
+            select,
+        )
+
+        lookup_key_ref = lookup_key if lookup_key is not None else source_key
+        lookup_sources: List[Dict[str, Any]] = []
+        for filepath in lookup_filepaths:
+            source_dataset = _load_source_dataset(
+                filepath,
+                sheet_name=lookup_sheet_name,
+                table_name=lookup_table_name,
+                header_row=lookup_header_row,
+            )
+            source_dataset["filepath"] = filepath
+            source_dataset["file_name"] = Path(filepath).name
+            source_dataset["field_key_to_index"] = _source_field_key_to_index(source_dataset)
+            lookup_sources.append(source_dataset)
+
+        schema_key_sets = [_field_keys(source_dataset["schema"]) for source_dataset in lookup_sources]
+        shared_field_keys = set.intersection(*schema_key_sets) if schema_key_sets else set()
+        union_field_keys = set().union(*schema_key_sets)
+        strict_compatible = all(
+            key_set == schema_key_sets[0]
+            for key_set in schema_key_sets[1:]
+        ) if schema_key_sets else True
+        if schema_mode == "strict" and not strict_compatible:
+            baseline = lookup_sources[0]["file_name"]
+            for source_dataset, key_set in zip(lookup_sources[1:], schema_key_sets[1:]):
+                if key_set != schema_key_sets[0]:
+                    raise DataError(
+                        "schema_mode 'strict' requires identical columns across workbooks; "
+                        f"'{source_dataset['file_name']}' differs from '{baseline}'"
+                    )
+
+        resolved_lookup_key = None
+        lookup_key_field_key = None
+        for source_dataset in lookup_sources:
+            resolved = _resolve_column_or_none(
+                lookup_key_ref,
+                source_dataset["headers"],
+                source_dataset["schema"],
+            )
+            if resolved is None:
+                raise DataError(
+                    f"lookup_key '{lookup_key_ref}' was not found in lookup workbook "
+                    f"'{source_dataset['file_name']}'"
+                )
+            lookup_key_index, resolved_lookup_key = resolved
+            field_key = str(source_dataset["schema"][lookup_key_index]["field"]).casefold()
+            if lookup_key_field_key is None:
+                lookup_key_field_key = field_key
+            elif field_key != lookup_key_field_key:
+                raise DataError(
+                    f"lookup_key '{lookup_key_ref}' resolved inconsistently across lookup workbooks"
+                )
+
+        if lookup_select is None:
+            lookup_output_columns = [
+                column
+                for column in _default_multi_workbook_columns(
+                    lookup_sources,
+                    schema_mode=schema_mode,
+                    shared_field_keys=shared_field_keys,
+                )
+                if column["field_key"] != lookup_key_field_key
+            ]
+        else:
+            lookup_output_columns = _resolve_multi_workbook_columns(
+                lookup_select,
+                lookup_sources,
+                schema_mode=schema_mode,
+                source_column_flag_name="include_lookup_source_columns",
+            )
+
+        lookup_sort_column = None
+        if lookup_sort_by is not None:
+            resolved_lookup_sort_columns = _resolve_multi_workbook_columns(
+                [lookup_sort_by],
+                lookup_sources,
+                schema_mode=schema_mode,
+                source_column_flag_name="include_lookup_source_columns",
+            )
+            lookup_sort_column = resolved_lookup_sort_columns[0]
+
+        lookup_rows: List[Dict[str, Any]] = []
+        lookup_workbook_sample = []
+        blank_lookup_keys_ignored = 0
+        for source_dataset in lookup_sources:
+            lookup_key_index, _ = _resolve_column(
+                lookup_key_ref,
+                source_dataset["headers"],
+                source_dataset["schema"],
+                argument_name="lookup_key",
+            )
+            source_blank_keys = 0
+            source_indexed_rows = 0
+            for row in source_dataset["rows"]:
+                normalized_lookup_value = _normalize_lookup_key_value(
+                    row[lookup_key_index] if lookup_key_index < len(row) else None,
+                    case_sensitive=case_sensitive,
+                )
+                if normalized_lookup_value is None:
+                    source_blank_keys += 1
+                    blank_lookup_keys_ignored += 1
+                    continue
+
+                lookup_rows.append(
+                    {
+                        "normalized_key": normalized_lookup_value,
+                        "source_file": source_dataset["file_name"],
+                        "source_sheet": source_dataset["sheet_name"],
+                        "source_table": source_dataset["table_name"],
+                        "output_values": [
+                            row[source_dataset["field_key_to_index"][column["field_key"]]]
+                            if column["field_key"] in source_dataset["field_key_to_index"]
+                            else None
+                            for column in lookup_output_columns
+                        ],
+                        "sort_value": (
+                            row[source_dataset["field_key_to_index"][lookup_sort_column["field_key"]]]
+                            if lookup_sort_column is not None
+                            and lookup_sort_column["field_key"] in source_dataset["field_key_to_index"]
+                            else None
+                        ),
+                    }
+                )
+                source_indexed_rows += 1
+
+            lookup_workbook_sample.append(
+                {
+                    "filepath": source_dataset["filepath"],
+                    "file_name": source_dataset["file_name"],
+                    "target_kind": source_dataset["target_kind"],
+                    "sheet_name": source_dataset["sheet_name"],
+                    "table_name": source_dataset["table_name"],
+                    "source_row_count": source_dataset["total_rows"],
+                    "indexed_rows": source_indexed_rows,
+                    "blank_key_rows_ignored": source_blank_keys,
+                    "auto_selected_sheet": source_dataset.get("auto_selected_sheet", False),
+                }
+            )
+
+        resolved_lookup_sort_by = None
+        if lookup_sort_column is not None:
+            resolved_lookup_sort_by = str(lookup_sort_column["header"])
+            sortable_lookup_rows = [
+                [entry["sort_value"], entry]
+                for entry in lookup_rows
+            ]
+            sorted_lookup_rows = _sort_rows(
+                sortable_lookup_rows,
+                0,
+                sort_desc=lookup_sort_desc,
+                field_name=resolved_lookup_sort_by,
+            )
+            lookup_rows = [row[1] for row in sorted_lookup_rows]
+
+        lookup_index: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
+        for entry in lookup_rows:
+            lookup_index[entry["normalized_key"]].append(entry)
+
+        duplicate_lookup_keys = sum(
+            1 for matches in lookup_index.values() if len(matches) > 1
+        )
+
+        output_headers = list(selected_source_headers)
+        if include_lookup_match_count:
+            output_headers.append("_lookup_match_count")
+        if include_lookup_source_columns:
+            output_headers.extend(LOOKUP_SOURCE_HEADERS)
+        output_lookup_headers = [
+            _lookup_output_header(column) for column in lookup_output_columns
+        ]
+        output_headers.extend(output_lookup_headers)
+
+        matched_source_rows = 0
+        unmatched_source_rows = 0
+        blank_source_keys = 0
+        output_rows: List[List[Any]] = []
+        for source_row, selected_source_row in zip(source_rows, selected_source_rows):
+            normalized_source_value = _normalize_lookup_key_value(
+                source_row[source_key_index] if source_key_index < len(source_row) else None,
+                case_sensitive=case_sensitive,
+            )
+            matches = [] if normalized_source_value is None else lookup_index.get(normalized_source_value, [])
+            if normalized_source_value is None:
+                blank_source_keys += 1
+
+            if match_mode == "error" and len(matches) > 1:
+                display_key = source_row[source_key_index] if source_key_index < len(source_row) else None
+                raise DataError(
+                    f"Lookup key value '{display_key}' matched multiple rows; "
+                    "set match_mode='first' or 'all' to allow duplicate lookup matches"
+                )
+
+            if not matches:
+                unmatched_source_rows += 1
+                if join_type == "inner":
+                    continue
+
+                output_row = list(selected_source_row)
+                if include_lookup_match_count:
+                    output_row.append(0)
+                if include_lookup_source_columns:
+                    output_row.extend([None, None, None])
+                output_row.extend([None] * len(output_lookup_headers))
+                output_rows.append(output_row)
+                continue
+
+            matched_source_rows += 1
+            effective_matches = matches if match_mode == "all" else matches[:1]
+            for match in effective_matches:
+                output_row = list(selected_source_row)
+                if include_lookup_match_count:
+                    output_row.append(len(matches))
+                if include_lookup_source_columns:
+                    output_row.extend(
+                        [
+                            match["source_file"],
+                            match["source_sheet"],
+                            match["source_table"],
+                        ]
+                    )
+                output_row.extend(match["output_values"])
+                output_rows.append(output_row)
+
+        total_output_rows = len(output_rows)
+        if limit is not None:
+            output_rows = output_rows[:limit]
+
+        warnings: List[str] = []
+        if duplicate_lookup_keys > 0 and match_mode == "first":
+            warnings.append(
+                f"{duplicate_lookup_keys} lookup keys matched multiple rows; "
+                "first-match semantics kept the first row after lookup_sort_by ordering"
+            )
+
+        result: Dict[str, Any] = {
+            "target_kind": "cross_workbook_lookup",
+            "source_sheet_name": source["sheet_name"],
+            "source_table_name": source["table_name"],
+            "lookup_sheet_name": lookup_sheet_name,
+            "lookup_table_name": lookup_table_name,
+            "auto_selected_sheet": source.get("auto_selected_sheet", False) or any(
+                source_dataset.get("auto_selected_sheet", False) for source_dataset in lookup_sources
+            ),
+            "source_auto_selected_sheet": source.get("auto_selected_sheet", False),
+            "lookup_auto_selected_sheet": any(
+                source_dataset.get("auto_selected_sheet", False) for source_dataset in lookup_sources
+            ),
+            "headers": output_headers,
+            "rows": output_rows,
+            "source_key": resolved_source_key,
+            "lookup_key": resolved_lookup_key,
+            "select": select,
+            "lookup_select": lookup_select,
+            "lookup_columns": [
+                "" if column["header"] is None else str(column["header"])
+                for column in lookup_output_columns
+            ],
+            "lookup_output_columns": output_lookup_headers,
+            "join_type": join_type,
+            "match_mode": match_mode,
+            "lookup_sort_by": resolved_lookup_sort_by,
+            "lookup_sort_desc": lookup_sort_desc,
+            "case_sensitive": case_sensitive,
+            "source_row_count": source["total_rows"],
+            "lookup_row_count": len(lookup_rows),
+            "matched_source_rows": matched_source_rows,
+            "unmatched_source_rows": unmatched_source_rows,
+            "blank_source_keys": blank_source_keys,
+            "returned_rows": len(output_rows),
+            "output_row_count": total_output_rows,
+            "truncated": limit is not None and total_output_rows > len(output_rows),
+            "lookup_workbook_count": len(lookup_sources),
+            "include_lookup_source_columns": include_lookup_source_columns,
+            "lookup_source_columns": list(LOOKUP_SOURCE_HEADERS)
+            if include_lookup_source_columns
+            else [],
+            "include_lookup_match_count": include_lookup_match_count,
+            "lookup_match_count_column": "_lookup_match_count"
+            if include_lookup_match_count
+            else None,
+            "schema_mode": schema_mode,
+            "schema_summary": {
+                "strict_compatible": strict_compatible,
+                "shared_field_count": len(shared_field_keys),
+                "union_field_count": len(union_field_keys),
+            },
+            "lookup_key_summary": {
+                "distinct_keys": len(lookup_index),
+                "duplicate_keys": duplicate_lookup_keys,
+                "blank_keys_ignored": blank_lookup_keys_ignored,
+            },
+            "lookup_workbooks": {
+                "count": len(lookup_sources),
+                "sample": lookup_workbook_sample[:lookup_sample_limit],
+                "truncated": len(lookup_sources) > lookup_sample_limit,
+            },
+        }
+        if warnings:
+            result["warnings"] = warnings
+
+        return _finalize_tabular_result(
+            payload=result,
+            headers=output_headers,
+            rows=output_rows,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
+        )
+    except DataError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to run cross-workbook lookup: {e}")
         raise DataError(str(e))
 
 
