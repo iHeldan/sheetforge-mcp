@@ -23,6 +23,7 @@
 - Added `explain_formula_cell` so agents can resolve formula inputs through named ranges and structured references, inspect upstream formula chains, and see downstream dependents in one call.
 - Added `inspect_named_range`, `delete_named_range`, `inspect_data_validation_rules`, `remove_data_validation_rules`, `inspect_conditional_format_rules`, and `remove_conditional_format_rules` to turn workbook-repair plans into inspect → dry-run → apply workflows.
 - Added public-doc regression checks so `manifest.json`, `TOOLS.md`, `README.md`, and the landing page stay aligned with the currently registered MCP tool surface.
+- Added release-artifact regression checks so `pyproject.toml`, `manifest.json`, the published-version doc markers, and the tracked `.mcpb` bundle stay synchronized.
 - Refreshed the manifest, README, and landing-page copy for the current 74-tool surface and the newer workbook-repair, workbook-diff, formula-lineage, formula-inspection, circular-dependency, layout-introspection, and multi-workbook read helpers.
 
 ### Changed

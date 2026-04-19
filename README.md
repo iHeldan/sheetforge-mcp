@@ -269,6 +269,7 @@ uv build
 ## Release Flow
 
 - Update `pyproject.toml`, `manifest.json`, and the tracked `.mcpb` bundle together for each release.
+- Keep the tracked bundle filename in sync with the package version, for example `sheetforge-mcp-0.5.0.mcpb`.
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
 
