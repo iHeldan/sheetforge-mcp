@@ -607,14 +607,16 @@ def read_data_from_excel(
             compact=compact,
             values_only=values_only,
         )
+        effective_values_only = "values" in result and "cells" not in result
         if not result:
             result = {"range": f"{start_cell}:{end_cell}" if end_cell else start_cell, "sheet_name": sheet_name}
             result["values" if values_only else "cells"] = []
+            effective_values_only = values_only
 
         if preview_only:
             result["preview_only"] = True
 
-        if values_only:
+        if effective_values_only:
             value_count = sum(len(row) for row in result["values"])
             message = f"Read {value_count} value(s) from '{sheet_name}'"
         else:

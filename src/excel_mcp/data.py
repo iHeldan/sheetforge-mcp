@@ -18,7 +18,7 @@ from .workbook import first_worksheet, require_worksheet, safe_workbook
 
 logger = logging.getLogger(__name__)
 ROW_MODES = {"arrays", "objects"}
-RANGE_READ_CURSOR_VERSION = 1
+RANGE_READ_CURSOR_VERSION = 2
 DEFAULT_DATASET_SAMPLE_ROWS = 25
 KEY_CANDIDATE_SCAN_LIMIT = 100
 
@@ -895,11 +895,17 @@ def _encode_range_read_cursor(
     end_cell: str,
     max_rows: Optional[int],
     max_cols: Optional[int],
+    include_validation: bool,
+    compact: bool,
+    values_only: bool,
 ) -> str:
     payload: Dict[str, Any] = {
         "v": RANGE_READ_CURSOR_VERSION,
         "start_cell": start_cell,
         "end_cell": end_cell,
+        "include_validation": include_validation,
+        "compact": compact,
+        "values_only": values_only,
     }
     if max_rows is not None:
         payload["max_rows"] = max_rows
@@ -924,7 +930,7 @@ def _decode_range_read_cursor(cursor: str) -> Dict[str, Any]:
 
     if not isinstance(payload, dict):
         raise DataError("Invalid cursor")
-    if payload.get("v") != RANGE_READ_CURSOR_VERSION:
+    if payload.get("v") not in {1, RANGE_READ_CURSOR_VERSION}:
         raise DataError("Unsupported cursor version")
 
     start_cell = payload.get("start_cell")
@@ -945,11 +951,24 @@ def _decode_range_read_cursor(cursor: str) -> Dict[str, Any]:
     ):
         raise DataError("Invalid cursor")
 
+    include_validation = payload.get("include_validation")
+    compact = payload.get("compact")
+    values_only = payload.get("values_only")
+    if include_validation is not None and not isinstance(include_validation, bool):
+        raise DataError("Invalid cursor")
+    if compact is not None and not isinstance(compact, bool):
+        raise DataError("Invalid cursor")
+    if values_only is not None and not isinstance(values_only, bool):
+        raise DataError("Invalid cursor")
+
     return {
         "start_cell": start_cell,
         "end_cell": end_cell,
         "max_rows": max_rows,
         "max_cols": max_cols,
+        "include_validation": include_validation,
+        "compact": compact,
+        "values_only": values_only,
     }
 
 
@@ -961,6 +980,9 @@ def _build_range_continuation(
     requested_end_col: int,
     max_rows: Optional[int],
     max_cols: Optional[int],
+    include_validation: bool,
+    compact: bool,
+    values_only: bool,
 ) -> Dict[str, Any]:
     start_cell = _cell_address(start_row, start_col)
     end_cell = _cell_address(requested_end_row, requested_end_col)
@@ -970,6 +992,9 @@ def _build_range_continuation(
             end_cell=end_cell,
             max_rows=max_rows,
             max_cols=max_cols,
+            include_validation=include_validation,
+            compact=compact,
+            values_only=values_only,
         ),
         "start_cell": start_cell,
         "end_cell": end_cell,
@@ -1215,6 +1240,12 @@ def read_excel_range_with_metadata(
                 max_rows = cursor_state["max_rows"]
             if max_cols is None:
                 max_cols = cursor_state["max_cols"]
+            if cursor_state["include_validation"] is not None:
+                include_validation = cursor_state["include_validation"]
+            if cursor_state["compact"] is not None:
+                compact = cursor_state["compact"]
+            if cursor_state["values_only"] is not None:
+                values_only = cursor_state["values_only"]
 
         _validate_positive_integer(max_rows, argument_name="max_rows", allow_none=True)
         _validate_positive_integer(max_cols, argument_name="max_cols", allow_none=True)
@@ -1309,6 +1340,9 @@ def read_excel_range_with_metadata(
                     requested_end_col=requested_end_col,
                     max_rows=max_rows,
                     max_cols=max_cols,
+                    include_validation=include_validation,
+                    compact=compact,
+                    values_only=values_only,
                 )
             if truncated_cols:
                 continuations["right"] = _build_range_continuation(
@@ -1318,6 +1352,9 @@ def read_excel_range_with_metadata(
                     requested_end_col=requested_end_col,
                     max_rows=max_rows,
                     max_cols=max_cols,
+                    include_validation=include_validation,
+                    compact=compact,
+                    values_only=values_only,
                 )
             if continuations:
                 range_data["continuations"] = continuations

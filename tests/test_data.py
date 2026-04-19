@@ -607,6 +607,50 @@ def test_read_excel_range_with_metadata_cursor_resumes_downward_page(tmp_workboo
     assert second_page["next_cursor"] == second_page["continuations"]["down"]["cursor"]
 
 
+def test_read_excel_range_with_metadata_cursor_preserves_values_only_without_repeating_flag(tmp_workbook):
+    first_page = read_excel_range_with_metadata(
+        tmp_workbook,
+        "Sheet1",
+        start_cell="A1",
+        end_cell="B6",
+        max_rows=2,
+        values_only=True,
+    )
+
+    second_page = read_excel_range_with_metadata(
+        tmp_workbook,
+        "Sheet1",
+        cursor=first_page["continuations"]["down"]["cursor"],
+    )
+
+    assert "values" in second_page
+    assert "cells" not in second_page
+    assert second_page["values"] == [
+        ["Bob", 25],
+        ["Carol", 35],
+    ]
+
+
+def test_read_excel_range_with_metadata_cursor_preserves_compact_without_repeating_flag(tmp_workbook):
+    first_page = read_excel_range_with_metadata(
+        tmp_workbook,
+        "Sheet1",
+        start_cell="A1",
+        end_cell="B6",
+        max_rows=2,
+        compact=True,
+    )
+
+    second_page = read_excel_range_with_metadata(
+        tmp_workbook,
+        "Sheet1",
+        cursor=first_page["continuations"]["down"]["cursor"],
+    )
+
+    assert "cells" in second_page
+    assert all("validation" not in cell for cell in second_page["cells"])
+
+
 def test_read_data_from_excel_cursor_resumes_rightward_window(tmp_workbook):
     first_page = _load_tool_payload(
         read_data_from_excel(
@@ -642,6 +686,34 @@ def test_read_data_from_excel_cursor_resumes_rightward_window(tmp_workbook):
     ]
     assert set(right_page["data"]["continuations"]) == {"down"}
     assert right_page["data"]["next_cursor"] == right_page["data"]["continuations"]["down"]["cursor"]
+
+
+def test_read_data_from_excel_cursor_preserves_values_only_without_repeating_flag(tmp_workbook):
+    first_page = _load_tool_payload(
+        read_data_from_excel(
+            tmp_workbook,
+            "Sheet1",
+            start_cell="A1",
+            end_cell="B6",
+            max_rows=2,
+            values_only=True,
+        )
+    )
+
+    second_page = _load_tool_payload(
+        read_data_from_excel(
+            tmp_workbook,
+            "Sheet1",
+            cursor=first_page["data"]["next_cursor"],
+        )
+    )
+
+    assert "values" in second_page["data"]
+    assert "cells" not in second_page["data"]
+    assert second_page["data"]["values"] == [
+        ["Bob", 25],
+        ["Carol", 35],
+    ]
 
 
 def test_read_data_from_excel_rejects_invalid_cursor(tmp_workbook):
