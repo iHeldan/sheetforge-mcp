@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from excel_mcp.exceptions import DataError
 from excel_mcp.query import (
@@ -382,6 +382,61 @@ def test_bulk_aggregate_workbooks_tool_returns_json_envelope(tmp_path):
     assert payload["data"]["rows"] == [
         ["North", 10],
         ["South", 8],
+    ]
+
+
+def test_bulk_aggregate_workbooks_reports_auto_selected_sheet_when_sheet_is_omitted(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Region", "Sales"],
+        [("North", 10)],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Region", "Sales"],
+        [("South", 8)],
+    )
+
+    workbook = load_workbook(february)
+    workbook.active.title = "Metrics"
+    workbook.save(february)
+    workbook.close()
+
+    result = bulk_aggregate_workbooks_impl(
+        [january, february],
+        group_by=["Region"],
+        metrics=[{"op": "sum", "field": "Sales", "as": "total_sales"}],
+        sort_by="Region",
+    )
+
+    assert result["auto_selected_sheet"] is True
+    assert result["rows"] == [
+        ["North", 10],
+        ["South", 8],
+    ]
+    assert result["source_workbooks"]["sample"] == [
+        {
+            "filepath": january,
+            "file_name": "january.xlsx",
+            "target_kind": "worksheet",
+            "sheet_name": "Sheet1",
+            "table_name": None,
+            "source_row_count": 1,
+            "matched_rows": 1,
+            "auto_selected_sheet": True,
+        },
+        {
+            "filepath": february,
+            "file_name": "february.xlsx",
+            "target_kind": "worksheet",
+            "sheet_name": "Metrics",
+            "table_name": None,
+            "source_row_count": 1,
+            "matched_rows": 1,
+            "auto_selected_sheet": True,
+        },
     ]
 
 

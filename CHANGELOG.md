@@ -30,6 +30,7 @@
 
 ### Fixed
 
+- Fixed `bulk_aggregate_workbooks` provenance so the top-level `auto_selected_sheet` flag now turns true whenever any source workbook had to auto-select its first worksheet.
 - Fixed worksheet visibility guards so visible chart sheets now count correctly when preventing a workbook from ending up with zero visible sheets.
 - Fixed `copy_range_operation` so overlapping same-sheet copies now use a stable source snapshot instead of reading already-overwritten cells mid-copy.
 - Fixed `delete_range_operation` so upward and leftward shifts now move only the selected columns or rows instead of deleting whole worksheet rows or columns outside the requested range, and so `changes` previews match the actual shifted cells.

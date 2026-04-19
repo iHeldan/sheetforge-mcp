@@ -2109,7 +2109,9 @@ def bulk_aggregate_workbooks(
             target_kind="multi_workbook",
             sheet_name=sheet_name,
             table_name=table_name,
-            auto_selected_sheet=False,
+            auto_selected_sheet=any(
+                source.get("auto_selected_sheet", False) for source in sources
+            ),
             filters=filters,
             group_by=group_by,
             metrics=metrics,
