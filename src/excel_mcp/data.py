@@ -21,6 +21,7 @@ ROW_MODES = {"arrays", "objects"}
 RANGE_READ_CURSOR_VERSION = 2
 DEFAULT_DATASET_SAMPLE_ROWS = 25
 KEY_CANDIDATE_SCAN_LIMIT = 100
+TABULAR_BLANK_GAP_TOLERANCE = 5
 
 
 def _cell_address(row: int, col: int) -> str:
@@ -205,11 +206,55 @@ def _get_header_map(ws: Worksheet, header_row: int) -> Dict[str, int]:
     return header_map
 
 
+def _row_has_selected_data(ws: Worksheet, row: int, columns: List[int]) -> bool:
+    return any(ws.cell(row=row, column=col).value is not None for col in columns)
+
+
+def _detect_tabular_data_extent(
+    ws: Worksheet,
+    header_row: int,
+    columns: List[int],
+    *,
+    blank_gap_tolerance: int = TABULAR_BLANK_GAP_TOLERANCE,
+) -> Dict[str, Any]:
+    # Worksheet-shaped readers favor the first contiguous data block after the header.
+    # This keeps sparse footer notes or distant outlier cells from stretching a table read.
+    non_empty_rows = [
+        row
+        for row in range(header_row + 1, ws.max_row + 1)
+        if _row_has_selected_data(ws, row, columns)
+    ]
+    if not non_empty_rows:
+        return {
+            "first_data_row": None,
+            "last_data_row": header_row,
+            "ignored_trailing_rows": [],
+            "ignored_trailing_row_count": 0,
+        }
+
+    last_data_row = non_empty_rows[0]
+    cutoff_index = len(non_empty_rows)
+
+    for index in range(1, len(non_empty_rows)):
+        current_row = non_empty_rows[index]
+        previous_row = non_empty_rows[index - 1]
+        blank_gap = current_row - previous_row - 1
+        if blank_gap > blank_gap_tolerance:
+            cutoff_index = index
+            break
+        last_data_row = current_row
+
+    ignored_trailing_rows = non_empty_rows[cutoff_index:]
+    return {
+        "first_data_row": non_empty_rows[0],
+        "last_data_row": last_data_row,
+        "ignored_trailing_rows": ignored_trailing_rows,
+        "ignored_trailing_row_count": len(ignored_trailing_rows),
+    }
+
+
 def _find_last_data_row(ws: Worksheet, header_row: int, columns: List[int]) -> int:
-    for row in range(ws.max_row, header_row, -1):
-        if any(ws.cell(row=row, column=col).value is not None for col in columns):
-            return row
-    return header_row
+    return _detect_tabular_data_extent(ws, header_row, columns)["last_data_row"]
 
 
 def _native_table_append_conflict(
@@ -635,6 +680,12 @@ def _describe_worksheet_dataset(
             _build_table_metadata(resolved_sheet_name, worksheet, table)
             for table in worksheet.tables.values()
         ]
+        selected_columns = _selected_columns(1, worksheet.max_column)
+        data_extent = _detect_tabular_data_extent(
+            worksheet,
+            header_row,
+            selected_columns,
+        )
 
         used_range = _worksheet_used_range(worksheet)
         header_profile = _header_profile(sample["headers"])
@@ -669,6 +720,10 @@ def _describe_worksheet_dataset(
         if sample.get("truncated"):
             observations.append(
                 f"Sample rows are truncated to {sample_rows}; use pagination helpers for deeper reads."
+            )
+        if data_extent["ignored_trailing_row_count"] > 0:
+            observations.append(
+                "Later non-empty rows were detected after a large blank gap; worksheet table readers treat those rows as a separate block instead of stretching the main dataset."
             )
 
         dominated_table = _table_dominates_sheet(
@@ -713,6 +768,7 @@ def _describe_worksheet_dataset(
             "auto_selected_sheet": auto_selected_sheet,
             "header_row": header_row,
             "used_range": used_range,
+            "data_end_row": data_extent["last_data_row"],
             "column_count": len(sample["headers"]),
             "total_rows": sample["total_rows"],
             "sample_row_count": len(sample["rows"]),
@@ -725,6 +781,7 @@ def _describe_worksheet_dataset(
             "merged_range_count": merged_range_count,
             "has_autofilter": bool(worksheet.auto_filter.ref),
             "freeze_panes": getattr(worksheet.freeze_panes, "coordinate", worksheet.freeze_panes),
+            "ignored_trailing_row_count": data_extent["ignored_trailing_row_count"],
             "native_table_count": len(native_tables),
             "native_tables": [
                 {

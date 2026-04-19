@@ -183,6 +183,8 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - non-tabular range reads can also return `continuations.down` and `continuations.right` cursor tokens so agents can continue large 2D windows without recomputing coordinates
 - `suggest_read_strategy` helps agents choose between table-aware, worksheet-aware, range-aware, and workbook-orientation reads before they spend context on the wrong path
 - `describe_dataset` provides a lighter-weight dataset summary than a full read, including sample rows, header quality, key candidates, and recommended next tool
+- worksheet-shaped compact readers and row-mutation helpers favor the first contiguous data block after the header, so sparse footer notes or distant outlier rows do not silently stretch `total_rows`, append targets, or key-based update scans
+- `describe_dataset` now surfaces `data_end_row` and `ignored_trailing_row_count` when later non-empty rows are treated as a separate block below a large blank gap
 - `query_table` is the lightest way to pull just the matching rows and columns you need from a worksheet dataset or native Excel table
 - `query_table` and `bulk_filter_workbooks` accept `ne` as a shorthand for `neq`, and membership filters can use either `values` or the shorter `value` list form
 - `aggregate_table` lets agents compute grouped summaries directly in SheetForge instead of over-reading the full dataset into context first

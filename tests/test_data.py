@@ -2,7 +2,7 @@ import base64
 import json
 
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 import excel_mcp.server as server_module
 
@@ -166,6 +166,31 @@ def test_read_as_table_ignores_trailing_rows_outside_selected_columns(tmp_path):
     wb.close()
 
     result = read_as_table(str(filepath), "Sheet1", start_col="A", end_col="C")
+
+    assert result["rows"] == [
+        ["Alice", 30, "Helsinki"],
+        ["Bob", 25, "Tampere"],
+    ]
+    assert result["total_rows"] == 2
+    assert result["truncated"] is False
+
+
+def test_read_as_table_ignores_sparse_trailing_rows_after_large_blank_gap(tmp_path):
+    filepath = tmp_path / "sparse-footer.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in [
+        ("Name", "Age", "City"),
+        ("Alice", 30, "Helsinki"),
+        ("Bob", 25, "Tampere"),
+    ]:
+        ws.append(row)
+    ws["C20"] = "Footer note"
+    wb.save(filepath)
+    wb.close()
+
+    result = read_as_table(str(filepath), "Sheet1")
 
     assert result["rows"] == [
         ["Alice", 30, "Helsinki"],
@@ -977,6 +1002,30 @@ def test_quick_read_supports_column_windowing(tmp_workbook):
     assert result["rows"][-1] == [32, "Espoo"]
 
 
+def test_quick_read_ignores_sparse_trailing_rows_after_large_blank_gap(tmp_path):
+    filepath = tmp_path / "quick-read-sparse-footer.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in [
+        ("Name", "Age", "City"),
+        ("Alice", 30, "Helsinki"),
+        ("Bob", 25, "Tampere"),
+    ]:
+        ws.append(row)
+    ws["A18"] = "Footer note"
+    wb.save(filepath)
+    wb.close()
+
+    result = quick_read_impl(str(filepath), sheet_name="Sheet1")
+
+    assert result["rows"] == [
+        ["Alice", 30, "Helsinki"],
+        ["Bob", 25, "Tampere"],
+    ]
+    assert result["total_rows"] == 2
+
+
 def test_quick_read_tool_supports_column_windowing(tmp_workbook):
     payload = _load_tool_payload(
         quick_read(tmp_workbook, sheet_name="Sheet1", start_col="B", end_col="C")
@@ -1046,6 +1095,29 @@ def test_describe_dataset_summarizes_tabular_worksheet(tmp_workbook):
     assert result["schema"][1]["type"] == "integer"
     assert result["recommended_read_tool"] == "quick_read"
     assert any(candidate["field"] == "name" for candidate in result["key_candidates"])
+
+
+def test_describe_dataset_reports_sparse_trailing_rows_as_separate_block(tmp_path):
+    filepath = tmp_path / "describe-sparse-footer.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in [
+        ("Name", "Age", "City"),
+        ("Alice", 30, "Helsinki"),
+        ("Bob", 25, "Tampere"),
+    ]:
+        ws.append(row)
+    ws["B15"] = "Footer"
+    wb.save(filepath)
+    wb.close()
+
+    result = describe_dataset_impl(str(filepath), sheet_name="Sheet1", sample_rows=2)
+
+    assert result["used_range"] == "A1:C15"
+    assert result["data_end_row"] == 3
+    assert result["ignored_trailing_row_count"] == 1
+    assert any("separate block" in observation.lower() for observation in result["observations"])
 
 
 def test_describe_dataset_summarizes_native_excel_table(tmp_workbook):
@@ -1239,6 +1311,37 @@ def test_append_table_rows_appends_using_headers(tmp_workbook):
     assert table["rows"][-1] == ["Mallory", 44, "Lahti"]
 
 
+def test_append_table_rows_inserts_before_sparse_footer_after_large_blank_gap(tmp_path):
+    filepath = str(tmp_path / "append-before-footer.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in [
+        ("Name", "Age", "City"),
+        ("Alice", 30, "Helsinki"),
+        ("Bob", 25, "Tampere"),
+    ]:
+        ws.append(row)
+    ws["A20"] = "Footer note"
+    wb.save(filepath)
+    wb.close()
+
+    result = append_table_rows(
+        filepath,
+        "Sheet1",
+        [{"Name": "Mallory", "Age": 44, "City": "Lahti"}],
+    )
+
+    assert result["start_row"] == 4
+    table = read_as_table(filepath, "Sheet1")
+    assert table["rows"][-1] == ["Mallory", 44, "Lahti"]
+    wb = load_workbook(filepath)
+    try:
+        assert wb["Sheet1"]["A20"].value == "Footer note"
+    finally:
+        wb.close()
+
+
 def test_append_table_rows_defaults_to_summary_without_changes(tmp_workbook):
     result = append_table_rows(
         tmp_workbook,
@@ -1294,6 +1397,39 @@ def test_update_rows_by_key_updates_matching_rows_and_reports_missing_keys(tmp_w
 
     table = read_as_table(tmp_workbook, "Sheet1")
     assert table["rows"][0] == ["Alice", 31, "Vantaa"]
+
+
+def test_update_rows_by_key_ignores_sparse_footer_rows_after_large_blank_gap(tmp_path):
+    filepath = str(tmp_path / "update-ignore-footer.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in [
+        ("Name", "Age", "City"),
+        ("Alice", 30, "Helsinki"),
+        ("Bob", 25, "Tampere"),
+    ]:
+        ws.append(row)
+    ws["A20"] = "Alice"
+    ws["B20"] = "Footer marker"
+    wb.save(filepath)
+    wb.close()
+
+    result = update_rows_by_key(
+        filepath,
+        "Sheet1",
+        "Name",
+        [{"Name": "Alice", "City": "Vantaa"}],
+    )
+
+    assert result["updated_rows"] == 1
+    table = read_as_table(filepath, "Sheet1")
+    assert table["rows"][0] == ["Alice", 30, "Vantaa"]
+    wb = load_workbook(filepath)
+    try:
+        assert wb["Sheet1"]["B20"].value == "Footer marker"
+    finally:
+        wb.close()
 
 
 def test_update_rows_by_key_defaults_to_summary_without_changes(tmp_workbook):
