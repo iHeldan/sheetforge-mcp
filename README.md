@@ -114,10 +114,10 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 72 MCP tools across these groups:
+The server currently registers 73 MCP tools across these groups:
 
 - workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
-- data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
+- data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `format_ranges`, `read_range_formatting`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `inspect_formula`, `validate_excel_range`, `get_data_validation_info`, `inspect_data_validation_rules`, `remove_data_validation_rules`, `inspect_conditional_format_rules`, `remove_conditional_format_rules`
@@ -140,6 +140,7 @@ The most agent-friendly read tools are:
 - `aggregate_table`: computes grouped metrics such as `count`, `sum`, `avg`, `min`, and `max` over worksheet-shaped data or native Excel tables
 - `bulk_aggregate_workbooks`: computes the same grouped metrics across many workbook files in one call, with explicit schema handling via `strict`, `intersect`, or `union`
 - `bulk_filter_workbooks`: returns matching rows across many workbook files with optional source provenance columns, so recurring cross-file QA and reporting checks no longer need one-tool-call-per-file loops
+- `union_tables`: combines comparable worksheet or native-table rows across many workbook files, with optional deduplication keys and explicit schema handling for workbook collections that drift over time
 - `profile_workbook`: one-call inventory for sheets, tables, charts, named ranges, and key layout/protection state, including chart `occupied_range` for grid-anchored worksheet charts
 - `describe_sheet_layout`: worksheet-level structural summary for safe dashboard edits, including freeze panes, print settings, merges, chart anchors, table metadata, conditional-format and validation counts, custom row/column sizing, and a small free-canvas preview
 - `audit_workbook`: workbook-level audit for high-signal problems such as broken `#REF!` formulas, error cells, hidden sheets, header-quality issues, layout-heavy sheets, and named ranges that reference missing sheets
@@ -183,6 +184,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - `aggregate_table` lets agents compute grouped summaries directly in SheetForge instead of over-reading the full dataset into context first
 - `bulk_aggregate_workbooks` extends that pattern across many workbook files when a recurring reporting workflow would otherwise need ad hoc Python or repeated per-file tool calls
 - `bulk_filter_workbooks` does the same for row-level inspection, while keeping workbook provenance visible by default
+- `union_tables` is the fastest way to normalize many comparable workbook datasets into one combined tabular payload before downstream QA, export, or further aggregation
 - `audit_workbook` is the fastest workbook-wide preflight when you need to know whether a spreadsheet is safe and predictable enough for autonomous editing
 - `plan_workbook_repairs` is the fastest way to turn those audit findings into an actual action queue instead of manually deciding the next tool call for every problem
 - `apply_workbook_repairs` lets agents preview or apply the safe subset of those repairs without having to orchestrate each broken workbook artifact manually

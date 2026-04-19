@@ -225,6 +225,37 @@ def _collect_query_input_refs(
     return refs
 
 
+def _collect_union_input_refs(
+    *,
+    select: Optional[List[str]],
+    sort_by: Optional[str],
+    dedupe_on: Optional[List[str]],
+) -> List[str]:
+    refs: List[str] = []
+    seen_refs: set[str] = set()
+
+    def add_ref(value: Any) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        normalized = value.strip()
+        ref_key = normalized.casefold()
+        if ref_key in seen_refs:
+            return
+        seen_refs.add(ref_key)
+        refs.append(normalized)
+
+    if isinstance(select, list):
+        for column_ref in select:
+            add_ref(column_ref)
+
+    if isinstance(dedupe_on, list):
+        for column_ref in dedupe_on:
+            add_ref(column_ref)
+
+    add_ref(sort_by)
+    return refs
+
+
 def _column_lookup(headers: List[Any], schema: List[Dict[str, Any]]) -> Dict[str, int]:
     lookup: Dict[str, int] = {}
     casefold_headers: Dict[str, List[int]] = defaultdict(list)
@@ -608,6 +639,51 @@ def _select_columns(
     ]
     selected_schema = [schema[column_index] for column_index, _ in resolved_columns]
     return selected_headers, selected_rows, selected_schema
+
+
+def _deduplicate_rows(
+    rows: List[List[Any]],
+    *,
+    headers: List[Any],
+    dedupe_on: List[str],
+) -> tuple[List[List[Any]], List[str], int]:
+    if not dedupe_on:
+        return list(rows), [], 0
+
+    schema = _build_schema(headers, rows)
+    dedupe_specs: List[tuple[int, str]] = []
+    seen_indexes: set[int] = set()
+    for index, column_ref in enumerate(dedupe_on, start=1):
+        column_index, header_name = _resolve_column(
+            column_ref,
+            headers,
+            schema,
+            argument_name=f"dedupe_on[{index}]",
+        )
+        if column_index in seen_indexes:
+            continue
+        seen_indexes.add(column_index)
+        dedupe_specs.append((column_index, header_name))
+
+    seen_keys: set[tuple[Any, ...]] = set()
+    deduplicated_rows: List[List[Any]] = []
+    duplicates_removed = 0
+    for row in rows:
+        dedupe_key = tuple(
+            _stringify_value_for_uniqueness(row[column_index] if column_index < len(row) else None)
+            for column_index, _ in dedupe_specs
+        )
+        if dedupe_key in seen_keys:
+            duplicates_removed += 1
+            continue
+        seen_keys.add(dedupe_key)
+        deduplicated_rows.append(row)
+
+    return (
+        deduplicated_rows,
+        [header_name for _, header_name in dedupe_specs],
+        duplicates_removed,
+    )
 
 
 def _normalize_metrics(
@@ -1215,6 +1291,221 @@ def bulk_filter_workbooks(
         raise
     except Exception as e:
         logger.error(f"Failed to filter multiple workbooks: {e}")
+        raise DataError(str(e))
+
+
+def union_tables(
+    filepaths: List[str],
+    *,
+    sheet_name: Optional[str] = None,
+    table_name: Optional[str] = None,
+    header_row: int = 1,
+    select: Optional[List[str]] = None,
+    sort_by: Optional[str] = None,
+    sort_desc: bool = False,
+    limit: Optional[int] = None,
+    schema_mode: str = "strict",
+    source_sample_limit: int = 10,
+    include_source_columns: bool = True,
+    dedupe_on: Optional[List[str]] = None,
+    row_mode: str = "arrays",
+    infer_schema: bool = False,
+) -> Dict[str, Any]:
+    """Union comparable worksheet or table data across multiple workbooks."""
+    try:
+        _validate_filepaths(filepaths)
+        _validate_row_mode(row_mode)
+        _validate_positive_integer(header_row, argument_name="header_row")
+        _validate_positive_integer(limit, argument_name="limit")
+        _validate_positive_integer(source_sample_limit, argument_name="source_sample_limit")
+        _validate_schema_mode(schema_mode)
+
+        sources: List[Dict[str, Any]] = []
+        for filepath in filepaths:
+            source = _load_source_dataset(
+                filepath,
+                sheet_name=sheet_name,
+                table_name=table_name,
+                header_row=header_row,
+            )
+            source["filepath"] = filepath
+            source["file_name"] = Path(filepath).name
+            source["field_key_to_index"] = _source_field_key_to_index(source)
+            sources.append(source)
+
+        schema_key_sets = [_field_keys(source["schema"]) for source in sources]
+        shared_field_keys = set.intersection(*schema_key_sets) if schema_key_sets else set()
+        union_field_keys = set().union(*schema_key_sets)
+        strict_compatible = all(
+            key_set == schema_key_sets[0]
+            for key_set in schema_key_sets[1:]
+        ) if schema_key_sets else True
+        if schema_mode == "strict" and not strict_compatible:
+            baseline = sources[0]["file_name"]
+            for source, key_set in zip(sources[1:], schema_key_sets[1:]):
+                if key_set != schema_key_sets[0]:
+                    raise DataError(
+                        "schema_mode 'strict' requires identical columns across workbooks; "
+                        f"'{source['file_name']}' differs from '{baseline}'"
+                    )
+
+        if isinstance(select, list):
+            for index, column_ref in enumerate(select, start=1):
+                _reject_source_column_ref(column_ref, argument_name=f"select[{index}]")
+        if isinstance(dedupe_on, list):
+            for index, column_ref in enumerate(dedupe_on, start=1):
+                _reject_source_column_ref(column_ref, argument_name=f"dedupe_on[{index}]")
+        _reject_source_column_ref(sort_by, argument_name="sort_by")
+
+        union_refs = _collect_union_input_refs(
+            select=select,
+            sort_by=sort_by,
+            dedupe_on=dedupe_on,
+        )
+        if select is None:
+            data_columns = _default_multi_workbook_columns(
+                sources,
+                schema_mode=schema_mode,
+                shared_field_keys=shared_field_keys,
+            )
+        else:
+            data_columns = _resolve_multi_workbook_columns(
+                union_refs,
+                sources,
+                schema_mode=schema_mode,
+            )
+        if not data_columns and not include_source_columns:
+            raise DataError("No data columns are available to return for the selected workbooks")
+
+        combined_headers = list(MULTI_WORKBOOK_SOURCE_HEADERS) + [
+            column["header"] for column in data_columns
+        ]
+        combined_rows: List[List[Any]] = []
+        for source in sources:
+            for row in source["rows"]:
+                output_row = [
+                    source["file_name"],
+                    source["sheet_name"],
+                    source["table_name"],
+                ]
+                output_row.extend(
+                    row[source["field_key_to_index"][column["field_key"]]]
+                    if column["field_key"] in source["field_key_to_index"]
+                    else None
+                    for column in data_columns
+                )
+                combined_rows.append(output_row)
+
+        combined_schema = _build_schema(combined_headers, combined_rows)
+        resolved_sort_by = None
+        ordered_rows = list(combined_rows)
+        if sort_by is not None:
+            sort_index, resolved_sort_by = _resolve_column(
+                sort_by,
+                combined_headers,
+                combined_schema,
+                argument_name="sort_by",
+            )
+            ordered_rows = _sort_rows(
+                ordered_rows,
+                sort_index,
+                sort_desc=sort_desc,
+                field_name=resolved_sort_by,
+            )
+
+        deduped_rows, resolved_dedupe_on, duplicates_removed = _deduplicate_rows(
+            ordered_rows,
+            headers=combined_headers,
+            dedupe_on=dedupe_on or [],
+        )
+
+        union_row_count = len(deduped_rows)
+        if limit is not None:
+            deduped_rows = deduped_rows[:limit]
+
+        effective_select: Optional[List[str]]
+        if select is None:
+            if include_source_columns:
+                effective_select = None
+            else:
+                effective_select = [column["header"] for column in data_columns]
+        else:
+            effective_select = list(select)
+            if include_source_columns:
+                effective_select = list(MULTI_WORKBOOK_SOURCE_HEADERS) + effective_select
+
+        output_headers = combined_headers
+        output_rows = deduped_rows
+        if effective_select is not None:
+            output_headers, output_rows, _ = _select_columns(
+                combined_headers,
+                deduped_rows,
+                combined_schema,
+                effective_select,
+            )
+
+        source_workbook_sample = []
+        for source in sources[:source_sample_limit]:
+            source_workbook_sample.append(
+                {
+                    "filepath": source["filepath"],
+                    "file_name": source["file_name"],
+                    "target_kind": source["target_kind"],
+                    "sheet_name": source["sheet_name"],
+                    "table_name": source["table_name"],
+                    "source_row_count": source["total_rows"],
+                    "auto_selected_sheet": source.get("auto_selected_sheet", False),
+                }
+            )
+
+        result = {
+            "target_kind": "multi_workbook",
+            "sheet_name": sheet_name,
+            "table_name": table_name,
+            "auto_selected_sheet": any(
+                source.get("auto_selected_sheet", False) for source in sources
+            ),
+            "headers": output_headers,
+            "rows": output_rows,
+            "union_row_count": union_row_count,
+            "returned_rows": len(output_rows),
+            "source_row_count": len(combined_rows),
+            "truncated": limit is not None and union_row_count > len(output_rows),
+            "select": select,
+            "sort_by": resolved_sort_by,
+            "sort_desc": sort_desc,
+            "workbook_count": len(sources),
+            "processed_workbooks": len(sources),
+            "include_source_columns": include_source_columns,
+            "source_columns": list(MULTI_WORKBOOK_SOURCE_HEADERS)
+            if include_source_columns
+            else [],
+            "schema_mode": schema_mode,
+            "dedupe_on": resolved_dedupe_on,
+            "duplicates_removed": duplicates_removed,
+            "schema_summary": {
+                "strict_compatible": strict_compatible,
+                "shared_field_count": len(shared_field_keys),
+                "union_field_count": len(union_field_keys),
+            },
+            "source_workbooks": {
+                "count": len(sources),
+                "sample": source_workbook_sample,
+                "truncated": len(sources) > source_sample_limit,
+            },
+        }
+
+        return _finalize_tabular_result(
+            payload=result,
+            headers=output_headers,
+            rows=output_rows,
+            row_mode=row_mode,
+            infer_schema=infer_schema,
+        )
+    except DataError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to union multiple workbooks: {e}")
         raise DataError(str(e))
 
 

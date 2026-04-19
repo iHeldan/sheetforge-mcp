@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `union_tables` so agents can combine comparable worksheet or native-table rows across many workbook files in one call, with optional `dedupe_on` keys for "latest row per ID" style union workflows and the same `strict`, `intersect`, and `union` schema controls as the other multi-workbook read helpers.
 - Added `bulk_filter_workbooks` as the row-level companion to `bulk_aggregate_workbooks`, so agents can pull matching rows across many workbook files with optional source provenance columns and explicit `strict`, `intersect`, and `union` schema modes.
 - Added `bulk_aggregate_workbooks` as the first multi-workbook workflow so agents can roll up comparable workbook files with the same filter/group/metric contract as `aggregate_table`, plus explicit `strict`, `intersect`, and `union` schema modes.
 - Added `inspect_formula` so agents can classify formula strings before writing them, including function inventory, reference token types, and flags for volatile or risky functions such as `INDIRECT`.
@@ -20,7 +21,7 @@
 - Added `diff_workbooks` so agents can compare workbook versions with structural changes plus sampled cell-level before/after diffs.
 - Added `explain_formula_cell` so agents can resolve formula inputs through named ranges and structured references, inspect upstream formula chains, and see downstream dependents in one call.
 - Added `inspect_named_range`, `delete_named_range`, `inspect_data_validation_rules`, `remove_data_validation_rules`, `inspect_conditional_format_rules`, and `remove_conditional_format_rules` to turn workbook-repair plans into inspect → dry-run → apply workflows.
-- Refreshed the manifest, README, and landing-page copy for the current 72-tool surface and the newer workbook-repair, workbook-diff, formula-lineage, formula-inspection, circular-dependency, layout-introspection, and multi-workbook read helpers.
+- Refreshed the manifest, README, and landing-page copy for the current 73-tool surface and the newer workbook-repair, workbook-diff, formula-lineage, formula-inspection, circular-dependency, layout-introspection, and multi-workbook read helpers.
 
 ## 0.5.0 - 2026-04-18
 

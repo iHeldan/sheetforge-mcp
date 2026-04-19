@@ -47,6 +47,7 @@
     {"name": "aggregate_table", "description": "Compute grouped metrics over worksheet-shaped data or native Excel tables"},
     {"name": "bulk_aggregate_workbooks", "description": "Aggregate comparable worksheet or table data across multiple workbook files"},
     {"name": "bulk_filter_workbooks", "description": "Filter comparable worksheet or table data across multiple workbook files"},
+    {"name": "union_tables", "description": "Union comparable worksheet or table data across multiple workbook files"},
     {"name": "read_excel_table", "description": "Read rows from a native Excel table by table name"},
     {"name": "quick_read", "description": "Read a compact table from an explicit sheet or the first workbook sheet"},
     {"name": "write_data_to_excel", "description": "Write data to Excel cells"},

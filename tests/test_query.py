@@ -9,12 +9,14 @@ from excel_mcp.query import (
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_impl,
     bulk_filter_workbooks as bulk_filter_workbooks_impl,
     query_table as query_table_impl,
+    union_tables as union_tables_impl,
 )
 from excel_mcp.server import (
     aggregate_table as aggregate_table_tool,
     bulk_aggregate_workbooks as bulk_aggregate_workbooks_tool,
     bulk_filter_workbooks as bulk_filter_workbooks_tool,
     query_table as query_table_tool,
+    union_tables as union_tables_tool,
 )
 
 
@@ -570,3 +572,194 @@ def test_bulk_filter_workbooks_tool_returns_json_envelope(tmp_path):
     assert payload["operation"] == "bulk_filter_workbooks"
     assert payload["data"]["matched_rows"] == 1
     assert payload["data"]["rows"] == [["january.xlsx", "Sheet1", None, "Alice"]]
+
+
+def test_union_tables_returns_records_with_source_columns(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Name", "Age", "City"],
+        [
+            ("Alice", 30, "Helsinki"),
+            ("Bob", 25, "Tampere"),
+        ],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Name", "Age", "City"],
+        [
+            ("Carol", 35, "Turku"),
+            ("Dave", 28, "Oulu"),
+        ],
+    )
+
+    result = union_tables_impl(
+        [january, february],
+        sheet_name="Sheet1",
+        select=["Name", "Age"],
+        sort_by="Age",
+        sort_desc=True,
+        row_mode="objects",
+        infer_schema=True,
+    )
+
+    assert result["target_kind"] == "multi_workbook"
+    assert result["schema_mode"] == "strict"
+    assert result["source_row_count"] == 4
+    assert result["union_row_count"] == 4
+    assert result["returned_rows"] == 4
+    assert result["duplicates_removed"] == 0
+    assert result["source_columns"] == ["_source_file", "_source_sheet", "_source_table"]
+    assert result["records"] == [
+        {
+            "source_file": "february.xlsx",
+            "source_sheet": "Sheet1",
+            "source_table": None,
+            "name": "Carol",
+            "age": 35,
+        },
+        {
+            "source_file": "january.xlsx",
+            "source_sheet": "Sheet1",
+            "source_table": None,
+            "name": "Alice",
+            "age": 30,
+        },
+        {
+            "source_file": "february.xlsx",
+            "source_sheet": "Sheet1",
+            "source_table": None,
+            "name": "Dave",
+            "age": 28,
+        },
+        {
+            "source_file": "january.xlsx",
+            "source_sheet": "Sheet1",
+            "source_table": None,
+            "name": "Bob",
+            "age": 25,
+        },
+    ]
+
+
+def test_union_tables_dedupes_after_sorting(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Id", "Status", "Updated"],
+        [
+            (1, "draft", 20260401),
+            (2, "open", 20260402),
+        ],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Id", "Status", "Updated"],
+        [
+            (1, "published", 20260405),
+            (3, "open", 20260403),
+        ],
+    )
+
+    result = union_tables_impl(
+        [january, february],
+        sheet_name="Sheet1",
+        select=["Id", "Status", "Updated"],
+        sort_by="Updated",
+        sort_desc=True,
+        dedupe_on=["Id"],
+        include_source_columns=False,
+        row_mode="objects",
+    )
+
+    assert result["dedupe_on"] == ["Id"]
+    assert result["duplicates_removed"] == 1
+    assert result["union_row_count"] == 3
+    assert result["records"] == [
+        {"id": 1, "status": "published", "updated": 20260405},
+        {"id": 3, "status": "open", "updated": 20260403},
+        {"id": 2, "status": "open", "updated": 20260402},
+    ]
+
+
+def test_union_tables_union_mode_fills_missing_values_with_none(tmp_path):
+    primary = _create_query_workbook(
+        tmp_path,
+        "primary.xlsx",
+        ["Region", "Sales", "Bonus"],
+        [("North", 10, 1)],
+    )
+    secondary = _create_query_workbook(
+        tmp_path,
+        "secondary.xlsx",
+        ["Region", "Sales"],
+        [("South", 6)],
+    )
+
+    result = union_tables_impl(
+        [primary, secondary],
+        sheet_name="Sheet1",
+        select=["Region", "Bonus"],
+        schema_mode="union",
+        include_source_columns=False,
+        sort_by="Region",
+    )
+
+    assert result["schema_mode"] == "union"
+    assert result["rows"] == [
+        ["North", 1],
+        ["South", None],
+    ]
+    assert result["schema_summary"]["strict_compatible"] is False
+
+
+def test_union_tables_rejects_source_column_dedupe_refs(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Name", "Age"],
+        [("Alice", 30)],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Name", "Age"],
+        [("Bob", 25)],
+    )
+
+    with pytest.raises(DataError, match="cannot reference multi-workbook source columns directly"):
+        union_tables_impl(
+            [january, february],
+            sheet_name="Sheet1",
+            dedupe_on=["_source_file"],
+        )
+
+
+def test_union_tables_tool_returns_json_envelope(tmp_path):
+    january = _create_query_workbook(
+        tmp_path,
+        "january.xlsx",
+        ["Name", "Age"],
+        [("Alice", 30)],
+    )
+    february = _create_query_workbook(
+        tmp_path,
+        "february.xlsx",
+        ["Name", "Age"],
+        [("Bob", 25)],
+    )
+
+    payload = _load_tool_payload(
+        union_tables_tool(
+            [january, february],
+            sheet_name="Sheet1",
+            select=["Name"],
+            limit=1,
+        )
+    )
+
+    assert payload["operation"] == "union_tables"
+    assert payload["data"]["union_row_count"] == 2
+    assert payload["data"]["returned_rows"] == 1
