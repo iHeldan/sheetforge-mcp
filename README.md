@@ -182,12 +182,14 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - `suggest_read_strategy` helps agents choose between table-aware, worksheet-aware, range-aware, and workbook-orientation reads before they spend context on the wrong path
 - `describe_dataset` provides a lighter-weight dataset summary than a full read, including sample rows, header quality, key candidates, and recommended next tool
 - `query_table` is the lightest way to pull just the matching rows and columns you need from a worksheet dataset or native Excel table
+- `query_table` and `bulk_filter_workbooks` accept `ne` as a shorthand for `neq`, and membership filters can use either `values` or the shorter `value` list form
 - `aggregate_table` lets agents compute grouped summaries directly in SheetForge instead of over-reading the full dataset into context first
 - `bulk_aggregate_workbooks` extends that pattern across many workbook files when a recurring reporting workflow would otherwise need ad hoc Python or repeated per-file tool calls
 - aggregate metrics accept both the canonical `{"op": "sum", "field": "Sales", "as": "total_sales"}` shape and the more guessable alias form `{"agg": "sum", "column": "Sales", "as": "total_sales"}`
 - `bulk_filter_workbooks` does the same for row-level inspection, while keeping workbook provenance visible by default
 - `union_tables` is the fastest way to normalize many comparable workbook datasets into one combined tabular payload before downstream QA, export, or further aggregation
 - `cross_workbook_lookup` is the fastest way to enrich one workbook from another without writing an ad hoc merge script, especially for master-data lookups, status enrichment, and cross-file QA workflows
+- formatting color inputs accept `RRGGBB`, `#RRGGBB`, `AARRGGBB`, or `#AARRGGBB`, so prompts do not need to strip CSS-style `#` prefixes first
 - `audit_workbook` is the fastest workbook-wide preflight when you need to know whether a spreadsheet is safe and predictable enough for autonomous editing
 - `plan_workbook_repairs` is the fastest way to turn those audit findings into an actual action queue instead of manually deciding the next tool call for every problem
 - `apply_workbook_repairs` lets agents preview or apply the safe subset of those repairs without having to orchestrate each broken workbook artifact manually

@@ -110,6 +110,65 @@ def test_query_table_rejects_non_positive_header_row(tmp_workbook):
         query_table_impl(tmp_workbook, sheet_name="Sheet1", header_row=0)
 
 
+def test_query_table_comparison_filter_skips_non_comparable_rows(tmp_path):
+    workbook = _create_query_workbook(
+        tmp_path,
+        "mixed-filter-types.xlsx",
+        ["Product", "Units"],
+        [
+            ("Widget", 8),
+            ("Gadget", 12),
+            ("Total", "=SUM(B2:B3)"),
+        ],
+    )
+
+    result = query_table_impl(
+        workbook,
+        sheet_name="Sheet1",
+        filters=[{"field": "Units", "op": "gte", "value": 10}],
+        sort_by="Product",
+    )
+
+    assert result["rows"] == [["Gadget", 12]]
+    assert result["matched_rows"] == 1
+    assert result["source_row_count"] == 3
+    assert result["filters"] == [{"field": "Units", "op": "gte", "value": 10}]
+
+
+def test_query_table_accepts_ne_filter_alias(tmp_workbook):
+    result = query_table_impl(
+        tmp_workbook,
+        sheet_name="Sheet1",
+        filters=[{"field": "City", "op": "ne", "value": "Helsinki"}],
+        sort_by="Name",
+    )
+
+    assert result["rows"] == [
+        ["Bob", 25, "Tampere"],
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+        ["Eve", 32, "Espoo"],
+    ]
+    assert result["filters"] == [{"field": "City", "op": "neq", "value": "Helsinki"}]
+
+
+def test_query_table_accepts_membership_value_alias(tmp_workbook):
+    result = query_table_impl(
+        tmp_workbook,
+        sheet_name="Sheet1",
+        filters=[{"field": "City", "op": "in", "value": ["Helsinki", "Turku"]}],
+        sort_by="Name",
+    )
+
+    assert result["rows"] == [
+        ["Alice", 30, "Helsinki"],
+        ["Carol", 35, "Turku"],
+    ]
+    assert result["filters"] == [
+        {"field": "City", "op": "in", "values": ["Helsinki", "Turku"]}
+    ]
+
+
 def test_aggregate_table_groups_metrics_and_returns_records(complex_workbook):
     result = aggregate_table_impl(
         complex_workbook,

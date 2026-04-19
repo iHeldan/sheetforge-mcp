@@ -87,6 +87,30 @@ def test_border_formatting(tmp_workbook):
     wb.close()
 
 
+def test_format_range_accepts_hash_prefixed_colors(tmp_workbook):
+    format_range(
+        tmp_workbook,
+        "Sheet1",
+        "A1",
+        font_color="#FF0000",
+        bg_color="#00FF00",
+        border_style="thin",
+        border_color="#1F4E78",
+    )
+
+    wb = load_workbook(tmp_workbook)
+    cell = wb["Sheet1"]["A1"]
+    assert cell.font.color.rgb in ("FFFF0000", "00FF0000")
+    assert cell.fill.start_color.rgb == "FF00FF00"
+    assert cell.border.left.color.rgb == "FF1F4E78"
+    wb.close()
+
+
+def test_format_range_invalid_color_error_has_actionable_hint(tmp_workbook):
+    with pytest.raises(FormattingError, match="#1F4E78"):
+        format_range(tmp_workbook, "Sheet1", "A1", font_color="blue")
+
+
 # --- Alignment & wrap ---
 
 def test_alignment_center(tmp_workbook):
@@ -158,6 +182,21 @@ def test_conditional_format_cell_is(tmp_workbook):
             "operator": "greaterThan",
             "formula": ["30"],
             "fill": {"fgColor": "FFC7CE"},
+        },
+    }
+    result = format_range(
+        tmp_workbook, "Sheet1", "B2", end_cell="B6", conditional_format=cond
+    )
+    assert "Applied" in result["message"]
+
+
+def test_conditional_format_cell_is_accepts_hash_prefixed_fill_color(tmp_workbook):
+    cond = {
+        "type": "cell_is",
+        "params": {
+            "operator": "greaterThan",
+            "formula": ["30"],
+            "fill": {"fgColor": "#FFC7CE"},
         },
     }
     result = format_range(

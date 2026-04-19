@@ -32,6 +32,9 @@ FILTER_OPERATORS = {
     "is_blank",
     "not_blank",
 }
+FILTER_OPERATOR_ALIASES = {
+    "ne": "neq",
+}
 
 AGGREGATE_OPERATORS = {
     "count",
@@ -512,10 +515,10 @@ def _matches_filter(
             return cell_value < value
         if operator == "lte":
             return cell_value <= value
-    except TypeError as exc:
-        raise DataError(
-            f"Cannot compare values for field '{field_name}' with operator '{operator}'"
-        ) from exc
+    except TypeError:
+        # Mixed-type rows such as totals formulas should fail the row-level match
+        # instead of aborting the whole query or aggregate operation.
+        return False
 
     raise DataError(f"Unsupported filter operator '{operator}'")
 
@@ -537,9 +540,13 @@ def _normalize_filters(
 
         field_ref = filter_spec.get("field")
         operator = str(filter_spec.get("op", "eq")).strip().lower()
+        operator = FILTER_OPERATOR_ALIASES.get(operator, operator)
         if operator not in FILTER_OPERATORS:
+            supported = ", ".join(
+                sorted(FILTER_OPERATORS | set(FILTER_OPERATOR_ALIASES.keys()))
+            )
             raise DataError(
-                f"filters[{index}] uses unsupported operator '{operator}'"
+                f"filters[{index}] uses unsupported operator '{operator}'. Supported operators: {supported}"
             )
         column_index, header_name = _resolve_column(
             field_ref,
@@ -558,9 +565,12 @@ def _normalize_filters(
 
         if operator in {"in", "not_in"}:
             values = filter_spec.get("values")
+            if values is None and "value" in filter_spec:
+                alias_value = filter_spec["value"]
+                values = alias_value if isinstance(alias_value, list) else [alias_value]
             if not isinstance(values, list):
                 raise DataError(
-                    f"filters[{index}] with operator '{operator}' requires a list in values"
+                    f"filters[{index}] with operator '{operator}' requires values (or value) as a list"
                 )
             normalized_filter["values"] = values
         elif operator not in {"is_blank", "not_blank"}:

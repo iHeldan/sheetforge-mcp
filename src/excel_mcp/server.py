@@ -459,7 +459,7 @@ def format_range(
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
 ) -> str:
-    """Apply formatting to a range of cells."""
+    """Apply formatting to a range of cells. Colors accept RRGGBB, #RRGGBB, AARRGGBB, or #AARRGGBB."""
     def action() -> Any:
         full_path = get_excel_path(filepath)
         from excel_mcp.formatting import format_range as format_range_func
@@ -504,7 +504,7 @@ def format_ranges(
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
 ) -> str:
-    """Apply formatting to multiple ranges in a single workbook pass."""
+    """Apply formatting to multiple ranges in a single workbook pass. Colors accept RRGGBB, #RRGGBB, AARRGGBB, or #AARRGGBB."""
     def action() -> Any:
         full_path = get_excel_path(filepath)
         from excel_mcp.formatting import format_ranges as format_ranges_impl
@@ -794,7 +794,7 @@ def query_table(
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> str:
-    """Filter, project, sort, and limit worksheet-shaped data or a native Excel table."""
+    """Filter, project, sort, and limit worksheet or table data. Filters support eq/neq/ne, comparisons, string matching, blank checks, and in/not_in with value or values."""
     return _run_tool(
         "query_table",
         lambda: query_table_impl(
@@ -836,7 +836,7 @@ def bulk_filter_workbooks(
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> str:
-    """Filter comparable worksheet or table data across multiple workbooks."""
+    """Filter comparable worksheet or table data across multiple workbooks. Uses the same filter operators and aliases as query_table."""
     return _run_tool(
         "bulk_filter_workbooks",
         lambda: bulk_filter_workbooks_impl(

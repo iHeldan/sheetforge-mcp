@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from openpyxl.cell.cell import MergedCell
@@ -24,6 +25,7 @@ from .cell_utils import parse_cell_range, validate_cell_reference
 from .exceptions import ValidationError, FormattingError
 
 logger = logging.getLogger(__name__)
+HEX_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
 
 
 def _should_include_changes(dry_run: bool, include_changes: Optional[bool]) -> bool:
@@ -36,6 +38,25 @@ def _validate_positive_integer(value: Any, *, argument_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValidationError(f"{argument_name} must be a positive integer")
     return value
+
+
+def _normalize_argb_color(value: Any, *, label: str) -> str:
+    if not isinstance(value, str):
+        raise FormattingError(
+            f"{label} must be a hex color like '1F4E78', '#1F4E78', or 'FF1F4E78'"
+        )
+
+    normalized = value.strip()
+    if normalized.startswith("#"):
+        normalized = normalized[1:]
+    if not HEX_COLOR_RE.fullmatch(normalized):
+        raise FormattingError(
+            f"Invalid {label}: '{value}'. Use 6-hex RGB like '1F4E78' or '#1F4E78', "
+            "or 8-hex ARGB like 'FF1F4E78'"
+        )
+    if len(normalized) == 6:
+        normalized = f"FF{normalized}"
+    return normalized.upper()
 
 
 def _serialize_color_token(color: Any) -> Optional[str]:
@@ -406,14 +427,17 @@ def _apply_conditional_format(
         if isinstance(fill_params, dict):
             try:
                 fill_color = fill_params.get("fgColor", "FFC7CE")
-                fill_color = (
-                    fill_color if fill_color.startswith("FF") else f"FF{fill_color}"
+                fill_color = _normalize_argb_color(
+                    fill_color,
+                    label="conditional format fill color",
                 )
                 params["fill"] = PatternFill(
                     start_color=fill_color,
                     end_color=fill_color,
                     fill_type="solid",
                 )
+            except FormattingError:
+                raise
             except ValueError as e:
                 raise FormattingError(
                     f"Invalid conditional format fill color: {str(e)}"
@@ -514,10 +538,10 @@ def _apply_format_to_sheet(
         font_args["size"] = font_size
     if font_color is not None:
         try:
-            font_color = (
-                font_color if font_color.startswith("FF") else f"FF{font_color}"
-            )
+            font_color = _normalize_argb_color(font_color, label="font color")
             font_args["color"] = Color(rgb=font_color)
+        except FormattingError:
+            raise
         except ValueError as e:
             raise FormattingError(f"Invalid font color: {str(e)}") from e
     font = Font(**font_args)
@@ -525,12 +549,14 @@ def _apply_format_to_sheet(
     fill = None
     if bg_color is not None:
         try:
-            bg_color = bg_color if bg_color.startswith("FF") else f"FF{bg_color}"
+            bg_color = _normalize_argb_color(bg_color, label="background color")
             fill = PatternFill(
                 start_color=Color(rgb=bg_color),
                 end_color=Color(rgb=bg_color),
                 fill_type="solid",
             )
+        except FormattingError:
+            raise
         except ValueError as e:
             raise FormattingError(f"Invalid background color: {str(e)}") from e
 
@@ -538,13 +564,14 @@ def _apply_format_to_sheet(
     if border_style is not None:
         try:
             normalized_border_color = border_color if border_color else "000000"
-            normalized_border_color = (
-                normalized_border_color
-                if normalized_border_color.startswith("FF")
-                else f"FF{normalized_border_color}"
+            normalized_border_color = _normalize_argb_color(
+                normalized_border_color,
+                label="border color",
             )
             side = Side(style=border_style, color=Color(rgb=normalized_border_color))
             border = Border(left=side, right=side, top=side, bottom=side)
+        except FormattingError:
+            raise
         except ValueError as e:
             raise FormattingError(f"Invalid border settings: {str(e)}") from e
 
