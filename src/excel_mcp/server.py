@@ -229,7 +229,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             hints.append("set include_headers=False for follow-up pages after the first")
         if data_dict.get("row_mode") == "objects":
             hints.append("switch to row_mode='arrays' for a smaller payload")
-        if operation == "read_excel_as_table" and "sheet_name" in data_dict:
+        if operation in {"read_excel_as_table", "read_excel_table"} and "sheet_name" in data_dict:
             hints.append("set compact=True to trim nonessential metadata")
     elif operation == "describe_dataset":
         hints.append("set sample_rows to inspect a smaller sample")

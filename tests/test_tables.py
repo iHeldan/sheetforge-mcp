@@ -488,6 +488,7 @@ def test_read_excel_table_returns_guided_error_before_oversized_payload(
     assert payload["error"]["type"] == "ResponseTooLargeError"
     assert any("start_row" in hint for hint in payload["error"]["hints"])
     assert any("start_col/end_col" in hint for hint in payload["error"]["hints"])
+    assert any("compact=True" in hint for hint in payload["error"]["hints"])
 
 
 def test_read_excel_table_tool_can_return_records_and_schema(tmp_workbook):
