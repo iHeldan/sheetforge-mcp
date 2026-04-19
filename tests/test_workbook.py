@@ -590,6 +590,42 @@ def test_plan_workbook_repairs_points_to_repair_primitives(tmp_path):
     assert conditional_step["suggested_tools"][1]["tool"] == "remove_conditional_format_rules"
 
 
+def test_plan_workbook_repairs_does_not_lose_repair_classes_when_audit_sample_is_truncated(tmp_path):
+    filepath = str(tmp_path / "repair-plan-truncated-audit.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Value"])
+
+    broken_validation = DataValidation(type="list", formula1="=MissingSheet!$A$1:$A$2")
+    broken_validation.add("A2:A4")
+    ws.add_data_validation(broken_validation)
+    ws.conditional_formatting.add("B2:B4", FormulaRule(formula=["#REF!>0"]))
+
+    hidden = wb.create_sheet("Hidden")
+    hidden.sheet_state = "veryHidden"
+
+    wb.defined_names["BrokenRange"] = DefinedName(
+        "BrokenRange",
+        attr_text="MissingSheet!$A$1:$A$2",
+    )
+    wb.save(filepath)
+    wb.close()
+
+    audit = audit_workbook(filepath, sample_limit=1)
+    assert audit["findings"]["count"] == 5
+    assert len(audit["findings"]["sample"]) == 1
+
+    result = plan_workbook_repairs(filepath, sample_limit=1)
+
+    step_titles = {step["title"] for step in result["steps"]}
+    assert "Inspect and repair workbook named ranges" in step_titles
+    assert "Repair broken data validation rules on 'Data'" in step_titles
+    assert "Review broken conditional formatting rules on 'Data'" in step_titles
+    assert "Review hidden sheet 'Hidden' before workbook-wide automation" in step_titles
+    assert result["step_count"] == 4
+
+
 def test_apply_workbook_repairs_dry_run_and_apply(tmp_path):
     filepath = str(tmp_path / "apply-repairs.xlsx")
     wb = Workbook()

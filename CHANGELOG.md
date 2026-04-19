@@ -30,6 +30,7 @@
 
 ### Fixed
 
+- Fixed `plan_workbook_repairs` so small `sample_limit` values no longer drop whole repair classes from the plan when the underlying audit contains more findings than fit in the sampled audit payload.
 - Fixed `bulk_aggregate_workbooks` provenance so the top-level `auto_selected_sheet` flag now turns true whenever any source workbook had to auto-select its first worksheet.
 - Fixed worksheet visibility guards so visible chart sheets now count correctly when preventing a workbook from ending up with zero visible sheets.
 - Fixed `copy_range_operation` so overlapping same-sheet copies now use a stable source snapshot instead of reading already-overwritten cells mid-copy.

@@ -3063,9 +3063,18 @@ def plan_workbook_repairs(
             sample_limit=sample_limit,
         )
 
-        findings_sample = audit["findings"]["sample"]
+        audit_for_plan = audit
+        findings_count = audit["findings"]["count"]
+        if findings_count > sample_limit:
+            audit_for_plan = audit_workbook(
+                filepath,
+                header_row=header_row,
+                sample_limit=findings_count,
+            )
+
+        findings_sample = audit_for_plan["findings"]["sample"]
         sheet_assessments = {
-            item["sheet_name"]: item for item in audit["sheet_assessments"]
+            item["sheet_name"]: item for item in audit_for_plan["sheet_assessments"]
         }
 
         def findings_for(
