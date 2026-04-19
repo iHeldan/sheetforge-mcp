@@ -25,7 +25,9 @@ from excel_mcp.formatting import read_range_formatting as read_range_formatting_
 from excel_mcp.sheet import (
     delete_cols,
     delete_rows,
+    delete_range_operation,
     autofit_columns,
+    copy_range_operation,
     get_sheet_protection,
     insert_cols,
     insert_row,
@@ -341,6 +343,187 @@ def test_set_worksheet_visibility_rejects_hiding_only_visible_chartsheet(tmp_pat
 
     with pytest.raises(Exception, match="only visible sheet"):
         set_sheet_visibility(filepath, "Charts", "hidden")
+
+
+def test_copy_range_operation_uses_source_snapshot_for_overlapping_same_sheet_copy(tmp_path):
+    filepath = str(tmp_path / "overlapping-copy.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "left"
+    ws["B1"] = "middle"
+    ws["C1"] = "right"
+    wb.save(filepath)
+    wb.close()
+
+    result = copy_range_operation(filepath, "Sheet1", "A1", "B1", "B1")
+
+    assert result["changes"] == [
+        {
+            "sheet_name": "Sheet1",
+            "cell": "B1",
+            "row": 1,
+            "column": 2,
+            "old_value": "middle",
+            "new_value": "left",
+            "source_cell": "A1",
+        },
+        {
+            "sheet_name": "Sheet1",
+            "cell": "C1",
+            "row": 1,
+            "column": 3,
+            "old_value": "right",
+            "new_value": "middle",
+            "source_cell": "B1",
+        },
+    ]
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["A1"].value == "left"
+    assert ws["B1"].value == "left"
+    assert ws["C1"].value == "middle"
+    wb.close()
+
+
+def test_copy_range_operation_dry_run_preview_matches_overlapping_copy(tmp_path):
+    filepath = str(tmp_path / "overlapping-copy-dry-run.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "left"
+    ws["B1"] = "middle"
+    ws["C1"] = "right"
+    wb.save(filepath)
+    wb.close()
+
+    result = copy_range_operation(filepath, "Sheet1", "A1", "B1", "B1", dry_run=True)
+
+    assert result["dry_run"] is True
+    assert result["changes"][1]["new_value"] == "middle"
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["A1"].value == "left"
+    assert ws["B1"].value == "middle"
+    assert ws["C1"].value == "right"
+    wb.close()
+
+
+def test_delete_range_operation_shifts_only_selected_columns_up(tmp_path):
+    filepath = str(tmp_path / "delete-range-up.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in range(1, 5):
+        ws[f"A{row}"] = f"A{row}"
+        ws[f"B{row}"] = f"B{row}"
+        ws[f"C{row}"] = f"C{row}"
+        ws[f"D{row}"] = f"D{row}"
+    wb.save(filepath)
+    wb.close()
+
+    result = delete_range_operation(filepath, "Sheet1", "B2", "C2", shift_direction="up")
+
+    assert result["changes"] == [
+        {
+            "sheet_name": "Sheet1",
+            "cell": "B2",
+            "row": 2,
+            "column": 2,
+            "old_value": "B2",
+            "new_value": "B3",
+        },
+        {
+            "sheet_name": "Sheet1",
+            "cell": "C2",
+            "row": 2,
+            "column": 3,
+            "old_value": "C2",
+            "new_value": "C3",
+        },
+        {
+            "sheet_name": "Sheet1",
+            "cell": "B3",
+            "row": 3,
+            "column": 2,
+            "old_value": "B3",
+            "new_value": "B4",
+        },
+        {
+            "sheet_name": "Sheet1",
+            "cell": "C3",
+            "row": 3,
+            "column": 3,
+            "old_value": "C3",
+            "new_value": "C4",
+        },
+        {
+            "sheet_name": "Sheet1",
+            "cell": "B4",
+            "row": 4,
+            "column": 2,
+            "old_value": "B4",
+            "new_value": None,
+        },
+        {
+            "sheet_name": "Sheet1",
+            "cell": "C4",
+            "row": 4,
+            "column": 3,
+            "old_value": "C4",
+            "new_value": None,
+        },
+    ]
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["A2"].value == "A2"
+    assert ws["D2"].value == "D2"
+    assert ws["B2"].value == "B3"
+    assert ws["C2"].value == "C3"
+    assert ws["B3"].value == "B4"
+    assert ws["C3"].value == "C4"
+    assert ws["B4"].value is None
+    assert ws["C4"].value is None
+    wb.close()
+
+
+def test_delete_range_operation_dry_run_preview_matches_column_scoped_shift(tmp_path):
+    filepath = str(tmp_path / "delete-range-up-dry-run.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for row in range(1, 5):
+        ws[f"A{row}"] = f"A{row}"
+        ws[f"B{row}"] = f"B{row}"
+        ws[f"C{row}"] = f"C{row}"
+        ws[f"D{row}"] = f"D{row}"
+    wb.save(filepath)
+    wb.close()
+
+    result = delete_range_operation(filepath, "Sheet1", "B2", "C2", shift_direction="up", dry_run=True)
+
+    assert result["dry_run"] is True
+    assert result["changes"][0]["cell"] == "B2"
+    assert result["changes"][0]["new_value"] == "B3"
+    assert result["changes"][-1] == {
+        "sheet_name": "Sheet1",
+        "cell": "C4",
+        "row": 4,
+        "column": 3,
+        "old_value": "C4",
+        "new_value": None,
+    }
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["A2"].value == "A2"
+    assert ws["B2"].value == "B2"
+    assert ws["C2"].value == "C2"
+    assert ws["D2"].value == "D2"
+    wb.close()
 
 
 def test_get_worksheet_protection_reports_defaults(tmp_workbook):

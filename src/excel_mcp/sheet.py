@@ -875,6 +875,46 @@ def delete_range(worksheet: Worksheet, start_cell: str, end_cell: Optional[str] 
             cell.number_format = "General"
             cell.alignment = None
 
+
+def _snapshot_cell_values(
+    worksheet: Worksheet,
+    *,
+    min_row: int,
+    min_col: int,
+    max_row: int,
+    max_col: int,
+) -> dict[tuple[int, int], Any]:
+    snapshot: dict[tuple[int, int], Any] = {}
+    for row in range(min_row, max_row + 1):
+        for col in range(min_col, max_col + 1):
+            snapshot[(row, col)] = worksheet.cell(row=row, column=col).value
+    return snapshot
+
+
+def _cell_value_changes(
+    *,
+    before: dict[tuple[int, int], Any],
+    after: dict[tuple[int, int], Any],
+    sheet_name: str,
+) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for row, col in sorted(before.keys()):
+        old_value = before[(row, col)]
+        new_value = after[(row, col)]
+        if old_value == new_value:
+            continue
+        changes.append(
+            {
+                "sheet_name": sheet_name,
+                "cell": f"{get_column_letter(col)}{row}",
+                "row": row,
+                "column": col,
+                "old_value": old_value,
+                "new_value": new_value,
+            }
+        )
+    return changes
+
 def merge_range(
     filepath: str,
     sheet_name: str,
@@ -1132,24 +1172,42 @@ def copy_range_operation(
             row_offset = target_row - start_row
             col_offset = target_col - start_col
             changes = []
+            source_cells = []
 
             for i in range(start_row, end_row + 1):
                 for j in range(start_col, end_col + 1):
                     source_cell = source_ws.cell(row=i, column=j)
-                    target_cell = target_ws.cell(row=i + row_offset, column=j + col_offset)
-                    if target_cell.value != source_cell.value:
-                        changes.append({
-                            "sheet_name": resolved_target_sheet,
-                            "cell": f"{get_column_letter(j + col_offset)}{i + row_offset}",
-                            "row": i + row_offset,
-                            "column": j + col_offset,
-                            "old_value": target_cell.value,
-                            "new_value": source_cell.value,
-                            "source_cell": f"{get_column_letter(j)}{i}",
-                        })
-                    target_cell.value = source_cell.value
-                    if source_cell.has_style:
-                        target_cell._style = copy(source_cell._style)
+                    source_cells.append(
+                        {
+                            "source_row": i,
+                            "source_col": j,
+                            "value": source_cell.value,
+                            "has_style": source_cell.has_style,
+                            "style": copy(source_cell._style) if source_cell.has_style else None,
+                        }
+                    )
+
+            for source_entry in source_cells:
+                i = source_entry["source_row"]
+                j = source_entry["source_col"]
+                source_value = source_entry["value"]
+                source_style = source_entry["style"]
+                source_has_style = bool(source_entry["has_style"])
+                source_cell = source_ws.cell(row=i, column=j)
+                target_cell = target_ws.cell(row=i + row_offset, column=j + col_offset)
+                if target_cell.value != source_value:
+                    changes.append({
+                        "sheet_name": resolved_target_sheet,
+                        "cell": f"{get_column_letter(j + col_offset)}{i + row_offset}",
+                        "row": i + row_offset,
+                        "column": j + col_offset,
+                        "old_value": target_cell.value,
+                        "new_value": source_value,
+                        "source_cell": f"{get_column_letter(j)}{i}",
+                    })
+                target_cell.value = source_value
+                if source_has_style and source_style is not None:
+                    target_cell._style = copy(source_style)
 
         return {
             "message": f"{'Previewed' if dry_run else 'Copied'} range successfully",
@@ -1203,23 +1261,10 @@ def delete_range_operation(
                 end_row or start_row,
                 end_col or start_col
             )
-            changes = []
-            for row in range(start_row, (end_row or start_row) + 1):
-                for col in range(start_col, (end_col or start_col) + 1):
-                    value = worksheet.cell(row=row, column=col).value
-                    if value is None:
-                        continue
-                    changes.append({
-                        "sheet_name": sheet_name,
-                        "cell": f"{get_column_letter(col)}{row}",
-                        "row": row,
-                        "column": col,
-                        "old_value": value,
-                        "new_value": None,
-                    })
-
-            # Delete range contents
-            delete_range(worksheet, start_cell, end_cell)
+            normalized_end_row = end_row or start_row
+            normalized_end_col = end_col or start_col
+            range_height = normalized_end_row - start_row + 1
+            range_width = normalized_end_col - start_col + 1
 
             # Shift cells if needed
             if shift_direction == "up":
@@ -1227,13 +1272,71 @@ def delete_range_operation(
                     operation=f"delete range {range_string} with upward shift",
                     impacts=_table_row_operation_impacts(worksheet, start_row=start_row),
                 )
-                worksheet.delete_rows(start_row, (end_row or start_row) - start_row + 1)
+                impact_bounds = {
+                    "min_row": start_row,
+                    "min_col": start_col,
+                    "max_row": worksheet.max_row,
+                    "max_col": normalized_end_col,
+                }
+                before_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
+
+                if normalized_end_row < worksheet.max_row:
+                    worksheet.move_range(
+                        format_range_string(
+                            normalized_end_row + 1,
+                            start_col,
+                            worksheet.max_row,
+                            normalized_end_col,
+                        ),
+                        rows=-range_height,
+                        cols=0,
+                    )
+
+                vacated_start_row = max(worksheet.max_row - range_height + 1, start_row)
+                delete_range(
+                    worksheet,
+                    f"{get_column_letter(start_col)}{vacated_start_row}",
+                    f"{get_column_letter(normalized_end_col)}{worksheet.max_row}",
+                )
+                after_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
             elif shift_direction == "left":
                 _raise_table_structure_guard(
                     operation=f"delete range {range_string} with left shift",
                     impacts=_table_column_operation_impacts(worksheet, start_col=start_col),
                 )
-                worksheet.delete_cols(start_col, (end_col or start_col) - start_col + 1)
+                impact_bounds = {
+                    "min_row": start_row,
+                    "min_col": start_col,
+                    "max_row": normalized_end_row,
+                    "max_col": worksheet.max_column,
+                }
+                before_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
+
+                if normalized_end_col < worksheet.max_column:
+                    worksheet.move_range(
+                        format_range_string(
+                            start_row,
+                            normalized_end_col + 1,
+                            normalized_end_row,
+                            worksheet.max_column,
+                        ),
+                        rows=0,
+                        cols=-range_width,
+                    )
+
+                vacated_start_col = max(worksheet.max_column - range_width + 1, start_col)
+                delete_range(
+                    worksheet,
+                    f"{get_column_letter(vacated_start_col)}{start_row}",
+                    f"{get_column_letter(worksheet.max_column)}{normalized_end_row}",
+                )
+                after_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
+
+            changes = _cell_value_changes(
+                before=before_snapshot,
+                after=after_snapshot,
+                sheet_name=sheet_name,
+            )
 
         return {
             "message": f"{'Previewed' if dry_run else 'Deleted'} range {range_string} successfully",
