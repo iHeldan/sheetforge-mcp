@@ -33,6 +33,7 @@
 - Fixed worksheet visibility guards so visible chart sheets now count correctly when preventing a workbook from ending up with zero visible sheets.
 - Fixed `copy_range_operation` so overlapping same-sheet copies now use a stable source snapshot instead of reading already-overwritten cells mid-copy.
 - Fixed `delete_range_operation` so upward and leftward shifts now move only the selected columns or rows instead of deleting whole worksheet rows or columns outside the requested range, and so `changes` previews match the actual shifted cells.
+- Fixed workbook audit broken-formula detection so formulas with missing structured table references are now reported instead of only formulas with literal `#REF!` text.
 
 ## 0.5.0 - 2026-04-18
 

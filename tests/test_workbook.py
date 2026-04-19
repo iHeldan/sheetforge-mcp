@@ -4,6 +4,7 @@ import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.workbook.defined_name import DefinedName
 from excel_mcp.chart import create_chart_in_sheet
@@ -276,6 +277,38 @@ def test_audit_workbook_reports_high_signal_findings(tmp_path):
     assert assessments["Data"]["highest_severity"] == "high"
     assert assessments["Raw"]["highest_severity"] == "medium"
     assert assessments["Hidden"]["highest_severity"] == "medium"
+
+
+def test_audit_workbook_flags_broken_structured_reference_formulas(tmp_path):
+    filepath = str(tmp_path / "audit-broken-structured-reference.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Name", "Value"])
+    ws.append(["Alice", 10])
+    ws.append(["Bob", 20])
+    ws["D2"] = "=SUM(People[Value])"
+
+    table = Table(displayName="People", ref="A1:B3")
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleMedium9",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=True,
+        showColumnStripes=False,
+    )
+    ws.add_table(table)
+    del ws.tables["People"]
+    wb.save(filepath)
+    wb.close()
+
+    result = audit_workbook(filepath)
+
+    by_code = {item["code"]: item["count"] for item in result["findings"]["by_code"]}
+    assert by_code["broken_formula_reference"] == 1
+    sample_by_code = {item["code"]: item for item in result["findings"]["sample"]}
+    assert sample_by_code["broken_formula_reference"]["sheet_name"] == "Data"
+    assert sample_by_code["broken_formula_reference"]["details"]["sample"] == ["D2"]
 
 
 def test_audit_workbook_handles_complex_workbook_orientation(complex_workbook):

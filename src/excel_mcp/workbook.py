@@ -809,6 +809,15 @@ def _formula_text_has_broken_reference(
             if reference_scope_sheet and reference_scope_sheet not in wb.sheetnames:
                 return True
 
+        resolved_targets = _resolve_formula_reference_targets(
+            wb,
+            token_value=token_value,
+            formula_sheet_name=formula_sheet_name,
+            formula_row=1,
+        )
+        if any(target.get("broken_reference") for target in resolved_targets):
+            return True
+
         if "[" in local_reference:
             continue
 
@@ -1538,11 +1547,22 @@ def _highest_severity(findings: list[dict[str, Any]]) -> str | None:
     )
 
 
-def _cells_with_broken_formula_references(ws: Worksheet) -> list[str]:
+def _cells_with_broken_formula_references(
+    wb: Any,
+    *,
+    ws: Worksheet,
+    sheet_name: str,
+) -> list[str]:
     cells: list[str] = []
     for row in ws.iter_rows():
         for cell in row:
-            if isinstance(cell.value, str) and cell.value.startswith("=") and "#REF!" in cell.value.upper():
+            if not isinstance(cell.value, str) or not cell.value.startswith("="):
+                continue
+            if _formula_text_has_broken_reference(
+                wb,
+                formula_text=cell.value,
+                formula_sheet_name=sheet_name,
+            ):
                 cells.append(cell.coordinate)
     return cells
 
@@ -2831,7 +2851,11 @@ def audit_workbook(
                         )
                     )
 
-                broken_formula_cells = _cells_with_broken_formula_references(ws)
+                broken_formula_cells = _cells_with_broken_formula_references(
+                    wb,
+                    ws=ws,
+                    sheet_name=sheet_name,
+                )
                 if broken_formula_cells:
                     sheet_findings.append(
                         _audit_finding(
