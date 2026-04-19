@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-04-19
+
+This minor release expands SheetForge MCP into a stronger workbook-audit, repair, query, and multi-workbook reporting surface, while tightening rename/copy semantics, response guidance, release integrity, and end-to-end agent workflows.
+
 ### Added
 
 - Added `cross_workbook_lookup` so agents can enrich one worksheet or native Excel table from matching rows in one or more lookup workbooks, with left or inner join behavior, duplicate-match strategies (`first`, `all`, `error`), lookup-side sort precedence, and explicit `strict`, `intersect`, and `union` schema handling across lookup files.

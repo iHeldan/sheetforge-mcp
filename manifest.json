@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "sheetforge-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Excel MCP server for AI agents and automation workflows that read, write, format, and automate .xlsx workbooks",
   "author": {
     "name": "SheetForge",

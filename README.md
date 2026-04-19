@@ -6,7 +6,7 @@ If you are looking for an Excel MCP server for spreadsheet automation, workbook 
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.5.0`
+Published package release: `0.6.0`
 Repository docs track the current main-branch tool surface, which currently exposes `74` MCP tools.
 
 ## Excel MCP Server Features
@@ -269,7 +269,7 @@ uv build
 ## Release Flow
 
 - Update `pyproject.toml`, `manifest.json`, and the tracked `.mcpb` bundle together for each release.
-- Keep the tracked bundle filename in sync with the package version, for example `sheetforge-mcp-0.5.0.mcpb`.
+- Keep the tracked bundle filename in sync with the package version, for example `sheetforge-mcp-<version>.mcpb`.
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
 
