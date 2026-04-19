@@ -411,6 +411,70 @@ def test_copy_range_operation_dry_run_preview_matches_overlapping_copy(tmp_path)
     wb.close()
 
 
+def test_copy_range_operation_translates_relative_formulas(tmp_path):
+    filepath = str(tmp_path / "copy-formula-translation.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = 10
+    ws["A2"] = 20
+    ws["B1"] = "=A1"
+    wb.save(filepath)
+    wb.close()
+
+    result = copy_range_operation(filepath, "Sheet1", "B1", "B1", "B2")
+
+    assert result["changes"] == [
+        {
+            "sheet_name": "Sheet1",
+            "cell": "B2",
+            "row": 2,
+            "column": 2,
+            "old_value": None,
+            "new_value": "=A2",
+            "source_cell": "B1",
+        }
+    ]
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["B1"].value == "=A1"
+    assert ws["B2"].value == "=A2"
+    wb.close()
+
+
+def test_copy_range_operation_dry_run_translates_relative_formulas(tmp_path):
+    filepath = str(tmp_path / "copy-formula-translation-dry-run.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = 10
+    ws["A2"] = 20
+    ws["B1"] = "=A1"
+    wb.save(filepath)
+    wb.close()
+
+    result = copy_range_operation(filepath, "Sheet1", "B1", "B1", "B2", dry_run=True)
+
+    assert result["dry_run"] is True
+    assert result["changes"] == [
+        {
+            "sheet_name": "Sheet1",
+            "cell": "B2",
+            "row": 2,
+            "column": 2,
+            "old_value": None,
+            "new_value": "=A2",
+            "source_cell": "B1",
+        }
+    ]
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["B2"].value is None
+    wb.close()
+
+
 def test_delete_range_operation_shifts_only_selected_columns_up(tmp_path):
     filepath = str(tmp_path / "delete-range-up.xlsx")
     wb = Workbook()

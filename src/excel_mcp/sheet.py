@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter, column_index_from_string, range_boundaries
 from openpyxl.styles import Font, Border, PatternFill, Side
+from openpyxl.formula.translate import Translator, TranslatorError
 
 from .cell_utils import parse_cell_range, validate_cell_reference
 from .exceptions import SheetError, ValidationError
@@ -57,6 +58,20 @@ def _validate_positive_integer(value: Any, *, argument_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValidationError(f"{argument_name} must be a positive integer")
     return value
+
+
+def _translated_copy_value(
+    value: Any,
+    *,
+    source_coordinate: str,
+    target_coordinate: str,
+) -> Any:
+    if not isinstance(value, str) or not value.startswith("="):
+        return value
+    try:
+        return Translator(value, origin=source_coordinate).translate_formula(target_coordinate)
+    except TranslatorError:
+        return value
 
 def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str, Any]:
     """Copy a worksheet within the same workbook."""
@@ -1195,17 +1210,22 @@ def copy_range_operation(
                 source_has_style = bool(source_entry["has_style"])
                 source_cell = source_ws.cell(row=i, column=j)
                 target_cell = target_ws.cell(row=i + row_offset, column=j + col_offset)
-                if target_cell.value != source_value:
+                translated_value = _translated_copy_value(
+                    source_value,
+                    source_coordinate=source_cell.coordinate,
+                    target_coordinate=target_cell.coordinate,
+                )
+                if target_cell.value != translated_value:
                     changes.append({
                         "sheet_name": resolved_target_sheet,
                         "cell": f"{get_column_letter(j + col_offset)}{i + row_offset}",
                         "row": i + row_offset,
                         "column": j + col_offset,
                         "old_value": target_cell.value,
-                        "new_value": source_value,
+                        "new_value": translated_value,
                         "source_cell": f"{get_column_letter(j)}{i}",
                     })
-                target_cell.value = source_value
+                target_cell.value = translated_value
                 if source_has_style and source_style is not None:
                     target_cell._style = copy(source_style)
 
