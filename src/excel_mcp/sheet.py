@@ -5,13 +5,17 @@ from typing import Any, Dict, Optional
 
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter, column_index_from_string, range_boundaries
-from openpyxl.utils.cell import quote_sheetname
 from openpyxl.styles import Font, Border, PatternFill, Side
 from openpyxl.formula.translate import Translator, TranslatorError
 
 from .cell_utils import parse_cell_range, validate_cell_reference
 from .exceptions import SheetError, ValidationError
-from .workbook import _normalize_sheet_reference_name, require_worksheet, safe_workbook
+from .workbook import (
+    _rewrite_sheet_references_in_text,
+    _update_defined_name_sheet_references,
+    require_worksheet,
+    safe_workbook,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,14 +85,11 @@ def _rewrite_sheet_reference_formula(
     old_sheet_name: str,
     new_sheet_name: str,
 ) -> Any:
-    if not isinstance(formula, str) or "!" not in formula:
-        return formula
-
-    sheet_reference, local_reference = formula.split("!", 1)
-    if _normalize_sheet_reference_name(sheet_reference) != old_sheet_name:
-        return formula
-
-    return f"{quote_sheetname(new_sheet_name)}!{local_reference}"
+    return _rewrite_sheet_references_in_text(
+        formula,
+        old_sheet_name=old_sheet_name,
+        new_sheet_name=new_sheet_name,
+    )
 
 
 def _update_formula_container_sheet_references(
@@ -165,6 +166,25 @@ def _update_workbook_chart_sheet_references(
             )
     return updated_count
 
+
+def _copy_local_named_ranges(
+    source_sheet: Worksheet,
+    target_sheet: Worksheet,
+) -> int:
+    copied_count = 0
+
+    for _, defined_name in source_sheet.defined_names.items():
+        cloned_name = copy(defined_name)
+        cloned_name.attr_text = _rewrite_sheet_references_in_text(
+            getattr(defined_name, "attr_text", None),
+            old_sheet_name=source_sheet.title,
+            new_sheet_name=target_sheet.title,
+        )
+        target_sheet.defined_names.add(cloned_name)
+        copied_count += 1
+
+    return copied_count
+
 def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str, Any]:
     """Copy a worksheet within the same workbook."""
     try:
@@ -180,8 +200,12 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
             )
             target = wb.copy_worksheet(source)
             target.title = target_sheet
+            copied_named_range_count = _copy_local_named_ranges(source, target)
 
-        return {"message": f"Sheet '{source_sheet}' copied to '{target_sheet}'"}
+        return {
+            "message": f"Sheet '{source_sheet}' copied to '{target_sheet}'",
+            "copied_local_named_ranges": copied_named_range_count,
+        }
     except SheetError as e:
         logger.error(str(e))
         raise
@@ -220,6 +244,11 @@ def rename_sheet(filepath: str, old_name: str, new_name: str) -> Dict[str, Any]:
 
             sheet = wb[old_name]
             sheet.title = new_name
+            updated_named_range_count = _update_defined_name_sheet_references(
+                wb,
+                old_sheet_name=old_name,
+                new_sheet_name=new_name,
+            )
             updated_chart_reference_count = _update_workbook_chart_sheet_references(
                 wb,
                 old_sheet_name=old_name,
@@ -227,6 +256,7 @@ def rename_sheet(filepath: str, old_name: str, new_name: str) -> Dict[str, Any]:
             )
         return {
             "message": f"Sheet renamed from '{old_name}' to '{new_name}'",
+            "named_range_reference_updates": updated_named_range_count,
             "chart_reference_updates": updated_chart_reference_count,
         }
     except SheetError as e:

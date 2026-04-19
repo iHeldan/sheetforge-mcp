@@ -300,11 +300,11 @@ Returns matches under `data.matches`:
 ## Worksheet And Range Mutation Tools
 
 - `copy_worksheet(filepath: str, source_sheet: str, target_sheet: str) -> str`
-  Copies a worksheet inside the same workbook.
+  Copies a worksheet inside the same workbook, including duplicating any sheet-scoped named ranges onto the copied sheet with references rewritten to the new sheet.
 - `delete_worksheet(filepath: str, sheet_name: str) -> str`
   Deletes a worksheet. The final remaining sheet cannot be deleted.
 - `rename_worksheet(filepath: str, old_name: str, new_name: str) -> str`
-  Renames a worksheet and keeps chart-series sheet references aligned for charts that point at the renamed sheet, including charts embedded on other sheets or chart sheets.
+  Renames a worksheet and keeps both chart-series references and named-range sheet references aligned for workbook-scoped or sheet-scoped names that point at the renamed sheet.
 - `set_worksheet_visibility(filepath: str, sheet_name: str, visibility: str, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Sets worksheet visibility to `visible`, `hidden`, or `veryHidden`, and supports preview mode. Committed writes stay compact unless `include_changes=True`.
 - `get_worksheet_protection(filepath: str, sheet_name: str) -> str`

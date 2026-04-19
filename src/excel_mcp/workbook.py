@@ -8,6 +8,7 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
+from openpyxl.utils.cell import quote_sheetname
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .exceptions import WorkbookError
@@ -35,6 +36,7 @@ _STRUCTURED_REFERENCE_COLUMN_RANGE_RE = re.compile(
 _STRUCTURED_REFERENCE_FLAG_ONLY_RE = re.compile(r"^\[(?P<flag>#[^\]]+)\]$")
 _STRUCTURED_REFERENCE_THIS_ROW_COLUMN_RE = re.compile(r"^\[@(?P<column>[^\]]+)\]$")
 _STRUCTURED_REFERENCE_COLUMN_RE = re.compile(r"^\[(?P<column>[^\]]+)\]$")
+_SHEET_REFERENCE_TOKEN_RE = re.compile(r"(?<!\])(?P<sheet>'(?:[^']|'')+'|[A-Za-z0-9_.]+)!")
 
 
 def _get_sheet_usage(ws) -> tuple[int, int, str | None, bool]:
@@ -61,6 +63,57 @@ def _normalize_sheet_reference_name(raw_sheet_name: Any) -> str:
     if len(cleaned) >= 2 and cleaned[0] == "'" and cleaned[-1] == "'":
         cleaned = cleaned[1:-1]
     return cleaned.replace("''", "'")
+
+
+def _rewrite_sheet_references_in_text(
+    text: Any,
+    *,
+    old_sheet_name: str,
+    new_sheet_name: str,
+) -> Any:
+    if not isinstance(text, str) or "!" not in text:
+        return text
+
+    quoted_new_sheet = quote_sheetname(new_sheet_name)
+
+    def _replace(match: re.Match[str]) -> str:
+        if _normalize_sheet_reference_name(match.group("sheet")) != old_sheet_name:
+            return match.group(0)
+        return f"{quoted_new_sheet}!"
+
+    return _SHEET_REFERENCE_TOKEN_RE.sub(_replace, text)
+
+
+def _update_defined_name_sheet_references(
+    wb: Any,
+    *,
+    old_sheet_name: str,
+    new_sheet_name: str,
+) -> int:
+    updated_count = 0
+    seen_ids: set[int] = set()
+
+    for _, defined_name, _ in _iter_defined_name_entries(wb):
+        defined_name_id = id(defined_name)
+        if defined_name_id in seen_ids:
+            continue
+        seen_ids.add(defined_name_id)
+
+        original_text = getattr(defined_name, "attr_text", None)
+        if original_text is None:
+            original_text = str(getattr(defined_name, "value", "") or "")
+
+        updated_text = _rewrite_sheet_references_in_text(
+            original_text,
+            old_sheet_name=old_sheet_name,
+            new_sheet_name=new_sheet_name,
+        )
+        if updated_text == original_text:
+            continue
+        defined_name.attr_text = updated_text
+        updated_count += 1
+
+    return updated_count
 
 
 def _bounds_intersect(

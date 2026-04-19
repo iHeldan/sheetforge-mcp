@@ -33,6 +33,8 @@
 
 - Fixed inferred read schemas so formula-backed columns are now labeled as `formula` instead of misleadingly appearing as plain `string` columns when SheetForge returns formula text from workbook reads.
 - Fixed `rename_worksheet` so chart series references now follow the renamed sheet instead of keeping stale source formulas that still point at the old worksheet name.
+- Fixed `rename_worksheet` so workbook-level and sheet-scoped named ranges now follow the renamed sheet instead of drifting to missing-sheet destinations.
+- Fixed `copy_worksheet` so sheet-scoped named ranges are now duplicated onto the copied sheet with their references rewritten to the new sheet.
 - Fixed oversized `read_excel_table` errors so the recovery hints now mention `compact=True`, matching the tool's real payload-trimming option.
 - Fixed aggregation DX so `aggregate_table` and `bulk_aggregate_workbooks` now accept the more intuitive metric aliases `agg` and `column` in addition to the canonical `op` and `field` keys.
 - Fixed `copy_range` so copied formulas now translate their relative references to the target cells instead of being pasted back as unchanged formula text.

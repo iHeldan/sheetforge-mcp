@@ -8,6 +8,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.workbook.defined_name import DefinedName
 from excel_mcp.chart import create_chart_in_sheet
+from excel_mcp.sheet import copy_sheet, rename_sheet
 from excel_mcp.server import (
     apply_workbook_repairs as apply_workbook_repairs_tool,
     analyze_range_impact as analyze_range_impact_tool,
@@ -455,6 +456,105 @@ def test_inspect_named_range_reports_scope_and_breakage(tmp_path):
     payload = _load_tool_payload(inspect_named_range_tool(filepath, "BrokenRange"))
     assert payload["operation"] == "inspect_named_range"
     assert payload["data"]["matches"][0]["name"] == "BrokenRange"
+
+
+def test_rename_sheet_updates_workbook_and_local_named_ranges(tmp_path):
+    filepath = str(tmp_path / "named-range-rename.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A1"] = 10
+    ws["B1"] = 20
+    wb.defined_names["GlobalRange"] = DefinedName(
+        "GlobalRange",
+        attr_text="Data!$A$1",
+    )
+    ws.defined_names.add(
+        DefinedName(
+            "LocalRange",
+            attr_text="Data!$B$1",
+        )
+    )
+    wb.save(filepath)
+    wb.close()
+
+    result = rename_sheet(filepath, "Data", "Revenue")
+
+    assert result["named_range_reference_updates"] == 2
+    named_ranges = list_named_ranges(filepath)
+    assert named_ranges == [
+        {
+            "name": "GlobalRange",
+            "type": "RANGE",
+            "value": "'Revenue'!$A$1",
+            "destinations": [{"sheet_name": "Revenue", "range": "$A$1"}],
+            "local_sheet": None,
+            "hidden": False,
+            "broken_reference": False,
+            "missing_sheets": [],
+        },
+        {
+            "name": "LocalRange",
+            "type": "RANGE",
+            "value": "'Revenue'!$B$1",
+            "destinations": [{"sheet_name": "Revenue", "range": "$B$1"}],
+            "local_sheet": "Revenue",
+            "hidden": False,
+            "broken_reference": False,
+            "missing_sheets": [],
+        },
+    ]
+
+    local_result = inspect_named_range(filepath, "LocalRange", scope_sheet="Revenue")
+    assert local_result["matches"][0]["destinations"] == [{"sheet_name": "Revenue", "range": "$B$1"}]
+
+
+def test_copy_sheet_duplicates_local_named_ranges_for_target_sheet(tmp_path):
+    filepath = str(tmp_path / "named-range-copy.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["A1"] = 10
+    ws["B1"] = "=LocalRange"
+    ws.defined_names.add(
+        DefinedName(
+            "LocalRange",
+            attr_text="Data!$A$1",
+        )
+    )
+    wb.save(filepath)
+    wb.close()
+
+    result = copy_sheet(filepath, "Data", "Data Copy")
+
+    assert result["copied_local_named_ranges"] == 1
+    named_ranges = list_named_ranges(filepath)
+    assert named_ranges == [
+        {
+            "name": "LocalRange",
+            "type": "RANGE",
+            "value": "Data!$A$1",
+            "destinations": [{"sheet_name": "Data", "range": "$A$1"}],
+            "local_sheet": "Data",
+            "hidden": False,
+            "broken_reference": False,
+            "missing_sheets": [],
+        },
+        {
+            "name": "LocalRange",
+            "type": "RANGE",
+            "value": "'Data Copy'!$A$1",
+            "destinations": [{"sheet_name": "Data Copy", "range": "$A$1"}],
+            "local_sheet": "Data Copy",
+            "hidden": False,
+            "broken_reference": False,
+            "missing_sheets": [],
+        },
+    ]
+
+    copied_scope = inspect_named_range(filepath, "LocalRange", scope_sheet="Data Copy")
+    assert copied_scope["matches"][0]["local_sheet"] == "Data Copy"
+    assert copied_scope["matches"][0]["destinations"] == [{"sheet_name": "Data Copy", "range": "$A$1"}]
 
 
 def test_delete_named_range_supports_dry_run_and_apply(tmp_path):
