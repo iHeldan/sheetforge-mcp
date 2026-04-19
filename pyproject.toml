@@ -1,6 +1,6 @@
 [project]
 name = "sheetforge-mcp"
-version = "0.6.1"
+version = "0.7.0"
 description = "Excel MCP server for AI agents, spreadsheet automation, workbook inspection, and .xlsx reporting with Model Context Protocol and openpyxl"
 readme = "README.md"
 requires-python = ">=3.10"
