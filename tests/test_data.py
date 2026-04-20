@@ -18,8 +18,9 @@ from excel_mcp.data import (
     update_rows_by_key,
     write_data,
 )
-from excel_mcp.exceptions import DataError
+from excel_mcp.exceptions import DataError, PreconditionFailedError
 from excel_mcp.server import (
+    append_table_rows as append_table_rows_tool,
     describe_dataset as describe_dataset_tool,
     list_all_sheets,
     quick_read,
@@ -27,6 +28,7 @@ from excel_mcp.server import (
     read_excel_as_table as read_excel_as_table_tool,
     search_in_sheet,
     suggest_read_strategy as suggest_read_strategy_tool,
+    update_rows_by_key as update_rows_by_key_tool,
 )
 
 
@@ -833,16 +835,17 @@ def test_read_excel_as_table_compact_omits_nonessential_metadata(tmp_workbook):
     payload = _load_tool_payload(read_excel_as_table_tool(tmp_workbook, "Sheet1", compact=True))
 
     assert payload["operation"] == "read_excel_as_table"
-    assert payload["data"] == {
-        "headers": ["Name", "Age", "City"],
-        "rows": [
-            ["Alice", 30, "Helsinki"],
-            ["Bob", 25, "Tampere"],
-            ["Carol", 35, "Turku"],
-            ["Dave", 28, "Oulu"],
-            ["Eve", 32, "Espoo"],
-        ],
-    }
+    assert payload["data"]["headers"] == ["Name", "Age", "City"]
+    assert payload["data"]["rows"] == [
+        ["Alice", 30, "Helsinki"],
+        ["Bob", 25, "Tampere"],
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+        ["Eve", 32, "Espoo"],
+    ]
+    assert payload["data"]["structure_token"].startswith("sf_struct_v1_")
+    assert payload["data"]["content_token"].startswith("sf_content_v1_")
+    assert payload["data"]["snapshot_metadata"]["token_basis"] == "live_workbook_snapshot"
 
 
 def test_read_excel_as_table_tool_supports_column_windowing(tmp_workbook):
@@ -1095,6 +1098,22 @@ def test_describe_dataset_summarizes_tabular_worksheet(tmp_workbook):
     assert result["schema"][1]["type"] == "integer"
     assert result["recommended_read_tool"] == "quick_read"
     assert any(candidate["field"] == "name" for candidate in result["key_candidates"])
+
+
+def test_describe_dataset_returns_tokens_and_snapshot_metadata(tmp_workbook):
+    result = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+
+    assert result["structure_token"].startswith("sf_struct_v1_")
+    assert result["content_token"].startswith("sf_content_v1_")
+    assert result["snapshot_metadata"]["token_basis"] == "live_workbook_snapshot"
+    assert result["snapshot_metadata"]["file_size"] > 0
+
+
+def test_quick_read_and_describe_dataset_share_structure_token(tmp_workbook):
+    describe_result = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+    quick_result = quick_read_impl(tmp_workbook, sheet_name="Sheet1")
+
+    assert quick_result["structure_token"] == describe_result["structure_token"]
 
 
 def test_describe_dataset_reports_sparse_trailing_rows_as_separate_block(tmp_path):
@@ -1353,6 +1372,53 @@ def test_append_table_rows_defaults_to_summary_without_changes(tmp_workbook):
     assert "changes" not in result
 
 
+def test_append_table_rows_requires_structure_change_intent_when_token_is_provided(tmp_workbook):
+    dataset = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+
+    with pytest.raises(PreconditionFailedError, match="allow_structure_change=True"):
+        append_table_rows(
+            tmp_workbook,
+            "Sheet1",
+            [{"Name": "Mallory", "Age": 44, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+        )
+
+
+def test_append_table_rows_rejects_stale_structure_token(tmp_workbook):
+    dataset = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["D1"] = "Country"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    with pytest.raises(PreconditionFailedError, match="Dataset structure changed"):
+        append_table_rows(
+            tmp_workbook,
+            "Sheet1",
+            [{"Name": "Mallory", "Age": 44, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+            allow_structure_change=True,
+        )
+
+
+def test_append_table_rows_returns_previous_and_new_tokens(tmp_workbook):
+    dataset = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+
+    result = append_table_rows(
+        tmp_workbook,
+        "Sheet1",
+        [{"Name": "Mallory", "Age": 44, "City": "Lahti"}],
+        expected_structure_token=dataset["structure_token"],
+        allow_structure_change=True,
+        dry_run=True,
+    )
+
+    assert result["previous_structure_token"] == dataset["structure_token"]
+    assert result["new_structure_token"] != dataset["structure_token"]
+    assert result["snapshot_metadata"]["token_basis"] == "live_workbook_snapshot"
+
+
 def test_append_table_rows_dry_run_does_not_persist(tmp_workbook):
     result = append_table_rows(
         tmp_workbook,
@@ -1445,6 +1511,42 @@ def test_update_rows_by_key_defaults_to_summary_without_changes(tmp_workbook):
     assert "changes" not in result
 
 
+def test_update_rows_by_key_rejects_stale_structure_token(tmp_workbook):
+    dataset = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["D1"] = "Country"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    with pytest.raises(PreconditionFailedError, match="Dataset structure changed"):
+        update_rows_by_key(
+            tmp_workbook,
+            "Sheet1",
+            "Name",
+            [{"Name": "Alice", "City": "Vantaa"}],
+            expected_structure_token=dataset["structure_token"],
+        )
+
+
+def test_update_rows_by_key_returns_tokens_and_snapshot_metadata(tmp_workbook):
+    dataset = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+
+    result = update_rows_by_key(
+        tmp_workbook,
+        "Sheet1",
+        "Name",
+        [{"Name": "Alice", "City": "Vantaa"}],
+        expected_structure_token=dataset["structure_token"],
+        dry_run=True,
+    )
+
+    assert result["previous_structure_token"] == dataset["structure_token"]
+    assert result["new_structure_token"] == dataset["structure_token"]
+    assert result["previous_content_token"] != result["new_content_token"]
+    assert result["snapshot_metadata"]["file_size"] > 0
+
+
 def test_update_rows_by_key_dry_run_does_not_persist(tmp_workbook):
     result = update_rows_by_key(
         tmp_workbook,
@@ -1459,3 +1561,49 @@ def test_update_rows_by_key_dry_run_does_not_persist(tmp_workbook):
 
     table = read_as_table(tmp_workbook, "Sheet1")
     assert table["rows"][0] == ["Alice", 30, "Helsinki"]
+
+
+def test_append_table_rows_tool_surfaces_precondition_error_details(tmp_workbook):
+    dataset = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["D1"] = "Country"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    payload = json.loads(
+        append_table_rows_tool(
+            tmp_workbook,
+            "Sheet1",
+            [{"Name": "Mallory", "Age": 44, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+            allow_structure_change=True,
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "stale_structure_token"
+    assert payload["error"]["suggested_next_tool"] == "describe_dataset"
+
+
+def test_update_rows_by_key_tool_surfaces_precondition_error_details(tmp_workbook):
+    dataset = describe_dataset_impl(tmp_workbook, sheet_name="Sheet1")
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["D1"] = "Country"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    payload = json.loads(
+        update_rows_by_key_tool(
+            tmp_workbook,
+            "Sheet1",
+            "Name",
+            [{"Name": "Alice", "City": "Vantaa"}],
+            expected_structure_token=dataset["structure_token"],
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "stale_structure_token"
+    assert payload["error"]["details"]["sheet_name"] == "Sheet1"

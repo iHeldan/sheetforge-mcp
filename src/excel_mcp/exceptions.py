@@ -50,3 +50,20 @@ class ResponseTooLargeError(ExcelMCPError):
         self.estimated_size = estimated_size
         self.limit = limit
         self.hints = hints or []
+
+
+class PreconditionFailedError(ExcelMCPError):
+    """Raised when a caller-provided workbook or dataset precondition no longer holds."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "precondition_failed",
+        details: dict | None = None,
+        suggested_next_tool: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+        self.suggested_next_tool = suggested_next_tool

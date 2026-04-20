@@ -4,8 +4,17 @@ from typing import Any, Optional
 
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from openpyxl.worksheet.table import Table, TableStyleInfo
-from .data import _build_cell_change, _should_include_changes, augment_tabular_payload
-from .exceptions import DataError
+from .data import (
+    _assert_expected_structure_token,
+    _attach_dataset_identity,
+    _build_cell_change,
+    _require_structure_change_intent,
+    _should_include_changes,
+    _snapshot_metadata,
+    _table_dataset_tokens,
+    augment_tabular_payload,
+)
+from .exceptions import DataError, PreconditionFailedError
 from .workbook import require_worksheet, safe_workbook
 
 logger = logging.getLogger(__name__)
@@ -375,7 +384,7 @@ def read_excel_table(
             else:
                 payload = result
 
-            return augment_tabular_payload(
+            payload = augment_tabular_payload(
                 payload,
                 headers=result["headers"],
                 rows=result["rows"],
@@ -383,6 +392,21 @@ def read_excel_table(
                 row_mode=row_mode,
                 infer_schema=infer_schema,
                 next_start_row=next_start_row,
+            )
+            dataset_tokens = _table_dataset_tokens(
+                ws,
+                sheet_name=current_sheet_name,
+                table_name=table.displayName,
+                table_range=table.ref,
+                headers=metadata["headers"],
+                header_row_count=metadata["header_row_count"],
+                totals_row_count=metadata["totals_row_count"],
+                totals_row_shown=metadata["totals_row_shown"],
+            )
+            return _attach_dataset_identity(
+                payload,
+                dataset_tokens=dataset_tokens,
+                filepath=filepath,
             )
 
     except DataError:
@@ -400,6 +424,8 @@ def upsert_excel_table_rows(
     sheet_name: Optional[str] = None,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
+    allow_structure_change: bool = False,
 ) -> dict[str, Any]:
     """Update matching rows in a native Excel table and append missing keys."""
     try:
@@ -411,6 +437,20 @@ def upsert_excel_table_rows(
         with safe_workbook(filepath, save=not dry_run) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
             header_map = _table_header_map(ws, table)
+            previous_dataset_tokens = _table_dataset_tokens(
+                ws,
+                sheet_name=current_sheet_name,
+                table_name=table.displayName,
+                table_range=table.ref,
+                headers=[header for header, _ in sorted(header_map.items(), key=lambda item: item[1])],
+                header_row_count=int(table.headerRowCount or 0),
+                totals_row_count=int(table.totalsRowCount or 0),
+                totals_row_shown=bool(table.totalsRowShown),
+            )
+            _assert_expected_structure_token(
+                expected_structure_token=expected_structure_token,
+                dataset_tokens=previous_dataset_tokens,
+            )
             if key_column not in header_map:
                 raise DataError(
                     f"Key column '{key_column}' not found in table '{table.displayName}'"
@@ -487,6 +527,16 @@ def upsert_excel_table_rows(
 
             if totals_row_count > 0 and append_rows:
                 _reject_totals_row_appends(table)
+            if append_rows:
+                _require_structure_change_intent(
+                    expected_structure_token=expected_structure_token,
+                    allow_structure_change=allow_structure_change,
+                    dataset_tokens=previous_dataset_tokens,
+                    reason=(
+                        "Appending rows changes the native table range; pass "
+                        "allow_structure_change=True to confirm this intentional structure change."
+                    ),
+                )
 
             append_start_row = data_end_row + 1
             if totals_row_count == 0 and append_rows:
@@ -519,22 +569,32 @@ def upsert_excel_table_rows(
             new_max_row = max_row + len(append_rows)
             table_range = _range_from_bounds(min_col, min_row, max_col, new_max_row)
 
-            if not dry_run:
-                for target_row, row_data in update_rows:
-                    for column_name, new_value in row_data.items():
-                        if column_name == key_column:
-                            continue
-                        ws.cell(row=target_row, column=header_map[column_name], value=new_value)
+            for target_row, row_data in update_rows:
+                for column_name, new_value in row_data.items():
+                    if column_name == key_column:
+                        continue
+                    ws.cell(row=target_row, column=header_map[column_name], value=new_value)
 
-                for row_offset, row_data in enumerate(append_rows):
-                    target_row = append_start_row + row_offset
-                    for column_name, col_idx in ordered_columns:
-                        if column_name not in row_data:
-                            continue
-                        ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
+            for row_offset, row_data in enumerate(append_rows):
+                target_row = append_start_row + row_offset
+                for column_name, col_idx in ordered_columns:
+                    if column_name not in row_data:
+                        continue
+                    ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
 
-                if append_rows:
-                    table.ref = table_range
+            if append_rows:
+                table.ref = table_range
+
+            new_dataset_tokens = _table_dataset_tokens(
+                ws,
+                sheet_name=current_sheet_name,
+                table_name=table.displayName,
+                table_range=table.ref,
+                headers=[header for header, _ in ordered_columns],
+                header_row_count=int(table.headerRowCount or 0),
+                totals_row_count=int(table.totalsRowCount or 0),
+                totals_row_shown=bool(table.totalsRowShown),
+            )
 
         appended_keys = [row[key_column] for row in append_rows]
         updated_keys = [row_data[key_column] for _, row_data in update_rows]
@@ -554,12 +614,17 @@ def upsert_excel_table_rows(
             "previous_table_range": previous_table_range,
             "table_range": table_range,
             "dry_run": dry_run,
+            "previous_structure_token": previous_dataset_tokens["structure_token"],
+            "new_structure_token": new_dataset_tokens["structure_token"],
+            "previous_content_token": previous_dataset_tokens["content_token"],
+            "new_content_token": new_dataset_tokens["content_token"],
+            "snapshot_metadata": _snapshot_metadata(filepath),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes
         return result
 
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to upsert table rows: {e}")
@@ -573,6 +638,8 @@ def append_excel_table_rows(
     sheet_name: Optional[str] = None,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
+    allow_structure_change: bool = False,
 ) -> dict[str, Any]:
     """Append rows to a native Excel table and expand the table range safely."""
     try:
@@ -584,6 +651,30 @@ def append_excel_table_rows(
         with safe_workbook(filepath, save=not dry_run) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
             header_map = _table_header_map(ws, table)
+            ordered_columns = sorted(header_map.items(), key=lambda item: item[1])
+            previous_dataset_tokens = _table_dataset_tokens(
+                ws,
+                sheet_name=current_sheet_name,
+                table_name=table.displayName,
+                table_range=table.ref,
+                headers=[header for header, _ in ordered_columns],
+                header_row_count=int(table.headerRowCount or 0),
+                totals_row_count=int(table.totalsRowCount or 0),
+                totals_row_shown=bool(table.totalsRowShown),
+            )
+            _assert_expected_structure_token(
+                expected_structure_token=expected_structure_token,
+                dataset_tokens=previous_dataset_tokens,
+            )
+            _require_structure_change_intent(
+                expected_structure_token=expected_structure_token,
+                allow_structure_change=allow_structure_change,
+                dataset_tokens=previous_dataset_tokens,
+                reason=(
+                    "Appending rows changes the native table range; pass "
+                    "allow_structure_change=True to confirm this intentional structure change."
+                ),
+            )
 
             unknown_columns = sorted(
                 {
@@ -612,7 +703,6 @@ def append_excel_table_rows(
                 max_col=max_col,
             )
 
-            ordered_columns = sorted(header_map.items(), key=lambda item: item[1])
             changes: list[dict[str, Any]] = []
             for row_offset, row_data in enumerate(rows):
                 target_row = append_start_row + row_offset
@@ -634,14 +724,24 @@ def append_excel_table_rows(
             new_max_row = max_row + len(rows)
             table_range = _range_from_bounds(min_col, min_row, max_col, new_max_row)
 
-            if not dry_run:
-                for row_offset, row_data in enumerate(rows):
-                    target_row = append_start_row + row_offset
-                    for column_name, col_idx in ordered_columns:
-                        if column_name not in row_data:
-                            continue
-                        ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
-                table.ref = table_range
+            for row_offset, row_data in enumerate(rows):
+                target_row = append_start_row + row_offset
+                for column_name, col_idx in ordered_columns:
+                    if column_name not in row_data:
+                        continue
+                    ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
+            table.ref = table_range
+
+            new_dataset_tokens = _table_dataset_tokens(
+                ws,
+                sheet_name=current_sheet_name,
+                table_name=table.displayName,
+                table_range=table.ref,
+                headers=[header for header, _ in ordered_columns],
+                header_row_count=int(table.headerRowCount or 0),
+                totals_row_count=int(table.totalsRowCount or 0),
+                totals_row_shown=bool(table.totalsRowShown),
+            )
 
         result = {
             "message": (
@@ -655,11 +755,16 @@ def append_excel_table_rows(
             "previous_table_range": previous_table_range,
             "table_range": table_range,
             "dry_run": dry_run,
+            "previous_structure_token": previous_dataset_tokens["structure_token"],
+            "new_structure_token": new_dataset_tokens["structure_token"],
+            "previous_content_token": previous_dataset_tokens["content_token"],
+            "new_content_token": new_dataset_tokens["content_token"],
+            "snapshot_metadata": _snapshot_metadata(filepath),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes
         return result
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to append native table rows: {e}")

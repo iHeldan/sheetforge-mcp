@@ -5,11 +5,15 @@
 ### Added
 
 - Added `create_named_range` so agents can create workbook-level or sheet-scoped named ranges with `dry_run` previews and same-scope `replace=True` support instead of dropping to ad hoc Python for a common workbook-structure task.
+- Added semantic dataset identity metadata to `describe_dataset`, `quick_read`, `read_excel_as_table`, and `read_excel_table`: each response now includes `structure_token`, `content_token`, and `snapshot_metadata` for optimistic-concurrency style follow-up writes.
 
 ### Changed
 
 - Changed `rename_worksheet` so it now updates formula cells in addition to chart references and named ranges, and it also renames the default sibling pivot sheet (`Data_pivot` -> `Revenue_pivot`) when that move is conflict-free.
 - Changed worksheet-shaped dataset reads and row-mutation helpers to stop at the main contiguous data block after the header, so sparse footer notes or distant outlier rows no longer inflate `quick_read` / `read_excel_as_table` row counts or confuse `append_table_rows` and `update_rows_by_key`; `describe_dataset` now surfaces `data_end_row` and `ignored_trailing_row_count` when later rows are treated as a separate block.
+- Changed `append_table_rows`, `append_excel_table_rows`, `upsert_excel_table_rows`, and `update_rows_by_key` so they can enforce `expected_structure_token` preconditions. Append-style writes now require explicit `allow_structure_change=True` when the caller is intentionally growing a dataset or native table.
+- Changed workbook persistence through `safe_workbook(..., save=True)` to use temp-file save, `fsync`, atomic replace, and reopen verification instead of writing directly over the original path.
+- Changed `audit_workbook` so dominant native-table sheets are judged by the table's own headers when nearby dashboard artifacts extend the used range, reducing false `blank_headers` or `duplicate_headers` findings on mixed sheets.
 - Refreshed README, package metadata, manifest copy, and landing-page positioning to better highlight SheetForge's current local-first, agent-friendly workbook reading, introspection, and safer mutation strengths without promising unreleased concurrency features.
 
 ## 0.7.0 - 2026-04-19

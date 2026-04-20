@@ -17,6 +17,7 @@ from excel_mcp.exceptions import (
     PivotError,
     ChartError,
     ResponseTooLargeError,
+    PreconditionFailedError,
 )
 
 # Import from excel_mcp package with consistent _impl suffixes
@@ -143,6 +144,7 @@ HANDLED_TOOL_ERRORS = (
     PivotError,
     ChartError,
     ResponseTooLargeError,
+    PreconditionFailedError,
     ValueError,
     FileNotFoundError,
 )
@@ -320,6 +322,12 @@ def _error_response(operation: str, error: Exception) -> str:
         "type": type(error).__name__,
         "message": str(error),
     }
+    if hasattr(error, "code"):
+        error_payload["code"] = getattr(error, "code")
+    if hasattr(error, "details") and getattr(error, "details"):
+        error_payload["details"] = getattr(error, "details")
+    if hasattr(error, "suggested_next_tool") and getattr(error, "suggested_next_tool"):
+        error_payload["suggested_next_tool"] = getattr(error, "suggested_next_tool")
     if isinstance(error, ResponseTooLargeError):
         error_payload["estimated_size"] = error.estimated_size
         error_payload["limit"] = error.limit
@@ -2494,6 +2502,8 @@ def append_table_rows(
     header_row: int = 1,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
+    allow_structure_change: bool = False,
 ) -> str:
     """Append dictionary-shaped rows by matching worksheet headers on a worksheet dataset."""
     return _run_tool(
@@ -2505,6 +2515,8 @@ def append_table_rows(
             header_row=header_row,
             dry_run=dry_run,
             include_changes=include_changes,
+            expected_structure_token=expected_structure_token,
+            allow_structure_change=allow_structure_change,
         ),
     )
 
@@ -2523,6 +2535,8 @@ def append_excel_table_rows(
     sheet_name: Optional[str] = None,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
+    allow_structure_change: bool = False,
 ) -> str:
     """Append rows to a native Excel table and expand its range safely."""
     return _run_tool(
@@ -2534,6 +2548,8 @@ def append_excel_table_rows(
             sheet_name=sheet_name,
             dry_run=dry_run,
             include_changes=include_changes,
+            expected_structure_token=expected_structure_token,
+            allow_structure_change=allow_structure_change,
         ),
     )
 
@@ -2553,6 +2569,8 @@ def upsert_excel_table_rows(
     sheet_name: Optional[str] = None,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
+    allow_structure_change: bool = False,
 ) -> str:
     """Update matching rows in a native Excel table and append missing keys."""
     return _run_tool(
@@ -2565,6 +2583,8 @@ def upsert_excel_table_rows(
             sheet_name=sheet_name,
             dry_run=dry_run,
             include_changes=include_changes,
+            expected_structure_token=expected_structure_token,
+            allow_structure_change=allow_structure_change,
         ),
     )
 
@@ -2584,6 +2604,7 @@ def update_rows_by_key(
     header_row: int = 1,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
 ) -> str:
     """Update existing table rows using a named key column."""
     return _run_tool(
@@ -2596,6 +2617,7 @@ def update_rows_by_key(
             header_row=header_row,
             dry_run=dry_run,
             include_changes=include_changes,
+            expected_structure_token=expected_structure_token,
         ),
     )
 

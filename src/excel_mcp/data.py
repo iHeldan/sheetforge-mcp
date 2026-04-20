@@ -1,6 +1,7 @@
 import base64
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
+import hashlib
 import json
 from pathlib import Path
 import logging
@@ -11,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 
-from .exceptions import DataError
+from .exceptions import DataError, PreconditionFailedError
 from .cell_utils import parse_cell_range
 from .cell_validation import get_data_validation_for_cell
 from .workbook import first_worksheet, require_worksheet, safe_workbook
@@ -22,6 +23,8 @@ RANGE_READ_CURSOR_VERSION = 2
 DEFAULT_DATASET_SAMPLE_ROWS = 25
 KEY_CANDIDATE_SCAN_LIMIT = 100
 TABULAR_BLANK_GAP_TOLERANCE = 5
+DATASET_TOKEN_VERSION = 1
+CONTENT_TOKEN_QUANTILES = (0.25, 0.5, 0.75)
 
 
 def _cell_address(row: int, col: int) -> str:
@@ -41,6 +44,405 @@ def _compact_table_payload(table_data: Dict[str, Any]) -> Dict[str, Any]:
         compact_data["total_rows"] = table_data["total_rows"]
         compact_data["truncated"] = True
     return compact_data
+
+
+def _canonical_json(data: Any) -> str:
+    return json.dumps(
+        data,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _token_digest(prefix: str, payload: Dict[str, Any]) -> str:
+    digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()[:20]
+    return f"{prefix}_v{DATASET_TOKEN_VERSION}_{digest}"
+
+
+def _snapshot_metadata(filepath: str) -> Dict[str, Any]:
+    stat = Path(filepath).stat()
+    return {
+        "calculated_at": datetime.now(timezone.utc).isoformat(),
+        "file_mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "file_size": stat.st_size,
+        "token_basis": "live_workbook_snapshot",
+    }
+
+
+def _normalize_decimal_string(value: Decimal) -> str:
+    normalized = value.normalize()
+    if normalized == normalized.to_integral():
+        return str(normalized.quantize(Decimal("1")))
+    return format(normalized, "f")
+
+
+def _normalize_token_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return {"type": "boolean", "value": value}
+    if isinstance(value, int):
+        return {"type": "integer", "value": str(value)}
+    if isinstance(value, (float, Decimal)):
+        return {
+            "type": "number",
+            "value": _normalize_decimal_string(Decimal(str(value))),
+        }
+    if isinstance(value, datetime):
+        return {"type": "datetime", "value": value.isoformat()}
+    if isinstance(value, date):
+        return {"type": "date", "value": value.isoformat()}
+    if isinstance(value, time):
+        return {"type": "time", "value": value.isoformat()}
+    if isinstance(value, str):
+        normalized = value.strip()
+        return {
+            "type": "formula" if normalized.startswith("=") else "string",
+            "value": normalized,
+        }
+    return {
+        "type": type(value).__name__.lower(),
+        "value": str(value).strip(),
+    }
+
+
+def _dataset_anchor_indexes(row_count: int) -> List[int]:
+    if row_count <= 0:
+        return []
+
+    indexes = {0, row_count - 1}
+    if row_count > 1:
+        indexes.add(1)
+        indexes.add(row_count - 2)
+
+    for quantile in CONTENT_TOKEN_QUANTILES:
+        indexes.add(int(round((row_count - 1) * quantile)))
+
+    return sorted(index for index in indexes if 0 <= index < row_count)
+
+
+def _token_header_columns(ws: Worksheet, header_row: int) -> List[int]:
+    non_empty_header_columns = [
+        col
+        for col in range(1, ws.max_column + 1)
+        if ws.cell(row=header_row, column=col).value not in (None, "")
+    ]
+    if not non_empty_header_columns:
+        return _selected_columns(1, ws.max_column)
+    return _selected_columns(non_empty_header_columns[0], non_empty_header_columns[-1])
+
+
+def _read_rows_for_columns(
+    ws: Worksheet,
+    columns: List[int],
+    *,
+    first_row: int,
+    last_row: int,
+    limit: Optional[int] = None,
+) -> List[List[Any]]:
+    if first_row > last_row:
+        return []
+
+    rows: List[List[Any]] = []
+    remaining = None if limit is None else limit
+    for row_idx in range(first_row, last_row + 1):
+        if remaining is not None and remaining <= 0:
+            break
+        rows.append([ws.cell(row=row_idx, column=col).value for col in columns])
+        if remaining is not None:
+            remaining -= 1
+    return rows
+
+
+def _worksheet_structure_summary(
+    ws: Worksheet,
+    *,
+    sheet_name: str,
+    header_row: int,
+) -> Dict[str, Any]:
+    columns = _token_header_columns(ws, header_row)
+    headers = [ws.cell(row=header_row, column=col).value for col in columns]
+    data_extent = _detect_tabular_data_extent(ws, header_row, columns)
+    return {
+        "target_kind": "worksheet",
+        "sheet_name": sheet_name,
+        "header_row": header_row,
+        "headers": headers,
+        "column_count": len(headers),
+        "first_data_row": data_extent["first_data_row"],
+        "data_end_row": data_extent["last_data_row"],
+        "data_row_count": max(data_extent["last_data_row"] - header_row, 0),
+        "ignored_trailing_row_count": data_extent["ignored_trailing_row_count"],
+        "header_columns": columns,
+    }
+
+
+def _worksheet_dataset_tokens(
+    ws: Worksheet,
+    *,
+    sheet_name: str,
+    header_row: int,
+) -> Dict[str, Any]:
+    summary = _worksheet_structure_summary(ws, sheet_name=sheet_name, header_row=header_row)
+    headers = summary["headers"]
+    columns = summary["header_columns"]
+    first_data_row = summary["first_data_row"]
+    data_end_row = summary["data_end_row"]
+    data_row_count = summary["data_row_count"]
+
+    structure_payload = {
+        "target_kind": summary["target_kind"],
+        "sheet_name": sheet_name,
+        "header_row": header_row,
+        "headers": headers,
+        "column_count": summary["column_count"],
+        "first_data_row": first_data_row,
+        "data_end_row": data_end_row,
+        "ignored_trailing_row_count": summary["ignored_trailing_row_count"],
+    }
+
+    key_field = None
+    anchor_keys: List[Any] = []
+    if first_data_row is not None and data_end_row >= first_data_row:
+        candidate_rows = _read_rows_for_columns(
+            ws,
+            columns,
+            first_row=first_data_row,
+            last_row=data_end_row,
+            limit=KEY_CANDIDATE_SCAN_LIMIT,
+        )
+        if candidate_rows:
+            schema = _build_schema(headers, candidate_rows)
+            key_candidates = _infer_key_candidates(headers, candidate_rows, schema)
+            for candidate in key_candidates:
+                if candidate["confidence"] == "high":
+                    key_field = candidate["field"]
+                    break
+            if key_field is not None:
+                key_index = next(
+                    (
+                        index
+                        for index, column in enumerate(schema)
+                        if column["field"] == key_field
+                    ),
+                    None,
+                )
+                if key_index is not None:
+                    for anchor_index in _dataset_anchor_indexes(data_row_count):
+                        row_index = first_data_row + anchor_index
+                        anchor_keys.append(
+                            _normalize_token_value(
+                                ws.cell(row=row_index, column=columns[key_index]).value
+                            )
+                        )
+
+    anchor_rows: List[Dict[str, Any]] = []
+    if first_data_row is not None and data_end_row >= first_data_row:
+        for anchor_index in _dataset_anchor_indexes(data_row_count):
+            row_index = first_data_row + anchor_index
+            anchor_rows.append(
+                {
+                    "row": row_index,
+                    "values": [
+                        _normalize_token_value(ws.cell(row=row_index, column=col).value)
+                        for col in columns
+                    ],
+                }
+            )
+
+    content_payload = {
+        "target_kind": summary["target_kind"],
+        "sheet_name": sheet_name,
+        "header_row": header_row,
+        "data_row_count": data_row_count,
+        "data_end_row": data_end_row,
+        "anchor_rows": anchor_rows,
+        "key_field": key_field,
+        "anchor_keys": anchor_keys,
+    }
+
+    return {
+        "structure_token": _token_digest("sf_struct", structure_payload),
+        "content_token": _token_digest("sf_content", content_payload),
+        "structure_summary": {
+            key: value
+            for key, value in summary.items()
+            if key != "header_columns"
+        },
+    }
+
+
+def _table_dataset_tokens(
+    ws: Worksheet,
+    *,
+    sheet_name: str,
+    table_name: str,
+    table_range: str,
+    headers: List[Any],
+    header_row_count: int,
+    totals_row_count: int,
+    totals_row_shown: bool,
+) -> Dict[str, Any]:
+    min_col, min_row, max_col, max_row = range_boundaries(table_range)
+    data_start_row = min_row + header_row_count
+    data_end_row = max_row - totals_row_count
+    data_row_count = max(data_end_row - data_start_row + 1, 0)
+    columns = _selected_columns(min_col, max_col)
+
+    key_field = None
+    anchor_keys: List[Any] = []
+    if data_row_count > 0:
+        candidate_rows = _read_rows_for_columns(
+            ws,
+            columns,
+            first_row=data_start_row,
+            last_row=data_end_row,
+            limit=KEY_CANDIDATE_SCAN_LIMIT,
+        )
+        if candidate_rows:
+            schema = _build_schema(headers, candidate_rows)
+            key_candidates = _infer_key_candidates(headers, candidate_rows, schema)
+            for candidate in key_candidates:
+                if candidate["confidence"] == "high":
+                    key_field = candidate["field"]
+                    break
+            if key_field is not None:
+                key_index = next(
+                    (
+                        index
+                        for index, column in enumerate(schema)
+                        if column["field"] == key_field
+                    ),
+                    None,
+                )
+                if key_index is not None:
+                    for anchor_index in _dataset_anchor_indexes(data_row_count):
+                        row_index = data_start_row + anchor_index
+                        anchor_keys.append(
+                            _normalize_token_value(
+                                ws.cell(row=row_index, column=columns[key_index]).value
+                            )
+                        )
+
+    structure_summary = {
+        "target_kind": "excel_table",
+        "sheet_name": sheet_name,
+        "table_name": table_name,
+        "range": table_range,
+        "headers": headers,
+        "column_count": len(headers),
+        "header_row_count": header_row_count,
+        "totals_row_count": totals_row_count,
+        "totals_row_shown": totals_row_shown,
+        "data_row_count": data_row_count,
+    }
+    structure_payload = dict(structure_summary)
+    anchor_rows: List[Dict[str, Any]] = []
+    if data_row_count > 0:
+        for anchor_index in _dataset_anchor_indexes(data_row_count):
+            row_index = data_start_row + anchor_index
+            anchor_rows.append(
+                {
+                    "row": row_index,
+                    "values": [
+                        _normalize_token_value(ws.cell(row=row_index, column=col).value)
+                        for col in columns
+                    ],
+                }
+            )
+
+    content_payload = {
+        "target_kind": "excel_table",
+        "sheet_name": sheet_name,
+        "table_name": table_name,
+        "data_row_count": data_row_count,
+        "anchor_rows": anchor_rows,
+        "key_field": key_field,
+        "anchor_keys": anchor_keys,
+    }
+
+    return {
+        "structure_token": _token_digest("sf_struct", structure_payload),
+        "content_token": _token_digest("sf_content", content_payload),
+        "structure_summary": structure_summary,
+    }
+
+
+def _attach_dataset_identity(
+    payload: Dict[str, Any],
+    *,
+    dataset_tokens: Dict[str, Any],
+    filepath: str,
+) -> Dict[str, Any]:
+    result = dict(payload)
+    result["structure_token"] = dataset_tokens["structure_token"]
+    result["content_token"] = dataset_tokens["content_token"]
+    result["snapshot_metadata"] = _snapshot_metadata(filepath)
+    return result
+
+
+def _raise_structure_token_mismatch(
+    *,
+    expected_structure_token: str,
+    dataset_tokens: Dict[str, Any],
+) -> None:
+    summary = dataset_tokens["structure_summary"]
+    details = {
+        "expected_structure_token": expected_structure_token,
+        "actual_structure_token": dataset_tokens["structure_token"],
+        "current_target_kind": summary["target_kind"],
+        "sheet_name": summary.get("sheet_name"),
+        "table_name": summary.get("table_name"),
+        "headers": summary.get("headers"),
+        "column_count": summary.get("column_count"),
+        "data_end_row": summary.get("data_end_row"),
+        "range": summary.get("range"),
+    }
+    raise PreconditionFailedError(
+        "Dataset structure changed since the read that produced expected_structure_token.",
+        code="stale_structure_token",
+        details=details,
+        suggested_next_tool="describe_dataset",
+    )
+
+
+def _assert_expected_structure_token(
+    *,
+    expected_structure_token: Optional[str],
+    dataset_tokens: Dict[str, Any],
+) -> None:
+    if expected_structure_token is None:
+        return
+    if expected_structure_token != dataset_tokens["structure_token"]:
+        _raise_structure_token_mismatch(
+            expected_structure_token=expected_structure_token,
+            dataset_tokens=dataset_tokens,
+        )
+
+
+def _require_structure_change_intent(
+    *,
+    expected_structure_token: Optional[str],
+    allow_structure_change: bool,
+    dataset_tokens: Dict[str, Any],
+    reason: str,
+) -> None:
+    if expected_structure_token is None or allow_structure_change:
+        return
+
+    summary = dataset_tokens["structure_summary"]
+    raise PreconditionFailedError(
+        reason,
+        code="structure_change_intent_required",
+        details={
+            "actual_structure_token": dataset_tokens["structure_token"],
+            "current_target_kind": summary["target_kind"],
+            "sheet_name": summary.get("sheet_name"),
+            "table_name": summary.get("table_name"),
+        },
+        suggested_next_tool="describe_dataset",
+    )
 
 
 def _validate_row_mode(row_mode: str) -> None:
@@ -578,6 +980,16 @@ def _describe_table_dataset(
             "schema": _build_schema(metadata["headers"], sample_data_rows),
             "truncated": metadata["data_row_count"] > sample_rows,
         }
+        dataset_tokens = _table_dataset_tokens(
+            ws,
+            sheet_name=current_sheet_name,
+            table_name=metadata["table_name"],
+            table_range=metadata["range"],
+            headers=metadata["headers"],
+            header_row_count=metadata["header_row_count"],
+            totals_row_count=metadata["totals_row_count"],
+            totals_row_shown=metadata["totals_row_shown"],
+        )
 
     key_candidates = _infer_key_candidates(
         sample["headers"],
@@ -605,7 +1017,7 @@ def _describe_table_dataset(
     if page_size is not None:
         recommended_args["max_rows"] = page_size
 
-    return {
+    return _attach_dataset_identity({
         "target_kind": "excel_table",
         "dataset_kind": "structured_table",
         "sheet_name": current_sheet_name,
@@ -631,7 +1043,7 @@ def _describe_table_dataset(
         "observations": observations,
         "recommended_read_tool": "read_excel_table",
         "recommended_args": recommended_args,
-    }
+    }, dataset_tokens=dataset_tokens, filepath=filepath)
 
 
 def _describe_worksheet_dataset(
@@ -761,7 +1173,13 @@ def _describe_worksheet_dataset(
             if page_size is not None:
                 recommended_args["max_rows"] = page_size
 
-        return {
+        dataset_tokens = _worksheet_dataset_tokens(
+            worksheet,
+            sheet_name=resolved_sheet_name,
+            header_row=header_row,
+        )
+
+        return _attach_dataset_identity({
             "target_kind": "worksheet",
             "dataset_kind": dataset_kind,
             "sheet_name": resolved_sheet_name,
@@ -795,7 +1213,7 @@ def _describe_worksheet_dataset(
             "observations": observations,
             "recommended_read_tool": recommended_read_tool,
             "recommended_args": recommended_args,
-        }
+        }, dataset_tokens=dataset_tokens, filepath=filepath)
 
 
 def describe_dataset(
@@ -1528,6 +1946,7 @@ def read_as_table(
             return _read_table_from_worksheet(
                 ws,
                 sheet_name,
+                filepath=filepath,
                 header_row=header_row,
                 start_row=start_row,
                 start_col=start_col,
@@ -1549,6 +1968,7 @@ def _read_table_from_worksheet(
     ws: Worksheet,
     sheet_name: str,
     *,
+    filepath: Optional[str] = None,
     header_row: int = 1,
     start_row: Optional[int] = None,
     start_col: str = "A",
@@ -1608,7 +2028,7 @@ def _read_table_from_worksheet(
         "sheet_name": sheet_name,
     }
     payload = _compact_table_payload(result) if compact else result
-    return augment_tabular_payload(
+    payload = augment_tabular_payload(
         payload,
         headers=headers,
         rows=rows,
@@ -1617,6 +2037,18 @@ def _read_table_from_worksheet(
         infer_schema=infer_schema,
         next_start_row=next_start_row,
     )
+    if filepath is not None:
+        dataset_tokens = _worksheet_dataset_tokens(
+            ws,
+            sheet_name=sheet_name,
+            header_row=header_row,
+        )
+        payload = _attach_dataset_identity(
+            payload,
+            dataset_tokens=dataset_tokens,
+            filepath=filepath,
+        )
+    return payload
 
 
 def quick_read(
@@ -1653,6 +2085,7 @@ def quick_read(
             result = _read_table_from_worksheet(
                 ws,
                 resolved_sheet_name,
+                filepath=filepath,
                 header_row=header_row,
                 start_row=start_row,
                 start_col=start_col,
@@ -1740,6 +2173,8 @@ def append_table_rows(
     header_row: int = 1,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
+    allow_structure_change: bool = False,
 ) -> Dict[str, Any]:
     """Append dictionary-shaped rows using the worksheet's header row."""
     try:
@@ -1756,6 +2191,24 @@ def append_table_rows(
                 operation="appending tabular rows",
             )
             header_map = _get_header_map(ws, header_row)
+            previous_dataset_tokens = _worksheet_dataset_tokens(
+                ws,
+                sheet_name=sheet_name,
+                header_row=header_row,
+            )
+            _assert_expected_structure_token(
+                expected_structure_token=expected_structure_token,
+                dataset_tokens=previous_dataset_tokens,
+            )
+            _require_structure_change_intent(
+                expected_structure_token=expected_structure_token,
+                allow_structure_change=allow_structure_change,
+                dataset_tokens=previous_dataset_tokens,
+                reason=(
+                    "Appending rows changes worksheet dataset boundaries; pass "
+                    "allow_structure_change=True to confirm this intentional structure change."
+                ),
+            )
             unknown_columns = sorted(
                 {
                     key
@@ -1811,8 +2264,7 @@ def append_table_rows(
                                 column_name=column_name,
                             )
                         )
-                    if not dry_run:
-                        ws.cell(row=target_row, column=col_idx, value=new_value)
+                    ws.cell(row=target_row, column=col_idx, value=new_value)
 
             end_row = next_row + len(rows) - 1
             target_range = _range_string(
@@ -1820,6 +2272,11 @@ def append_table_rows(
                 min(header_map.values()),
                 end_row,
                 max(header_map.values()),
+            )
+            new_dataset_tokens = _worksheet_dataset_tokens(
+                ws,
+                sheet_name=sheet_name,
+                header_row=header_row,
             )
 
         result = {
@@ -1831,11 +2288,16 @@ def append_table_rows(
             "target_range": target_range,
             "changed_cells": len(changes),
             "dry_run": dry_run,
+            "previous_structure_token": previous_dataset_tokens["structure_token"],
+            "new_structure_token": new_dataset_tokens["structure_token"],
+            "previous_content_token": previous_dataset_tokens["content_token"],
+            "new_content_token": new_dataset_tokens["content_token"],
+            "snapshot_metadata": _snapshot_metadata(filepath),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes
         return result
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to append table rows: {e}")
@@ -1850,6 +2312,7 @@ def update_rows_by_key(
     header_row: int = 1,
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
+    expected_structure_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Update existing rows by matching a named key column."""
     try:
@@ -1866,6 +2329,15 @@ def update_rows_by_key(
                 operation="updating tabular rows",
             )
             header_map = _get_header_map(ws, header_row)
+            previous_dataset_tokens = _worksheet_dataset_tokens(
+                ws,
+                sheet_name=sheet_name,
+                header_row=header_row,
+            )
+            _assert_expected_structure_token(
+                expected_structure_token=expected_structure_token,
+                dataset_tokens=previous_dataset_tokens,
+            )
             if key_column not in header_map:
                 raise DataError(f"Key column '{key_column}' not found")
 
@@ -1931,8 +2403,13 @@ def update_rows_by_key(
                             column_name=column_name,
                         )
                     )
-                    if not dry_run:
-                        cell.value = new_value
+                    cell.value = new_value
+
+            new_dataset_tokens = _worksheet_dataset_tokens(
+                ws,
+                sheet_name=sheet_name,
+                header_row=header_row,
+            )
 
         updated_rows = len(matched_keys)
         message = (
@@ -1950,11 +2427,16 @@ def update_rows_by_key(
             "missing_keys": missing_keys,
             "changed_cells": len(changes),
             "dry_run": dry_run,
+            "previous_structure_token": previous_dataset_tokens["structure_token"],
+            "new_structure_token": new_dataset_tokens["structure_token"],
+            "previous_content_token": previous_dataset_tokens["content_token"],
+            "new_content_token": new_dataset_tokens["content_token"],
+            "snapshot_metadata": _snapshot_metadata(filepath),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes
         return result
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to update rows by key: {e}")

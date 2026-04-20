@@ -1,7 +1,9 @@
 import logging
+import os
 import re
+import tempfile
 from collections import Counter, OrderedDict, deque
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -1722,6 +1724,16 @@ def _worksheet_audit_assessment(
             "merged_range_count": merged_range_count,
             "native_tables": native_tables,
             "dominant_table": None,
+            "header_quality_profile": {
+                "total_headers": 0,
+                "non_empty_headers": 0,
+                "blank_headers": 0,
+                "string_headers": 0,
+                "duplicate_headers": 0,
+                "score": 0.0,
+                "confidence": "low",
+            },
+            "header_quality_scope": "worksheet",
         }
 
     sample = _read_table_from_worksheet(
@@ -1770,6 +1782,13 @@ def _worksheet_audit_assessment(
     else:
         recommended_read_tool = "quick_read"
 
+    header_quality_profile = (
+        _header_profile(preferred_table["headers"])
+        if preferred_table is not None
+        else header_profile
+    )
+    header_quality_scope = "dominant_table" if preferred_table is not None else "worksheet"
+
     return {
         "sheet_name": sheet_name,
         "sheet_type": "worksheet",
@@ -1785,6 +1804,8 @@ def _worksheet_audit_assessment(
         "merged_range_count": merged_range_count,
         "native_tables": native_tables,
         "dominant_table": preferred_table,
+        "header_quality_profile": header_quality_profile,
+        "header_quality_scope": header_quality_scope,
     }
 
 
@@ -2443,9 +2464,65 @@ def safe_workbook(filepath: str, save: bool = False, read_only: bool = False):
         raise
     else:
         if save and not read_only:
-            wb.save(filepath)
+            _persist_workbook_atomically(wb, filepath)
     finally:
         wb.close()
+
+
+def _verify_saved_workbook(filepath: str) -> None:
+    """Reopen a saved workbook to verify the persisted file is readable."""
+    verification_wb = load_workbook(filepath, read_only=True)
+    try:
+        _ = verification_wb.sheetnames
+    finally:
+        verification_wb.close()
+
+
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        dir_fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
+
+
+def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
+    """Persist workbook changes via temp file + atomic replace + reopen verify."""
+    destination = Path(filepath)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.sheetforge-",
+        suffix=".tmp",
+        dir=str(destination.parent),
+    )
+    os.close(fd)
+    temp_path = Path(temp_name)
+
+    try:
+        wb.save(temp_path)
+        if destination.exists():
+            with suppress(OSError):
+                os.chmod(temp_path, destination.stat().st_mode)
+        _fsync_file(temp_path)
+        os.replace(temp_path, destination)
+        _fsync_directory(destination.parent)
+        _verify_saved_workbook(str(destination))
+    except Exception as exc:
+        raise WorkbookError(f"Failed to save workbook atomically: {exc!s}") from exc
+    finally:
+        with suppress(FileNotFoundError):
+            temp_path.unlink()
 
 def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> dict[str, Any]:
     """Create a new Excel workbook with optional custom sheet name"""
@@ -3077,8 +3154,13 @@ def audit_workbook(
                         )
                     )
 
-                header_profile = assessment["header_profile"]
+                header_profile = assessment["header_quality_profile"]
                 if assessment["dataset_kind"] != "layout_like_sheet" and header_profile["blank_headers"] > 0:
+                    details = {"blank_headers": header_profile["blank_headers"]}
+                    if assessment["header_quality_scope"] == "dominant_table":
+                        details["scope"] = "dominant_table"
+                        if assessment["dominant_table"] is not None:
+                            details["table_name"] = assessment["dominant_table"]["table_name"]
                     sheet_findings.append(
                         _audit_finding(
                             "medium",
@@ -3086,11 +3168,16 @@ def audit_workbook(
                             f"Worksheet '{sheet_name}' has blank cells in the configured header row.",
                             sheet_name=sheet_name,
                             recommendation="Fill blank headers before relying on object-mode reads, queries, or row updates by field name.",
-                            details={"blank_headers": header_profile["blank_headers"]},
+                            details=details,
                         )
                     )
 
                 if assessment["dataset_kind"] != "layout_like_sheet" and header_profile["duplicate_headers"] > 0:
+                    details = {"duplicate_headers": header_profile["duplicate_headers"]}
+                    if assessment["header_quality_scope"] == "dominant_table":
+                        details["scope"] = "dominant_table"
+                        if assessment["dominant_table"] is not None:
+                            details["table_name"] = assessment["dominant_table"]["table_name"]
                     sheet_findings.append(
                         _audit_finding(
                             "medium",
@@ -3098,7 +3185,7 @@ def audit_workbook(
                             f"Worksheet '{sheet_name}' has duplicate header labels in the configured header row.",
                             sheet_name=sheet_name,
                             recommendation="Deduplicate headers before relying on object-mode reads, queries, or row updates by field name.",
-                            details={"duplicate_headers": header_profile["duplicate_headers"]},
+                            details=details,
                         )
                     )
 

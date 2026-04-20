@@ -19,7 +19,7 @@ from excel_mcp.tables import (
     read_excel_table,
     upsert_excel_table_rows,
 )
-from excel_mcp.exceptions import DataError
+from excel_mcp.exceptions import DataError, PreconditionFailedError
 
 
 def _load_tool_payload(raw: str) -> dict:
@@ -197,25 +197,26 @@ def test_read_excel_table_returns_rows_by_table_name(tmp_workbook):
 
     result = read_excel_table(tmp_workbook, "Customers")
 
-    assert result == {
-        "sheet_name": "Sheet1",
-        "table_name": "Customers",
-        "range": "A1:C6",
-        "style": "TableStyleMedium9",
-        "headers": ["Name", "Age", "City"],
-        "rows": [
-            ["Alice", 30, "Helsinki"],
-            ["Bob", 25, "Tampere"],
-            ["Carol", 35, "Turku"],
-            ["Dave", 28, "Oulu"],
-            ["Eve", 32, "Espoo"],
-        ],
-        "total_rows": 5,
-        "truncated": False,
-        "header_row_count": 1,
-        "totals_row_count": 0,
-        "totals_row_shown": False,
-    }
+    assert result["sheet_name"] == "Sheet1"
+    assert result["table_name"] == "Customers"
+    assert result["range"] == "A1:C6"
+    assert result["style"] == "TableStyleMedium9"
+    assert result["headers"] == ["Name", "Age", "City"]
+    assert result["rows"] == [
+        ["Alice", 30, "Helsinki"],
+        ["Bob", 25, "Tampere"],
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+        ["Eve", 32, "Espoo"],
+    ]
+    assert result["total_rows"] == 5
+    assert result["truncated"] is False
+    assert result["header_row_count"] == 1
+    assert result["totals_row_count"] == 0
+    assert result["totals_row_shown"] is False
+    assert result["structure_token"].startswith("sf_struct_v1_")
+    assert result["content_token"].startswith("sf_content_v1_")
+    assert result["snapshot_metadata"]["token_basis"] == "live_workbook_snapshot"
 
 
 def test_read_excel_table_supports_max_rows_and_compact(tmp_workbook):
@@ -223,19 +224,18 @@ def test_read_excel_table_supports_max_rows_and_compact(tmp_workbook):
 
     result = read_excel_table(tmp_workbook, "Customers", max_rows=2, compact=True)
 
-    assert result == {
-        "sheet_name": "Sheet1",
-        "table_name": "Customers",
-        "range": "A1:C6",
-        "headers": ["Name", "Age", "City"],
-        "rows": [
-            ["Alice", 30, "Helsinki"],
-            ["Bob", 25, "Tampere"],
-        ],
-        "total_rows": 5,
-        "truncated": True,
-        "next_start_row": 3,
-    }
+    assert result["sheet_name"] == "Sheet1"
+    assert result["table_name"] == "Customers"
+    assert result["range"] == "A1:C6"
+    assert result["headers"] == ["Name", "Age", "City"]
+    assert result["rows"] == [
+        ["Alice", 30, "Helsinki"],
+        ["Bob", 25, "Tampere"],
+    ]
+    assert result["total_rows"] == 5
+    assert result["truncated"] is True
+    assert result["next_start_row"] == 3
+    assert result["structure_token"].startswith("sf_struct_v1_")
 
 
 def test_read_excel_table_supports_start_row_pagination(tmp_workbook):
@@ -243,19 +243,18 @@ def test_read_excel_table_supports_start_row_pagination(tmp_workbook):
 
     result = read_excel_table(tmp_workbook, "Customers", start_row=3, max_rows=2, compact=True)
 
-    assert result == {
-        "sheet_name": "Sheet1",
-        "table_name": "Customers",
-        "range": "A1:C6",
-        "headers": ["Name", "Age", "City"],
-        "rows": [
-            ["Carol", 35, "Turku"],
-            ["Dave", 28, "Oulu"],
-        ],
-        "total_rows": 5,
-        "truncated": True,
-        "next_start_row": 5,
-    }
+    assert result["sheet_name"] == "Sheet1"
+    assert result["table_name"] == "Customers"
+    assert result["range"] == "A1:C6"
+    assert result["headers"] == ["Name", "Age", "City"]
+    assert result["rows"] == [
+        ["Carol", 35, "Turku"],
+        ["Dave", 28, "Oulu"],
+    ]
+    assert result["total_rows"] == 5
+    assert result["truncated"] is True
+    assert result["next_start_row"] == 5
+    assert result["structure_token"].startswith("sf_struct_v1_")
 
 
 def test_read_excel_table_can_omit_headers_for_followup_pages(tmp_workbook):
@@ -290,19 +289,18 @@ def test_read_excel_table_supports_column_windowing(tmp_workbook):
         compact=True,
     )
 
-    assert result == {
-        "sheet_name": "Sheet1",
-        "table_name": "Customers",
-        "range": "A1:C6",
-        "headers": ["Age", "City"],
-        "rows": [
-            [30, "Helsinki"],
-            [25, "Tampere"],
-            [35, "Turku"],
-            [28, "Oulu"],
-            [32, "Espoo"],
-        ],
-    }
+    assert result["sheet_name"] == "Sheet1"
+    assert result["table_name"] == "Customers"
+    assert result["range"] == "A1:C6"
+    assert result["headers"] == ["Age", "City"]
+    assert result["rows"] == [
+        [30, "Helsinki"],
+        [25, "Tampere"],
+        [35, "Turku"],
+        [28, "Oulu"],
+        [32, "Espoo"],
+    ]
+    assert result["structure_token"].startswith("sf_struct_v1_")
 
 
 def test_read_excel_table_rejects_end_col_before_start_col(tmp_workbook):
@@ -324,13 +322,12 @@ def test_read_excel_table_omits_next_start_row_on_final_page(tmp_workbook):
 
     result = read_excel_table(tmp_workbook, "Customers", start_row=5, max_rows=2, compact=True)
 
-    assert result == {
-        "sheet_name": "Sheet1",
-        "table_name": "Customers",
-        "range": "A1:C6",
-        "headers": ["Name", "Age", "City"],
-        "rows": [["Eve", 32, "Espoo"]],
-    }
+    assert result["sheet_name"] == "Sheet1"
+    assert result["table_name"] == "Customers"
+    assert result["range"] == "A1:C6"
+    assert result["headers"] == ["Name", "Age", "City"]
+    assert result["rows"] == [["Eve", 32, "Espoo"]]
+    assert result["structure_token"].startswith("sf_struct_v1_")
 
 
 def test_read_excel_table_rejects_non_positive_start_row(tmp_workbook):
@@ -588,6 +585,57 @@ def test_append_excel_table_rows_dry_run_does_not_persist(tmp_workbook):
     wb.close()
 
 
+def test_append_excel_table_rows_requires_structure_change_intent_when_token_is_provided(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    dataset = read_excel_table(tmp_workbook, "Customers")
+
+    with pytest.raises(PreconditionFailedError, match="allow_structure_change=True"):
+        append_excel_table_rows(
+            tmp_workbook,
+            "Customers",
+            rows=[{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+        )
+
+
+def test_append_excel_table_rows_rejects_stale_structure_token(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    dataset = read_excel_table(tmp_workbook, "Customers")
+
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["B1"] = "Years"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    with pytest.raises(PreconditionFailedError, match="Dataset structure changed"):
+        append_excel_table_rows(
+            tmp_workbook,
+            "Customers",
+            rows=[{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+            allow_structure_change=True,
+        )
+
+
+def test_append_excel_table_rows_returns_previous_and_new_tokens(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    dataset = read_excel_table(tmp_workbook, "Customers")
+
+    result = append_excel_table_rows(
+        tmp_workbook,
+        "Customers",
+        rows=[{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+        expected_structure_token=dataset["structure_token"],
+        allow_structure_change=True,
+        dry_run=True,
+    )
+
+    assert result["previous_structure_token"] == dataset["structure_token"]
+    assert result["new_structure_token"] != dataset["structure_token"]
+    assert result["snapshot_metadata"]["token_basis"] == "live_workbook_snapshot"
+
+
 def test_append_excel_table_rows_rejects_totals_row_tables(tmp_path):
     filepath = str(tmp_path / "append-totals.xlsx")
     wb = Workbook()
@@ -713,6 +761,46 @@ def test_upsert_excel_table_rows_dry_run_rejects_totals_row_appends(tmp_path):
         )
 
 
+def test_upsert_excel_table_rows_rejects_stale_structure_token(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    dataset = read_excel_table(tmp_workbook, "Customers")
+
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["B1"] = "Years"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    with pytest.raises(PreconditionFailedError, match="Dataset structure changed"):
+        upsert_excel_table_rows(
+            tmp_workbook,
+            "Customers",
+            key_column="Name",
+            rows=[{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+            allow_structure_change=True,
+        )
+
+
+def test_upsert_excel_table_rows_returns_previous_and_new_tokens(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    dataset = read_excel_table(tmp_workbook, "Customers")
+
+    result = upsert_excel_table_rows(
+        tmp_workbook,
+        "Customers",
+        key_column="Name",
+        rows=[{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+        expected_structure_token=dataset["structure_token"],
+        allow_structure_change=True,
+        dry_run=True,
+    )
+
+    assert result["previous_structure_token"] == dataset["structure_token"]
+    assert result["new_structure_token"] != dataset["structure_token"]
+    assert result["snapshot_metadata"]["file_size"] > 0
+
+
 def test_upsert_excel_table_rows_tool_returns_json_envelope(tmp_workbook):
     create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
 
@@ -744,3 +832,54 @@ def test_append_excel_table_rows_tool_returns_json_envelope(tmp_workbook):
     assert payload["operation"] == "append_excel_table_rows"
     assert payload["data"]["appended_rows"] == 1
     assert payload["data"]["table_range"] == "A1:C7"
+
+
+def test_append_excel_table_rows_tool_surfaces_precondition_error_details(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    dataset = read_excel_table(tmp_workbook, "Customers")
+
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["B1"] = "Years"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    payload = json.loads(
+        append_excel_table_rows_tool(
+            tmp_workbook,
+            "Customers",
+            [{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+            allow_structure_change=True,
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "stale_structure_token"
+    assert payload["error"]["suggested_next_tool"] == "describe_dataset"
+
+
+def test_upsert_excel_table_rows_tool_surfaces_precondition_error_details(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    dataset = read_excel_table(tmp_workbook, "Customers")
+
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["B1"] = "Years"
+    wb.save(tmp_workbook)
+    wb.close()
+
+    payload = json.loads(
+        upsert_excel_table_rows_tool(
+            tmp_workbook,
+            "Customers",
+            "Name",
+            [{"Name": "Frank", "Age": 29, "City": "Lahti"}],
+            expected_structure_token=dataset["structure_token"],
+            allow_structure_change=True,
+        )
+    )
+
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "stale_structure_token"
+    assert payload["error"]["details"]["table_name"] == "Customers"

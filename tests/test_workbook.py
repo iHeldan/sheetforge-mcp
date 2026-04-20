@@ -329,6 +329,40 @@ def test_audit_workbook_handles_complex_workbook_orientation(complex_workbook):
     assert assessments["Data"]["recommended_read_tool"] == "read_excel_table"
 
 
+def test_audit_workbook_uses_dominant_table_headers_for_compound_sheet_quality(tmp_path):
+    filepath = str(tmp_path / "audit-compound-dominant-table.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Month", "Sales", "Target"])
+    ws.append(["Jan", 10, 12])
+    ws.append(["Feb", 14, 12])
+    ws.append(["Mar", 9, 12])
+    ws.append(["Apr", 18, 12])
+    ws.merge_cells("E1:F1")
+    wb.save(filepath)
+    wb.close()
+
+    create_excel_table(filepath, "Data", "A1:C5", table_name="SalesTable")
+    create_chart_in_sheet(
+        filepath=filepath,
+        sheet_name="Data",
+        chart_type="bar",
+        target_cell="H2",
+        data_range="A1:B5",
+        title="Sales by Month",
+    )
+
+    result = audit_workbook(filepath)
+
+    by_code = {item["code"]: item["count"] for item in result["findings"]["by_code"]}
+    assert "blank_headers" not in by_code
+    assert "duplicate_headers" not in by_code
+
+    assessment = next(item for item in result["sheet_assessments"] if item["sheet_name"] == "Data")
+    assert assessment["recommended_read_tool"] == "read_excel_table"
+
+
 def test_audit_workbook_tool_returns_json_envelope(tmp_workbook):
     payload = _load_tool_payload(audit_workbook_tool(tmp_workbook))
 

@@ -195,6 +195,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - non-tabular range reads can also return `continuations.down` and `continuations.right` cursor tokens so agents can continue large 2D windows without recomputing coordinates
 - `suggest_read_strategy` helps agents choose between table-aware, worksheet-aware, range-aware, and workbook-orientation reads before they spend context on the wrong path
 - `describe_dataset` provides a lighter-weight dataset summary than a full read, including sample rows, header quality, key candidates, and recommended next tool
+- `describe_dataset`, `quick_read`, `read_excel_as_table`, and `read_excel_table` now also return `structure_token`, `content_token`, and `snapshot_metadata`, so agents can carry read-time identity forward into safer optimistic-concurrency writes
 - worksheet-shaped compact readers and row-mutation helpers favor the first contiguous data block after the header, so sparse footer notes or distant outlier rows do not silently stretch `total_rows`, append targets, or key-based update scans
 - `describe_dataset` now surfaces `data_end_row` and `ignored_trailing_row_count` when later non-empty rows are treated as a separate block below a large blank gap
 - `query_table` is the lightest way to pull just the matching rows and columns you need from a worksheet dataset or native Excel table
@@ -207,9 +208,11 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - `cross_workbook_lookup` is the fastest way to enrich one workbook from another without writing an ad hoc merge script, especially for master-data lookups, status enrichment, and cross-file QA workflows
 - `append_excel_table_rows` is the right append path for native Excel tables when you do not need key-based upsert behavior
 - `append_table_rows` now refuses to write directly under an adjacent native Excel table and points you at `append_excel_table_rows` instead of silently leaving the table range stale
+- token-aware structured writes can pass `expected_structure_token` to abort on structural drift; append-style writes additionally require `allow_structure_change=True`, and successful writes report both previous and new structure/content tokens
 - `rename_worksheet` now updates formula cells as well as chart references and named ranges, and it also renames the default sibling pivot sheet (`Data_pivot` -> `Revenue_pivot`) when that move is conflict-free
 - formatting color inputs accept `RRGGBB`, `#RRGGBB`, `AARRGGBB`, or `#AARRGGBB`, so prompts do not need to strip CSS-style `#` prefixes first
 - `audit_workbook` is the fastest workbook-wide preflight when you need to know whether a spreadsheet is safe and predictable enough for autonomous editing
+- `audit_workbook` now treats dominant native-table sheets more honestly when nearby dashboard/layout artifacts extend the used range, so unrelated merged/chart areas do not create false blank-header risk on an otherwise clean table
 - `plan_workbook_repairs` is the fastest way to turn those audit findings into an actual action queue instead of manually deciding the next tool call for every problem
 - `apply_workbook_repairs` lets agents preview or apply the safe subset of those repairs without having to orchestrate each broken workbook artifact manually
 - `diff_workbooks` is the quickest before/after QA pass when an agent has touched workbook structure and wants proof of what actually changed
@@ -325,7 +328,8 @@ uv build
 - `read_data_from_excel(..., max_rows=...)` paginates tall rectangular ranges and returns `next_start_row` plus `next_start_cell` when more rows remain.
 - `read_data_from_excel(..., max_cols=...)` paginates wide rectangular ranges and returns `next_start_col` plus `next_column_start_cell` when more columns remain.
 - `read_data_from_excel(..., cursor=...)` resumes from a continuation token so agents can keep paging without recomputing the next window manually; 2D windows expose directional continuations under `continuations.down` and `continuations.right`
-- `read_excel_as_table(..., compact=True)` returns only `headers` and `rows` unless truncation metadata is needed.
+- `read_excel_as_table(..., compact=True)` minimizes the tabular payload to `headers` and `rows` unless truncation metadata is needed, while still returning dataset identity metadata
+- compact tabular readers still include `structure_token`, `content_token`, and `snapshot_metadata`, even when the tabular payload itself is minimized
 - `quick_read(..., start_row=...)` and `read_excel_as_table(..., start_row=...)` let agents paginate deep worksheets without first reading from the top.
 - `quick_read(..., start_col=..., end_col=...)` and `read_excel_as_table(..., start_col=..., end_col=...)` let agents request only the relevant columns from wide worksheets instead of pulling every column into context.
 - `read_excel_table(..., start_col=..., end_col=...)` now supports the same narrower column slices for native Excel tables, as long as the requested columns fall inside the table range.
@@ -337,6 +341,8 @@ uv build
 - Read tools do not recalculate Excel formulas; formula cells surface as formula text such as `=B2*C2`, and inferred schema labels formula-backed columns as `formula` so agents do not mistake them for fresh numeric values.
 - `profile_workbook` provides a single-call workbook inventory with sheet-level table, chart, protection, print, and filter metadata for faster agent orientation, and now includes chart `occupied_range` alongside anchors and dimensions for grid-anchored worksheet charts.
 - Core mutation tools now default to compact responses on committed writes, including data writes, formatting, worksheet layout helpers, and merge/unmerge helpers. Use `include_changes=True` for detailed diffs.
+- Token-aware structured writes now return `previous_structure_token`, `new_structure_token`, `previous_content_token`, `new_content_token`, and `snapshot_metadata`, which makes multi-agent or read-then-write flows safer without adding hidden workbook metadata.
+- Workbook saves that go through `safe_workbook(..., save=True)` now use a temp-file plus atomic replace path and reopen verification instead of trusting in-memory state alone.
 - `format_ranges` batches multiple formatting operations into one workbook pass, and now reports per-range `errors` without discarding successful ranges in the same batch.
 - `autofit_columns` estimates practical column widths from the current cell contents, with optional column filters and min/max bounds.
 - `list_charts` now reports chart `width` and `height` in centimeters in addition to anchor, type, and series metadata.
