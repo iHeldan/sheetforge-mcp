@@ -1,5 +1,5 @@
 import logging
-from copy import copy
+from copy import copy, deepcopy
 import re
 from typing import Any, Dict, Optional
 
@@ -282,6 +282,30 @@ def _copy_local_named_ranges(
 
     return copied_count
 
+
+def _copy_embedded_charts(
+    source_sheet: Worksheet,
+    target_sheet: Worksheet,
+) -> int:
+    copied_count = 0
+
+    for chart in getattr(source_sheet, "_charts", []):
+        cloned_chart = deepcopy(chart)
+        _update_chart_sheet_references(
+            cloned_chart,
+            old_sheet_name=source_sheet.title,
+            new_sheet_name=target_sheet.title,
+        )
+        marker = getattr(getattr(chart, "anchor", None), "_from", None)
+        if marker is not None:
+            target_anchor = f"{get_column_letter(marker.col + 1)}{marker.row + 1}"
+        else:
+            target_anchor = "A1"
+        target_sheet.add_chart(cloned_chart, target_anchor)
+        copied_count += 1
+
+    return copied_count
+
 def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str, Any]:
     """Copy a worksheet within the same workbook."""
     try:
@@ -298,10 +322,12 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
             target = wb.copy_worksheet(source)
             target.title = target_sheet
             copied_named_range_count = _copy_local_named_ranges(source, target)
+            copied_chart_count = _copy_embedded_charts(source, target)
 
         return {
             "message": f"Sheet '{source_sheet}' copied to '{target_sheet}'",
             "copied_local_named_ranges": copied_named_range_count,
+            "copied_charts": copied_chart_count,
         }
     except SheetError as e:
         logger.error(str(e))
@@ -1575,6 +1601,7 @@ def delete_range_operation(
                         ),
                         rows=-range_height,
                         cols=0,
+                        translate=True,
                     )
 
                 vacated_start_row = max(worksheet.max_row - range_height + 1, start_row)
@@ -1607,6 +1634,7 @@ def delete_range_operation(
                         ),
                         rows=0,
                         cols=-range_width,
+                        translate=True,
                     )
 
                 vacated_start_col = max(worksheet.max_column - range_width + 1, start_col)

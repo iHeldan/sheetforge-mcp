@@ -590,6 +590,50 @@ def test_delete_range_operation_dry_run_preview_matches_column_scoped_shift(tmp_
     wb.close()
 
 
+def test_delete_range_operation_translates_moved_formulas_on_upward_shift(tmp_path):
+    filepath = str(tmp_path / "delete-range-formula-up.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["B2"] = 1
+    ws["B3"] = "=B4"
+    ws["B4"] = 5
+    wb.save(filepath)
+    wb.close()
+
+    result = delete_range_operation(filepath, "Sheet1", "B2", "B2", shift_direction="up")
+
+    assert result["changes"][0]["new_value"] == "=B3"
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["B2"].value == "=B3"
+    assert ws["B3"].value is None
+    wb.close()
+
+
+def test_delete_range_operation_translates_moved_formulas_on_left_shift(tmp_path):
+    filepath = str(tmp_path / "delete-range-formula-left.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A2"] = 10
+    ws["B2"] = "=C2"
+    ws["C2"] = 99
+    wb.save(filepath)
+    wb.close()
+
+    result = delete_range_operation(filepath, "Sheet1", "A2", "A2", shift_direction="left")
+
+    assert result["changes"][0]["new_value"] == "=B2"
+
+    wb = load_workbook(filepath)
+    ws = wb["Sheet1"]
+    assert ws["A2"].value == "=B2"
+    assert ws["B2"].value is None
+    wb.close()
+
+
 def test_get_worksheet_protection_reports_defaults(tmp_workbook):
     result = get_sheet_protection(tmp_workbook, "Sheet1")
     assert result["enabled"] is False

@@ -13,7 +13,7 @@ from excel_mcp.chart import (
     list_charts,
 )
 from excel_mcp.exceptions import ValidationError, ChartError
-from excel_mcp.sheet import rename_sheet
+from excel_mcp.sheet import copy_sheet, rename_sheet
 from excel_mcp.server import (
     create_chart as create_chart_tool,
     create_chart_from_series as create_chart_from_series_tool,
@@ -560,6 +560,25 @@ def test_rename_sheet_updates_chartsheet_chart_series_references(tmp_path):
     assert charts[0]["series"][0]["categories"] == "'Revenue Data'!$A$2:$A$4"
     assert charts[0]["series"][0]["values"] == "'Revenue Data'!$B$2:$B$4"
     assert "occupied_range" not in charts[0]
+
+
+def test_copy_sheet_duplicates_embedded_charts_with_rewritten_references(chart_workbook):
+    create_chart_in_sheet(chart_workbook, "Sales", "A1:B5", "bar", "E1", title="Revenue")
+
+    result = copy_sheet(chart_workbook, "Sales", "Sales Copy")
+
+    assert result["copied_charts"] == 1
+
+    source_charts = list_charts(chart_workbook, sheet_name="Sales")
+    copied_charts = list_charts(chart_workbook, sheet_name="Sales Copy")
+
+    assert len(source_charts) == 1
+    assert len(copied_charts) == 1
+    assert copied_charts[0]["anchor"] == "E1"
+    assert copied_charts[0]["series"][0]["title"] == "'Sales Copy'!B1"
+    assert copied_charts[0]["series"][0]["categories"] == "'Sales Copy'!$A$2:$A$5"
+    assert copied_charts[0]["series"][0]["values"] == "'Sales Copy'!$B$2:$B$5"
+    assert source_charts[0]["series"][0]["values"] == "'Sales'!$B$2:$B$5"
 
 
 def test_list_charts_can_filter_by_sheet(chart_workbook):
