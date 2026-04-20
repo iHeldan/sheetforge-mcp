@@ -16,6 +16,7 @@
 - Fixed structured-write `dry_run` previews so simulated `new_*_token` values no longer reuse live-file `snapshot_metadata`; previews now report `token_basis="dry_run_preview"` with `source_file_*` metadata instead.
 - Fixed the atomic save path so a post-replace verify failure rolls back to the original workbook when possible instead of raising after the destination file has already been irreversibly changed.
 - Fixed `create_workbook` so it now refuses to overwrite an existing workbook and uses the durable atomic-save path for fresh workbook creation.
+- Fixed `delete_worksheet` to fail early with a clear error when deleting the target would leave the workbook without any visible sheet.
 - Changed `audit_workbook` so dominant native-table sheets are judged by the table's own headers when nearby dashboard artifacts extend the used range, reducing false `blank_headers` or `duplicate_headers` findings on mixed sheets.
 - Refreshed README, package metadata, manifest copy, and landing-page positioning to better highlight SheetForge's current local-first, agent-friendly workbook reading, introspection, and safer mutation strengths without promising unreleased concurrency features.
 

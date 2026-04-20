@@ -312,6 +312,7 @@ Returns matches under `data.matches`:
 - `copy_worksheet(filepath: str, source_sheet: str, target_sheet: str) -> str`
   Copies a worksheet inside the same workbook, including duplicating any sheet-scoped named ranges onto the copied sheet with references rewritten to the new sheet.
 - `delete_worksheet(filepath: str, sheet_name: str) -> str`
+  Deletes the target sheet, but fails early if that would leave the workbook without any visible sheet.
   Deletes a worksheet. The final remaining sheet cannot be deleted.
 - `rename_worksheet(filepath: str, old_name: str, new_name: str) -> str`
   Renames a worksheet and keeps formula cells, chart-series references, and named-range sheet references aligned. When a default sibling pivot sheet such as `Data_pivot` exists, SheetForge also renames it to match the new worksheet name when no conflict blocks that move.

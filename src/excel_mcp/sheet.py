@@ -320,6 +320,16 @@ def delete_sheet(filepath: str, sheet_name: str) -> Dict[str, Any]:
             if len(wb.sheetnames) == 1:
                 raise SheetError("Cannot delete the only sheet in workbook")
 
+            target_sheet = wb[sheet_name]
+            target_visibility = getattr(target_sheet, "sheet_state", "visible")
+            visible_sheets = [
+                current_sheet_name
+                for current_sheet_name in wb.sheetnames
+                if getattr(wb[current_sheet_name], "sheet_state", "visible") == "visible"
+            ]
+            if target_visibility == "visible" and len(visible_sheets) == 1:
+                raise SheetError("Cannot delete the only visible sheet in workbook")
+
             del wb[sheet_name]
         return {"message": f"Sheet '{sheet_name}' deleted"}
     except SheetError as e:

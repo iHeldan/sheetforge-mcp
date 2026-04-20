@@ -8,9 +8,9 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.workbook.defined_name import DefinedName
 from excel_mcp.chart import create_chart_in_sheet
-from excel_mcp.exceptions import WorkbookError
+from excel_mcp.exceptions import SheetError, WorkbookError
 from excel_mcp.pivot import create_pivot_table
-from excel_mcp.sheet import copy_sheet, rename_sheet
+from excel_mcp.sheet import copy_sheet, delete_sheet, rename_sheet
 from excel_mcp.server import (
     apply_workbook_repairs as apply_workbook_repairs_tool,
     analyze_range_impact as analyze_range_impact_tool,
@@ -89,6 +89,58 @@ def test_create_workbook_rejects_existing_file_without_overwriting(tmp_path):
     reopened = load_workbook(filepath)
     try:
         assert reopened.active["A1"].value == "KEEP"
+    finally:
+        reopened.close()
+
+
+def test_delete_sheet_rejects_only_visible_sheet_when_others_are_hidden(tmp_path):
+    filepath = str(tmp_path / "delete-visible-guard.xlsx")
+    workbook = Workbook()
+    visible_sheet = workbook.active
+    visible_sheet.title = "Visible"
+    hidden_sheet = workbook.create_sheet("Hidden")
+    hidden_sheet.sheet_state = "hidden"
+    workbook.save(filepath)
+    workbook.close()
+
+    with pytest.raises(SheetError, match="Cannot delete the only visible sheet in workbook"):
+        delete_sheet(filepath, "Visible")
+
+    reopened = load_workbook(filepath)
+    try:
+        assert reopened.sheetnames == ["Visible", "Hidden"]
+        assert reopened["Visible"].sheet_state == "visible"
+        assert reopened["Hidden"].sheet_state == "hidden"
+    finally:
+        reopened.close()
+
+
+def test_delete_sheet_allows_visible_chartsheet_to_remain(tmp_path):
+    filepath = str(tmp_path / "delete-worksheet-with-visible-chartsheet.xlsx")
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Data"
+    for row in [("Name", "Value"), ("A", 1), ("B", 2)]:
+        worksheet.append(row)
+
+    chart = BarChart()
+    data = Reference(worksheet, min_col=2, min_row=1, max_row=3)
+    categories = Reference(worksheet, min_col=1, min_row=2, max_row=3)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(categories)
+
+    chart_sheet = workbook.create_chartsheet("Charts")
+    chart_sheet.add_chart(chart)
+    workbook.save(filepath)
+    workbook.close()
+
+    result = delete_sheet(filepath, "Data")
+    assert result["message"] == "Sheet 'Data' deleted"
+
+    reopened = load_workbook(filepath)
+    try:
+        assert reopened.sheetnames == ["Charts"]
+        assert type(reopened["Charts"]).__name__ == "Chartsheet"
     finally:
         reopened.close()
 
