@@ -342,6 +342,7 @@ uv build
 - `profile_workbook` provides a single-call workbook inventory with sheet-level table, chart, protection, print, and filter metadata for faster agent orientation, and now includes chart `occupied_range` alongside anchors and dimensions for grid-anchored worksheet charts.
 - Core mutation tools now default to compact responses on committed writes, including data writes, formatting, worksheet layout helpers, and merge/unmerge helpers. Use `include_changes=True` for detailed diffs.
 - Token-aware structured writes now return `previous_structure_token`, `new_structure_token`, `previous_content_token`, `new_content_token`, and `snapshot_metadata`, which makes multi-agent or read-then-write flows safer without adding hidden workbook metadata.
+- `dry_run` versions of those structured writes now label snapshot metadata as `token_basis="dry_run_preview"` and keep the on-disk file facts under `source_file_*`, so preview tokens are no longer mixed with live-file metadata.
 - Workbook saves that go through `safe_workbook(..., save=True)` now use a temp-file plus atomic replace path and reopen verification instead of trusting in-memory state alone.
 - `format_ranges` batches multiple formatting operations into one workbook pass, and now reports per-range `errors` without discarding successful ranges in the same batch.
 - `autofit_columns` estimates practical column widths from the current cell contents, with optional column filters and min/max bounds.

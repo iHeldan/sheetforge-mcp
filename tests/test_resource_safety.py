@@ -71,3 +71,8 @@ def test_safe_workbook_raises_workbook_error_on_post_save_verify_failure(tmp_wor
     workbook_path = Path(tmp_workbook)
     leftovers = list(workbook_path.parent.glob(f".{workbook_path.name}.sheetforge-*.tmp"))
     assert leftovers == []
+    backup_leftovers = list(workbook_path.parent.glob(f".{workbook_path.name}.sheetforge-backup-*.bak"))
+    assert backup_leftovers == []
+
+    with safe_workbook(tmp_workbook) as wb:
+        assert wb["Sheet1"]["D1"].value is None

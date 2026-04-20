@@ -246,7 +246,7 @@ Returns matches under `data.matches`:
   Updates matching rows inside a native Excel table and appends missing keys in one call. Missing rows expand the table's `ref` automatically, and the tool refuses to grow the table into already occupied cells below it. Tables with an enabled totals row are update-only for now; append attempts are rejected.
 - `update_rows_by_key(filepath: str, sheet_name: str, key_column: str, updates: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False, include_changes: Optional[bool] = None, expected_structure_token: Optional[str] = None) -> str`
   Updates existing rows by matching a named key column, reports unmatched keys, and returns compact summaries by default. Key scans are limited to the main contiguous worksheet data block, so sparse footer rows below a large blank gap are not accidentally matched as real records.
-  When `expected_structure_token` is provided, the write aborts on structural drift. Append-style writes also require `allow_structure_change=True`, and token-aware mutation results include `previous_structure_token`, `new_structure_token`, `previous_content_token`, `new_content_token`, and `snapshot_metadata`.
+  When `expected_structure_token` is provided, the write aborts on structural drift. Append-style writes also require `allow_structure_change=True`, and token-aware mutation results include `previous_structure_token`, `new_structure_token`, `previous_content_token`, `new_content_token`, and `snapshot_metadata`. `dry_run` previews use `snapshot_metadata.token_basis="dry_run_preview"` with `source_file_*` fields so the metadata does not pretend the simulated post-write tokens already exist on disk.
 
 ## Formula And Validation Tools
 

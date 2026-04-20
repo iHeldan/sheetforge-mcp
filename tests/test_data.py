@@ -1416,7 +1416,10 @@ def test_append_table_rows_returns_previous_and_new_tokens(tmp_workbook):
 
     assert result["previous_structure_token"] == dataset["structure_token"]
     assert result["new_structure_token"] != dataset["structure_token"]
-    assert result["snapshot_metadata"]["token_basis"] == "live_workbook_snapshot"
+    assert result["snapshot_metadata"]["token_basis"] == "dry_run_preview"
+    assert result["snapshot_metadata"]["persisted"] is False
+    assert result["snapshot_metadata"]["source_file_size"] > 0
+    assert "file_size" not in result["snapshot_metadata"]
 
 
 def test_append_table_rows_dry_run_does_not_persist(tmp_workbook):
@@ -1544,7 +1547,10 @@ def test_update_rows_by_key_returns_tokens_and_snapshot_metadata(tmp_workbook):
     assert result["previous_structure_token"] == dataset["structure_token"]
     assert result["new_structure_token"] == dataset["structure_token"]
     assert result["previous_content_token"] != result["new_content_token"]
-    assert result["snapshot_metadata"]["file_size"] > 0
+    assert result["snapshot_metadata"]["token_basis"] == "dry_run_preview"
+    assert result["snapshot_metadata"]["persisted"] is False
+    assert result["snapshot_metadata"]["source_file_size"] > 0
+    assert "file_mtime" not in result["snapshot_metadata"]
 
 
 def test_update_rows_by_key_dry_run_does_not_persist(tmp_workbook):

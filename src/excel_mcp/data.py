@@ -67,7 +67,25 @@ def _snapshot_metadata(filepath: str) -> Dict[str, Any]:
         "file_mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
         "file_size": stat.st_size,
         "token_basis": "live_workbook_snapshot",
+        "persisted": True,
     }
+
+
+def _dry_run_snapshot_metadata(filepath: str) -> Dict[str, Any]:
+    stat = Path(filepath).stat()
+    return {
+        "calculated_at": datetime.now(timezone.utc).isoformat(),
+        "token_basis": "dry_run_preview",
+        "persisted": False,
+        "source_file_mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "source_file_size": stat.st_size,
+    }
+
+
+def _mutation_snapshot_metadata(filepath: str, *, dry_run: bool) -> Dict[str, Any]:
+    if dry_run:
+        return _dry_run_snapshot_metadata(filepath)
+    return _snapshot_metadata(filepath)
 
 
 def _normalize_decimal_string(value: Decimal) -> str:
@@ -2292,7 +2310,7 @@ def append_table_rows(
             "new_structure_token": new_dataset_tokens["structure_token"],
             "previous_content_token": previous_dataset_tokens["content_token"],
             "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _snapshot_metadata(filepath),
+            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes
@@ -2431,7 +2449,7 @@ def update_rows_by_key(
             "new_structure_token": new_dataset_tokens["structure_token"],
             "previous_content_token": previous_dataset_tokens["content_token"],
             "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _snapshot_metadata(filepath),
+            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes

@@ -8,9 +8,9 @@ from .data import (
     _assert_expected_structure_token,
     _attach_dataset_identity,
     _build_cell_change,
+    _mutation_snapshot_metadata,
     _require_structure_change_intent,
     _should_include_changes,
-    _snapshot_metadata,
     _table_dataset_tokens,
     augment_tabular_payload,
 )
@@ -618,7 +618,7 @@ def upsert_excel_table_rows(
             "new_structure_token": new_dataset_tokens["structure_token"],
             "previous_content_token": previous_dataset_tokens["content_token"],
             "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _snapshot_metadata(filepath),
+            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes
@@ -759,7 +759,7 @@ def append_excel_table_rows(
             "new_structure_token": new_dataset_tokens["structure_token"],
             "previous_content_token": previous_dataset_tokens["content_token"],
             "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _snapshot_metadata(filepath),
+            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes

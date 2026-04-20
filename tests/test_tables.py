@@ -633,7 +633,9 @@ def test_append_excel_table_rows_returns_previous_and_new_tokens(tmp_workbook):
 
     assert result["previous_structure_token"] == dataset["structure_token"]
     assert result["new_structure_token"] != dataset["structure_token"]
-    assert result["snapshot_metadata"]["token_basis"] == "live_workbook_snapshot"
+    assert result["snapshot_metadata"]["token_basis"] == "dry_run_preview"
+    assert result["snapshot_metadata"]["persisted"] is False
+    assert result["snapshot_metadata"]["source_file_size"] > 0
 
 
 def test_append_excel_table_rows_rejects_totals_row_tables(tmp_path):
@@ -798,7 +800,9 @@ def test_upsert_excel_table_rows_returns_previous_and_new_tokens(tmp_workbook):
 
     assert result["previous_structure_token"] == dataset["structure_token"]
     assert result["new_structure_token"] != dataset["structure_token"]
-    assert result["snapshot_metadata"]["file_size"] > 0
+    assert result["snapshot_metadata"]["token_basis"] == "dry_run_preview"
+    assert result["snapshot_metadata"]["persisted"] is False
+    assert result["snapshot_metadata"]["source_file_size"] > 0
 
 
 def test_upsert_excel_table_rows_tool_returns_json_envelope(tmp_workbook):

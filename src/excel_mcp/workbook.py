@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shutil
 import tempfile
 from collections import Counter, OrderedDict, deque
 from contextlib import contextmanager, suppress
@@ -2501,9 +2502,11 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
     """Persist workbook changes via temp file + atomic replace + reopen verify."""
     destination = Path(filepath)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    backup_path: Path | None = None
+    temp_suffix = destination.suffix or ".xlsx"
     fd, temp_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.sheetforge-",
-        suffix=".tmp",
+        prefix=f".{destination.stem}.sheetforge-",
+        suffix=temp_suffix,
         dir=str(destination.parent),
     )
     os.close(fd)
@@ -2515,14 +2518,40 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
             with suppress(OSError):
                 os.chmod(temp_path, destination.stat().st_mode)
         _fsync_file(temp_path)
+        _verify_saved_workbook(str(temp_path))
+
+        if destination.exists():
+            backup_fd, backup_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.sheetforge-backup-",
+                suffix=".bak",
+                dir=str(destination.parent),
+            )
+            os.close(backup_fd)
+            backup_path = Path(backup_name)
+            shutil.copy2(destination, backup_path)
+            _fsync_file(backup_path)
+
         os.replace(temp_path, destination)
         _fsync_directory(destination.parent)
-        _verify_saved_workbook(str(destination))
+        try:
+            _verify_saved_workbook(str(destination))
+        except Exception:
+            if backup_path is not None and backup_path.exists():
+                os.replace(backup_path, destination)
+                _fsync_directory(destination.parent)
+            else:
+                with suppress(FileNotFoundError):
+                    destination.unlink()
+                _fsync_directory(destination.parent)
+            raise
     except Exception as exc:
         raise WorkbookError(f"Failed to save workbook atomically: {exc!s}") from exc
     finally:
         with suppress(FileNotFoundError):
             temp_path.unlink()
+        if backup_path is not None:
+            with suppress(FileNotFoundError):
+                backup_path.unlink()
 
 def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> dict[str, Any]:
     """Create a new Excel workbook with optional custom sheet name"""
