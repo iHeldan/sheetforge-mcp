@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-08-30
+
 ### Added
 
 - Added `create_workbook_snapshot` so agents can create a verified, non-overwriting, byte-for-byte `.xlsx` baseline before mutation and feed it directly into `diff_workbooks` without an external copy script.

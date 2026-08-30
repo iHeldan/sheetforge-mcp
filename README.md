@@ -10,7 +10,7 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.8.0`
+Published package release: `0.9.0`
 Repository docs track the current main-branch tool surface, which currently exposes `77` MCP tools.
 
 ## Why SheetForge
@@ -323,7 +323,7 @@ uv build
 - `src/excel_mcp/data.py`: read, write, table, and search helpers
 - `src/excel_mcp/sheet.py`: worksheet and range mutations
 - `tests/`: regression tests covering data, layout, charts, pivots, formatting, tables, and resource safety
-- `scripts/verify_release_artifacts.py`: shared wheel/sdist content verifier used by CI and release workflows
+- `scripts/verify_release_artifacts.py`: shared wheel/sdist/MCPB content verifier used by CI and release workflows
 - `manifest.json`: packaged MCP bundle metadata
 - `docs/index.html`: static project landing page
 
