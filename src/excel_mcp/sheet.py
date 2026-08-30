@@ -1032,6 +1032,237 @@ def _copy_embedded_charts(
 
     return copied_count
 
+
+def _existing_table_names(workbook: Any) -> set[str]:
+    return {
+        str(table.displayName).casefold()
+        for worksheet in getattr(workbook, "worksheets", [])
+        for table in worksheet.tables.values()
+    }
+
+
+def _unique_copied_table_name(existing_names: set[str], source_name: str) -> str:
+    suffix_index = 1
+    while True:
+        suffix = "_Copy" if suffix_index == 1 else f"_Copy{suffix_index}"
+        candidate = f"{source_name[: 255 - len(suffix)]}{suffix}"
+        if candidate.casefold() not in existing_names:
+            return candidate
+        suffix_index += 1
+
+
+def _rewrite_table_references_in_text(
+    value: Any,
+    *,
+    table_name_map: dict[str, str],
+) -> Any:
+    if not isinstance(value, str) or "[" not in value:
+        return value
+
+    rewritten = value
+    for source_name, target_name in sorted(
+        table_name_map.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        rewritten = re.sub(
+            rf"(?<![A-Za-z0-9_.]){re.escape(source_name)}(?=\[)",
+            target_name,
+            rewritten,
+            flags=re.IGNORECASE,
+        )
+    return rewritten
+
+
+def _rewrite_copied_formula_text(
+    value: Any,
+    *,
+    source_sheet_name: str,
+    target_sheet_name: str,
+    table_name_map: dict[str, str],
+) -> Any:
+    rewritten = _rewrite_sheet_reference_formula(
+        value,
+        old_sheet_name=source_sheet_name,
+        new_sheet_name=target_sheet_name,
+    )
+    return _rewrite_table_references_in_text(
+        rewritten,
+        table_name_map=table_name_map,
+    )
+
+
+def _rewrite_table_column_formulas(
+    table: Any,
+    *,
+    source_sheet_name: str,
+    target_sheet_name: str,
+    table_name_map: dict[str, str],
+) -> int:
+    updated_count = 0
+    for table_column in getattr(table, "tableColumns", []) or []:
+        for attr_name in ("calculatedColumnFormula", "totalsRowFormula"):
+            formula = getattr(table_column, attr_name, None)
+            formula_text = getattr(formula, "text", None)
+            rewritten = _rewrite_copied_formula_text(
+                formula_text,
+                source_sheet_name=source_sheet_name,
+                target_sheet_name=target_sheet_name,
+                table_name_map=table_name_map,
+            )
+            if rewritten == formula_text:
+                continue
+            formula.text = rewritten
+            updated_count += 1
+    return updated_count
+
+
+def _copy_native_tables(
+    workbook: Any,
+    source_sheet: Worksheet,
+    target_sheet: Worksheet,
+) -> tuple[list[dict[str, str]], int]:
+    table_copies: list[tuple[Any, str, str]] = []
+    table_name_map: dict[str, str] = {}
+    reserved_names = _existing_table_names(workbook)
+    for table in source_sheet.tables.values():
+        source_name = str(table.displayName)
+        target_name = _unique_copied_table_name(reserved_names, source_name)
+        reserved_names.add(target_name.casefold())
+        table_name_map[source_name] = target_name
+        table_copies.append((deepcopy(table), source_name, target_name))
+
+    formula_update_count = 0
+    copied_tables: list[dict[str, str]] = []
+    for cloned_table, source_name, target_name in table_copies:
+        cloned_table.displayName = target_name
+        cloned_table.name = target_name
+        formula_update_count += _rewrite_table_column_formulas(
+            cloned_table,
+            source_sheet_name=source_sheet.title,
+            target_sheet_name=target_sheet.title,
+            table_name_map=table_name_map,
+        )
+        target_sheet.add_table(cloned_table)
+        copied_tables.append(
+            {
+                "source_name": source_name,
+                "target_name": target_name,
+                "range": cloned_table.ref,
+            }
+        )
+
+    return copied_tables, formula_update_count
+
+
+def _copy_data_validations(
+    source_sheet: Worksheet,
+    target_sheet: Worksheet,
+    *,
+    table_name_map: dict[str, str],
+) -> tuple[int, int]:
+    copied_count = 0
+    formula_update_count = 0
+    validations = getattr(
+        getattr(source_sheet, "data_validations", None),
+        "dataValidation",
+        [],
+    )
+    for validation in validations:
+        cloned_validation = deepcopy(validation)
+        for attr_name in ("formula1", "formula2"):
+            formula = getattr(cloned_validation, attr_name, None)
+            rewritten = _rewrite_copied_formula_text(
+                formula,
+                source_sheet_name=source_sheet.title,
+                target_sheet_name=target_sheet.title,
+                table_name_map=table_name_map,
+            )
+            if rewritten != formula:
+                setattr(cloned_validation, attr_name, rewritten)
+                formula_update_count += 1
+        target_sheet.add_data_validation(cloned_validation)
+        copied_count += 1
+    return copied_count, formula_update_count
+
+
+def _copy_conditional_formats(
+    source_sheet: Worksheet,
+    target_sheet: Worksheet,
+    *,
+    table_name_map: dict[str, str],
+) -> tuple[int, int]:
+    copied_rules = deepcopy(
+        getattr(source_sheet.conditional_formatting, "_cf_rules", OrderedDict())
+    )
+    rule_count = 0
+    formula_update_count = 0
+    for rules in copied_rules.values():
+        rule_count += len(rules)
+        for rule in rules:
+            formulas = list(getattr(rule, "formula", None) or [])
+            rewritten_formulas = []
+            for formula in formulas:
+                rewritten = _rewrite_copied_formula_text(
+                    formula,
+                    source_sheet_name=source_sheet.title,
+                    target_sheet_name=target_sheet.title,
+                    table_name_map=table_name_map,
+                )
+                rewritten_formulas.append(rewritten)
+                if rewritten != formula:
+                    formula_update_count += 1
+            if formulas:
+                rule.formula = rewritten_formulas
+
+    target_sheet.conditional_formatting._cf_rules = copied_rules
+    return rule_count, formula_update_count
+
+
+def _copy_worksheet_settings(
+    source_sheet: Worksheet,
+    target_sheet: Worksheet,
+) -> dict[str, bool]:
+    target_sheet.views = deepcopy(source_sheet.views)
+    target_sheet.protection = copy(source_sheet.protection)
+    target_sheet.auto_filter = deepcopy(source_sheet.auto_filter)
+    target_sheet.print_area = source_sheet.print_area or None
+    target_sheet.print_title_rows = source_sheet.print_title_rows
+    target_sheet.print_title_cols = source_sheet.print_title_cols
+    return {
+        "freeze_panes": source_sheet.freeze_panes is not None,
+        "auto_filter": bool(source_sheet.auto_filter.ref),
+        "print_area": bool(source_sheet.print_area),
+        "print_titles": bool(
+            source_sheet.print_title_rows or source_sheet.print_title_cols
+        ),
+        "sheet_protection": bool(source_sheet.protection.sheet),
+    }
+
+
+def _rewrite_copied_cell_formulas(
+    target_sheet: Worksheet,
+    *,
+    source_sheet_name: str,
+    table_name_map: dict[str, str],
+) -> int:
+    updated_count = 0
+    for cell in target_sheet._cells.values():
+        if not isinstance(cell.value, str) or not cell.value.startswith("="):
+            continue
+        rewritten = _rewrite_copied_formula_text(
+            cell.value,
+            source_sheet_name=source_sheet_name,
+            target_sheet_name=target_sheet.title,
+            table_name_map=table_name_map,
+        )
+        if rewritten == cell.value:
+            continue
+        cell.value = rewritten
+        updated_count += 1
+    return updated_count
+
+
 def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str, Any]:
     """Copy a worksheet within the same workbook."""
     try:
@@ -1048,12 +1279,47 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
             target = wb.copy_worksheet(source)
             target.title = target_sheet
             copied_named_range_count = _copy_local_named_ranges(source, target)
+            copied_tables, table_formula_updates = _copy_native_tables(wb, source, target)
+            table_name_map = {
+                table["source_name"]: table["target_name"]
+                for table in copied_tables
+            }
+            copied_validation_count, validation_formula_updates = (
+                _copy_data_validations(
+                    source,
+                    target,
+                    table_name_map=table_name_map,
+                )
+            )
+            copied_conditional_format_count, conditional_formula_updates = (
+                _copy_conditional_formats(
+                    source,
+                    target,
+                    table_name_map=table_name_map,
+                )
+            )
+            copied_settings = _copy_worksheet_settings(source, target)
+            copied_cell_formula_updates = _rewrite_copied_cell_formulas(
+                target,
+                source_sheet_name=source.title,
+                table_name_map=table_name_map,
+            )
             copied_chart_count = _copy_embedded_charts(source, target)
 
         return {
             "message": f"Sheet '{source_sheet}' copied to '{target_sheet}'",
             "copied_local_named_ranges": copied_named_range_count,
             "copied_charts": copied_chart_count,
+            "copied_tables": copied_tables,
+            "copied_data_validations": copied_validation_count,
+            "copied_conditional_formats": copied_conditional_format_count,
+            "copied_settings": copied_settings,
+            "formula_reference_updates": (
+                table_formula_updates
+                + validation_formula_updates
+                + conditional_formula_updates
+                + copied_cell_formula_updates
+            ),
         }
     except SheetError as e:
         logger.error(str(e))

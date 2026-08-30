@@ -836,6 +836,75 @@ def test_copy_sheet_duplicates_local_named_ranges_for_target_sheet(tmp_path):
     assert copied_scope["matches"][0]["destinations"] == [{"sheet_name": "Data Copy", "range": "$A$1"}]
 
 
+def test_copy_sheet_preserves_worksheet_semantics_and_rewrites_self_references(tmp_path):
+    filepath = str(tmp_path / "semantic-sheet-copy.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for row in [("Item", "Amount"), ("Widget", 10), ("Gadget", 20)]:
+        ws.append(row)
+
+    table = Table(displayName="SalesData", ref="A1:B3")
+    ws.add_table(table)
+    ws["C2"] = "=SUM(Data!B2)+SUM(SalesData[Amount])"
+
+    validation = DataValidation(type="whole", formula1="Data!$B$2", formula2="100")
+    validation.add("B2:B3")
+    ws.add_data_validation(validation)
+    ws.conditional_formatting.add(
+        "B2:B3",
+        FormulaRule(formula=["Data!$B2>0"]),
+    )
+    ws.freeze_panes = "B2"
+    ws.auto_filter.ref = "A1:B3"
+    ws.print_area = "A1:C8"
+    ws.print_title_rows = "1:1"
+    ws.print_title_cols = "A:A"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 125
+    ws.protection.sheet = True
+    wb.save(filepath)
+    wb.close()
+
+    result = copy_sheet(filepath, "Data", "Data Copy")
+
+    assert result["copied_tables"] == [
+        {
+            "source_name": "SalesData",
+            "target_name": "SalesData_Copy",
+            "range": "A1:B3",
+        }
+    ]
+    assert result["copied_data_validations"] == 1
+    assert result["copied_conditional_formats"] == 1
+    assert result["formula_reference_updates"] == 3
+
+    wb = load_workbook(filepath)
+    source = wb["Data"]
+    copied = wb["Data Copy"]
+    assert list(source.tables) == ["SalesData"]
+    assert list(copied.tables) == ["SalesData_Copy"]
+    assert copied.tables["SalesData_Copy"].ref == "A1:B3"
+    assert copied["C2"].value == "=SUM('Data Copy'!B2)+SUM(SalesData_Copy[Amount])"
+    assert len(copied.data_validations.dataValidation) == 1
+    assert copied.data_validations.dataValidation[0].formula1 == "'Data Copy'!$B$2"
+    copied_rules = [
+        rule
+        for rules in copied.conditional_formatting._cf_rules.values()
+        for rule in rules
+    ]
+    assert copied_rules[0].formula == ["'Data Copy'!$B2>0"]
+    assert copied.freeze_panes == "B2"
+    assert copied.auto_filter.ref == "A1:B3"
+    assert str(copied.print_area) == "'Data Copy'!$A$1:$C$8"
+    assert copied.print_title_rows == "$1:$1"
+    assert copied.print_title_cols == "$A:$A"
+    assert copied.sheet_view.showGridLines is False
+    assert copied.sheet_view.zoomScale == 125
+    assert copied.protection.sheet is True
+    wb.close()
+
+
 def test_delete_named_range_supports_dry_run_and_apply(tmp_path):
     filepath = str(tmp_path / "named-range-delete.xlsx")
     wb = Workbook()
