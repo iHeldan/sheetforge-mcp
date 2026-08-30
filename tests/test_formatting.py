@@ -2,6 +2,7 @@ import json
 
 import pytest
 from openpyxl import load_workbook
+from openpyxl.formatting.formatting import ConditionalFormattingList
 
 from excel_mcp.formatting import format_range, format_ranges
 from excel_mcp.exceptions import ValidationError, FormattingError
@@ -277,6 +278,8 @@ def test_format_ranges_allows_partial_success(tmp_workbook):
             {
                 "start_cell": "B2",
                 "end_cell": "B6",
+                "bold": True,
+                "bg_color": "FF0000",
                 "conditional_format": {
                     "type": "data_bar",
                     "start_type": "bogus",
@@ -295,6 +298,44 @@ def test_format_ranges_allows_partial_success(tmp_workbook):
     wb = load_workbook(tmp_workbook)
     ws = wb["Sheet1"]
     assert ws["A1"].font.bold is True
+    assert ws["B2"].font.bold is not True
+    assert ws["B2"].fill.fill_type is None
+    assert len(ws.conditional_formatting) == 0
+    wb.close()
+
+
+def test_format_ranges_rolls_back_failed_merge_operation(tmp_workbook, monkeypatch):
+    def fail_add(self, range_string, rule):
+        raise ValueError("simulated conditional format failure")
+
+    monkeypatch.setattr(ConditionalFormattingList, "add", fail_add)
+
+    result = format_ranges(
+        tmp_workbook,
+        "Sheet1",
+        [
+            {
+                "start_cell": "A2",
+                "end_cell": "B2",
+                "bold": True,
+                "merge_cells": True,
+                "conditional_format": {
+                    "type": "formula",
+                    "formula": ["A2<>\"\""],
+                },
+            }
+        ],
+    )
+
+    assert result["ranges_formatted"] == 0
+    assert result["ranges_failed"] == 1
+
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    assert "A2:B2" not in {str(merged_range) for merged_range in ws.merged_cells.ranges}
+    assert ws["A2"].value == "Alice"
+    assert ws["B2"].value == 30
+    assert ws["A2"].font.bold is not True
     assert len(ws.conditional_formatting) == 0
     wb.close()
 

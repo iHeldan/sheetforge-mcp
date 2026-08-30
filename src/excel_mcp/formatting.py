@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from copy import copy, deepcopy
 from typing import Any, Dict, List, Optional
 
 from openpyxl.cell.cell import MergedCell
@@ -399,11 +400,9 @@ def _build_format_preview(
     }
 
 
-def _apply_conditional_format(
-    sheet: Worksheet,
-    range_str: str,
+def _build_conditional_format_rule(
     conditional_format: Dict[str, Any],
-) -> None:
+) -> Any:
     rule_type = conditional_format.get("type")
     if not rule_type:
         raise FormattingError("Conditional format type not specified")
@@ -457,7 +456,7 @@ def _apply_conditional_format(
         else:
             raise FormattingError(f"Invalid conditional format type: {rule_type}")
 
-        sheet.conditional_formatting.add(range_str, rule)
+        return rule
     except FormattingError:
         raise
     except Exception as e:
@@ -470,6 +469,48 @@ def _apply_conditional_format(
         raise FormattingError(
             f"Failed to apply conditional formatting: {str(e)}{hint}"
         ) from e
+
+
+def _snapshot_format_range(
+    sheet: Worksheet,
+    *,
+    start_row: int,
+    start_col: int,
+    end_row: int,
+    end_col: int,
+) -> dict[str, Any]:
+    cells: dict[tuple[int, int], dict[str, Any]] = {}
+    for row in range(start_row, end_row + 1):
+        for col in range(start_col, end_col + 1):
+            cell = sheet.cell(row=row, column=col)
+            cells[(row, col)] = {
+                "merged": isinstance(cell, MergedCell),
+                "value": cell.value,
+                "style": copy(cell._style),
+            }
+
+    return {
+        "cells": cells,
+        "merged_ranges": {str(merged_range) for merged_range in sheet.merged_cells.ranges},
+        "conditional_formats": deepcopy(sheet.conditional_formatting._cf_rules),
+    }
+
+
+def _restore_format_range(sheet: Worksheet, snapshot: dict[str, Any]) -> None:
+    original_merged_ranges = snapshot["merged_ranges"]
+    for merged_range in list(sheet.merged_cells.ranges):
+        if str(merged_range) not in original_merged_ranges:
+            sheet.unmerge_cells(str(merged_range))
+
+    for (row, col), cell_snapshot in snapshot["cells"].items():
+        cell = sheet._cells.get((row, col))
+        if cell is None:
+            cell = sheet.cell(row=row, column=col)
+        cell._style = copy(cell_snapshot["style"])
+        if not cell_snapshot["merged"] and not isinstance(cell, MergedCell):
+            cell.value = cell_snapshot["value"]
+
+    sheet.conditional_formatting._cf_rules = snapshot["conditional_formats"]
 
 
 def _apply_format_to_sheet(
@@ -593,29 +634,49 @@ def _apply_format_to_sheet(
         except ValueError as e:
             raise FormattingError(f"Invalid protection settings: {str(e)}") from e
 
-    for row in range(start_row, end_row + 1):
-        for col in range(start_col, end_col + 1):
-            cell = sheet.cell(row=row, column=col)
-            cell.font = font
-            if fill is not None:
-                cell.fill = fill
-            if border is not None:
-                cell.border = border
-            if align is not None:
-                cell.alignment = align
-            if protect is not None:
-                cell.protection = protect
-            if number_format is not None:
-                cell.number_format = number_format
+    conditional_rule = (
+        _build_conditional_format_rule(conditional_format)
+        if conditional_format is not None
+        else None
+    )
+    snapshot = _snapshot_format_range(
+        sheet,
+        start_row=start_row,
+        start_col=start_col,
+        end_row=end_row,
+        end_col=end_col,
+    )
 
-    if merge_cells and end_cell:
-        try:
-            sheet.merge_cells(range_str)
-        except ValueError as e:
-            raise FormattingError(f"Failed to merge cells: {str(e)}") from e
+    try:
+        for row in range(start_row, end_row + 1):
+            for col in range(start_col, end_col + 1):
+                cell = sheet.cell(row=row, column=col)
+                cell.font = font
+                if fill is not None:
+                    cell.fill = fill
+                if border is not None:
+                    cell.border = border
+                if align is not None:
+                    cell.alignment = align
+                if protect is not None:
+                    cell.protection = protect
+                if number_format is not None:
+                    cell.number_format = number_format
 
-    if conditional_format is not None:
-        _apply_conditional_format(sheet, range_str, conditional_format)
+        if merge_cells and end_cell:
+            try:
+                sheet.merge_cells(range_str)
+            except ValueError as e:
+                raise FormattingError(f"Failed to merge cells: {str(e)}") from e
+
+        if conditional_rule is not None:
+            sheet.conditional_formatting.add(range_str, conditional_rule)
+    except (ValidationError, FormattingError):
+        _restore_format_range(sheet, snapshot)
+        raise
+    except Exception as e:
+        _restore_format_range(sheet, snapshot)
+        raise FormattingError(f"Failed to apply formatting: {str(e)}") from e
 
     return {"range": range_str, "preview": preview}
 
