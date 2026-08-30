@@ -1,12 +1,25 @@
 import logging
+import hashlib
 import os
 import re
 import shutil
 import tempfile
+import threading
+import time
 from collections import Counter, OrderedDict, deque
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - POSIX platforms
+    msvcrt = None
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.formula.tokenizer import Tokenizer
@@ -18,6 +31,12 @@ from openpyxl.worksheet.worksheet import Worksheet
 from .exceptions import WorkbookError
 
 logger = logging.getLogger(__name__)
+
+_WORKBOOK_LOCK_TIMEOUT_SECONDS = 30.0
+_WORKBOOK_LOCK_POLL_SECONDS = 0.05
+_WORKBOOK_LOCKS_GUARD = threading.Lock()
+_WORKBOOK_LOCKS: dict[str, threading.RLock] = {}
+_ACTIVE_WORKBOOK_LOCKS = threading.local()
 
 AUDIT_SAMPLE_ROWS = 25
 AUDIT_LARGE_DATASET_THRESHOLD = 1000
@@ -2449,6 +2468,96 @@ def _remove_conditional_format_rules(
     return removed
 
 
+def _canonical_workbook_path(filepath: str, *, must_exist: bool) -> Path:
+    path = Path(filepath).expanduser()
+    if must_exist:
+        return path.resolve(strict=True)
+    return path.parent.resolve(strict=False) / path.name
+
+
+def _workbook_lock_path(filepath: Path) -> Path:
+    lock_root = Path(tempfile.gettempdir()) / "sheetforge-workbook-locks"
+    lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with suppress(OSError):
+        os.chmod(lock_root, 0o700)
+    digest = hashlib.sha256(os.fsencode(str(filepath))).hexdigest()
+    return lock_root / f"{digest}.lock"
+
+
+def _get_in_process_workbook_lock(filepath: Path) -> threading.RLock:
+    key = str(filepath)
+    with _WORKBOOK_LOCKS_GUARD:
+        return _WORKBOOK_LOCKS.setdefault(key, threading.RLock())
+
+
+def _try_lock_file(lock_fd: int) -> bool:
+    if fcntl is not None:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            return False
+
+    if msvcrt is not None:  # pragma: no cover - Windows fallback
+        try:
+            os.lseek(lock_fd, 0, os.SEEK_SET)
+            msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    raise WorkbookError("Workbook locking is not supported on this platform")
+
+
+def _unlock_file(lock_fd: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    elif msvcrt is not None:  # pragma: no cover - Windows fallback
+        os.lseek(lock_fd, 0, os.SEEK_SET)
+        msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def _exclusive_workbook_lock(
+    filepath: Path,
+    *,
+    timeout: float = _WORKBOOK_LOCK_TIMEOUT_SECONDS,
+):
+    key = str(filepath)
+    local_lock = _get_in_process_workbook_lock(filepath)
+    with local_lock:
+        active = getattr(_ACTIVE_WORKBOOK_LOCKS, "paths", set())
+        if key in active:
+            raise WorkbookError(
+                f"Nested mutation of the same workbook is not supported: {filepath}"
+            )
+
+        lock_path = _workbook_lock_path(filepath)
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if msvcrt is not None and fcntl is None:  # pragma: no cover - Windows fallback
+                if os.fstat(lock_fd).st_size == 0:
+                    os.write(lock_fd, b"\0")
+
+            deadline = time.monotonic() + timeout
+            while not _try_lock_file(lock_fd):
+                if time.monotonic() >= deadline:
+                    raise WorkbookError(
+                        f"Timed out waiting for another writer to release workbook: {filepath}"
+                    )
+                time.sleep(_WORKBOOK_LOCK_POLL_SECONDS)
+
+            active.add(key)
+            _ACTIVE_WORKBOOK_LOCKS.paths = active
+            try:
+                yield
+            finally:
+                active.remove(key)
+                _unlock_file(lock_fd)
+        finally:
+            os.close(lock_fd)
+
+
 @contextmanager
 def safe_workbook(filepath: str, save: bool = False, read_only: bool = False):
     """Context manager that ensures workbook is always closed.
@@ -2458,16 +2567,23 @@ def safe_workbook(filepath: str, save: bool = False, read_only: bool = False):
         save: If True, save the workbook before closing.
         read_only: If True, open in read-only mode.
     """
-    wb = load_workbook(filepath, read_only=read_only)
-    try:
-        yield wb
-    except Exception:
-        raise
-    else:
-        if save and not read_only:
-            _persist_workbook_atomically(wb, filepath)
-    finally:
-        wb.close()
+    resolved_path = _canonical_workbook_path(filepath, must_exist=True)
+    lock_context = (
+        _exclusive_workbook_lock(resolved_path)
+        if save and not read_only
+        else nullcontext()
+    )
+    with lock_context:
+        wb = load_workbook(resolved_path, read_only=read_only)
+        try:
+            yield wb
+        except Exception:
+            raise
+        else:
+            if save and not read_only:
+                _persist_workbook_atomically(wb, str(resolved_path))
+        finally:
+            wb.close()
 
 
 def _verify_saved_workbook(filepath: str) -> None:
@@ -2501,6 +2617,8 @@ def _fsync_directory(path: Path) -> None:
 def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
     """Persist workbook changes via temp file + atomic replace + reopen verify."""
     destination = Path(filepath)
+    if destination.is_symlink():
+        destination = destination.resolve(strict=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     backup_path: Path | None = None
     temp_suffix = destination.suffix or ".xlsx"
@@ -2557,20 +2675,21 @@ def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> dict[str, Any]
     """Create a new Excel workbook with optional custom sheet name"""
     wb: Workbook | None = None
     try:
-        path = Path(filepath)
-        if path.exists():
-            raise WorkbookError(f"Workbook already exists: {filepath}")
+        path = _canonical_workbook_path(filepath, must_exist=False)
+        with _exclusive_workbook_lock(path):
+            if path.exists():
+                raise WorkbookError(f"Workbook already exists: {filepath}")
 
-        wb = Workbook()
-        # Rename default sheet
-        if "Sheet" in wb.sheetnames:
-            sheet = wb["Sheet"]
-            sheet.title = sheet_name
-        else:
-            wb.create_sheet(sheet_name)
+            wb = Workbook()
+            # Rename default sheet
+            if "Sheet" in wb.sheetnames:
+                sheet = wb["Sheet"]
+                sheet.title = sheet_name
+            else:
+                wb.create_sheet(sheet_name)
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _persist_workbook_atomically(wb, str(path))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _persist_workbook_atomically(wb, str(path))
         return {
             "message": f"Created workbook: {filepath}",
             "active_sheet": sheet_name,

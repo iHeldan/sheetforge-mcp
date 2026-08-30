@@ -1,6 +1,8 @@
 import logging
 import os
 import json
+import ipaddress
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -362,17 +364,59 @@ def get_excel_path(filename: str) -> str:
     Returns:
         Full path to Excel file
     """
-    # If filename is already an absolute path, return it
-    if os.path.isabs(filename):
-        return filename
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValueError("filepath must be a non-empty string")
 
-    # Check if in SSE mode (EXCEL_FILES_PATH is not None)
+    requested_path = Path(filename).expanduser()
+
     if EXCEL_FILES_PATH is None:
-        # Must use absolute path
-        raise ValueError(f"Invalid filename: {filename}, must be an absolute path when not in SSE mode")
+        if not requested_path.is_absolute():
+            raise ValueError(
+                f"Invalid filepath: {filename}, must be absolute in stdio mode"
+            )
+        return str(requested_path)
 
-    # In SSE mode, if it's a relative path, resolve it based on EXCEL_FILES_PATH
-    return os.path.join(EXCEL_FILES_PATH, filename)
+    base_path = Path(EXCEL_FILES_PATH).expanduser().resolve(strict=True)
+    candidate = requested_path if requested_path.is_absolute() else base_path / requested_path
+    resolved_candidate = candidate.resolve(strict=False)
+
+    try:
+        resolved_candidate.relative_to(base_path)
+    except ValueError as exc:
+        raise ValueError(
+            f"Workbook path must stay within EXCEL_FILES_PATH: {base_path}"
+        ) from exc
+
+    return str(resolved_candidate)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_network_binding() -> None:
+    host = os.environ.get("FASTMCP_HOST", "127.0.0.1").strip()
+    normalized_host = host.strip("[]").lower()
+    is_loopback = normalized_host == "localhost"
+    if not is_loopback:
+        try:
+            is_loopback = ipaddress.ip_address(normalized_host).is_loopback
+        except ValueError:
+            is_loopback = False
+
+    if not is_loopback and not _env_flag_enabled("SHEETFORGE_ALLOW_REMOTE"):
+        raise RuntimeError(
+            "Refusing to bind SheetForge to a non-loopback host without "
+            "SHEETFORGE_ALLOW_REMOTE=true. Remote transports have no built-in authentication; "
+            "place them behind an authenticated network boundary."
+        )
+
+
+def _configure_file_transport() -> str:
+    _validate_network_binding()
+    base_path = Path(os.environ.get("EXCEL_FILES_PATH", "./excel_files")).expanduser()
+    base_path.mkdir(parents=True, exist_ok=True)
+    return str(base_path.resolve(strict=True))
 
 @mcp.tool(
     structured_output=False,
@@ -2628,9 +2672,7 @@ def run_sse():
     """Run Excel MCP server in SSE mode."""
     # Assign value to EXCEL_FILES_PATH in SSE mode
     global EXCEL_FILES_PATH
-    EXCEL_FILES_PATH = os.environ.get("EXCEL_FILES_PATH", "./excel_files")
-    # Create directory if it doesn't exist
-    os.makedirs(EXCEL_FILES_PATH, exist_ok=True)
+    EXCEL_FILES_PATH = _configure_file_transport()
     
     try:
         logger.info(f"Starting Excel MCP server with SSE transport (files directory: {EXCEL_FILES_PATH})")
@@ -2647,9 +2689,7 @@ def run_streamable_http():
     """Run Excel MCP server in streamable HTTP mode."""
     # Assign value to EXCEL_FILES_PATH in streamable HTTP mode
     global EXCEL_FILES_PATH
-    EXCEL_FILES_PATH = os.environ.get("EXCEL_FILES_PATH", "./excel_files")
-    # Create directory if it doesn't exist
-    os.makedirs(EXCEL_FILES_PATH, exist_ok=True)
+    EXCEL_FILES_PATH = _configure_file_transport()
     
     try:
         logger.info(f"Starting Excel MCP server with streamable HTTP transport (files directory: {EXCEL_FILES_PATH})")
@@ -2664,7 +2704,8 @@ def run_streamable_http():
 
 def run_stdio():
     """Run Excel MCP server in stdio mode."""
-    # No need to assign EXCEL_FILES_PATH in stdio mode
+    global EXCEL_FILES_PATH
+    EXCEL_FILES_PATH = None
 
     try:
         logger.info("Starting Excel MCP server with stdio transport")
