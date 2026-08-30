@@ -1263,6 +1263,44 @@ def test_describe_dataset_boundary_mode_reports_advisory_metadata(tmp_path):
     assert result["read_boundary"]["ignored_trailing_row_count"] == 1
     assert result["read_boundary"]["ignored_trailing_blocks"][0]["start_row"] == 20
 
+    extended = describe_dataset_impl(
+        str(filepath),
+        sheet_name="Data",
+        read_boundary_mode="extended",
+    )
+    assert extended["recommended_args"]["read_boundary_mode"] == "extended"
+
+
+def test_read_boundary_modes_apply_to_the_initial_gap_after_headers(tmp_path):
+    filepath = tmp_path / "initial-boundary-gap.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Name", "Value"])
+    ws["A10"] = "Late block"
+    ws["B10"] = 10
+    wb.save(filepath)
+    wb.close()
+
+    strict = quick_read_impl(
+        str(filepath),
+        sheet_name="Data",
+        read_boundary_mode="strict",
+    )
+    default = quick_read_impl(str(filepath), sheet_name="Data")
+    extended = quick_read_impl(
+        str(filepath),
+        sheet_name="Data",
+        read_boundary_mode="extended",
+    )
+
+    assert strict["total_rows"] == 0
+    assert strict["read_boundary"]["ignored_trailing_row_count"] == 1
+    assert default["total_rows"] == 0
+    assert default["read_boundary"]["ignored_trailing_blocks"][0]["gap_before"] == 8
+    assert extended["total_rows"] == 9
+    assert extended["rows"][-1] == ["Late block", 10]
+
 
 def test_read_boundary_metadata_caps_trailing_block_samples(tmp_path):
     filepath = tmp_path / "many-trailing-blocks.xlsx"

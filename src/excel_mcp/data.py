@@ -746,6 +746,20 @@ def _detect_tabular_data_extent(
             "ignored_trailing_blocks": [],
         }
 
+    initial_blank_gap = non_empty_rows[0] - header_row - 1
+    if initial_blank_gap > blank_gap_tolerance:
+        return {
+            "first_data_row": None,
+            "last_data_row": header_row,
+            "ignored_trailing_rows": non_empty_rows,
+            "ignored_trailing_row_count": len(non_empty_rows),
+            "ignored_trailing_blocks": _summarize_trailing_blocks(
+                non_empty_rows,
+                preceding_row=header_row,
+                blank_gap_tolerance=blank_gap_tolerance,
+            ),
+        }
+
     last_data_row = non_empty_rows[0]
     cutoff_index = len(non_empty_rows)
 
@@ -1300,6 +1314,8 @@ def _describe_worksheet_dataset(
                 "row_mode": "objects",
                 "infer_schema": True,
             }
+            if read_boundary_mode != "default":
+                recommended_args["read_boundary_mode"] = read_boundary_mode
             page_size = _strategy_page_size(sample["total_rows"])
             if page_size is not None:
                 recommended_args["max_rows"] = page_size
