@@ -55,3 +55,7 @@ venv/
 # Misc
 .DS_Store
 Thumbs.db
+*.log*
+*.tape
+*.pem
+*.key

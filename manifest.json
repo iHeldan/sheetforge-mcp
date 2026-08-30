@@ -85,7 +85,7 @@
     {"name": "create_chart_from_series", "description": "Create chart from explicit series ranges, including non-contiguous data"},
     {"name": "create_pivot_table", "description": "Create a pivot-style summary with row and optional column grouping"},
     {"name": "create_table", "description": "Create Excel table with styling"},
-    {"name": "copy_worksheet", "description": "Copy worksheet within workbook and duplicate sheet-scoped named ranges onto the copy"},
+    {"name": "copy_worksheet", "description": "Copy a worksheet with tables, rules, charts, names, formulas, and layout settings preserved"},
     {"name": "delete_worksheet", "description": "Delete worksheet from workbook"},
     {"name": "rename_worksheet", "description": "Rename a worksheet and keep formulas, charts, named ranges, and default pivot sheets aligned"},
     {"name": "copy_range", "description": "Copy cell range to another location"},

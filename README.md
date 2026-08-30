@@ -17,6 +17,7 @@ Repository docs track the current main-branch tool surface, which currently expo
 
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
 - safer workbook creation: `create_workbook` now refuses to overwrite an existing `.xlsx`
+- serialized workbook mutation: same-host writers lock each workbook before loading it, then keep the lock through atomic replace and reopen verification so concurrent agents do not silently overwrite one another
 - smarter worksheet boundaries so compact readers stop at the main contiguous data block and surface trailing-row hints instead of over-reading sparse footer noise
 - workbook and layout awareness via `profile_workbook`, `describe_sheet_layout`, `list_tables`, `list_charts`, and `analyze_range_impact`
 - safer local mutation through `dry_run`, compact write responses, guarded native-table append/upsert flows, and workbook diff/audit/repair loops
@@ -72,7 +73,7 @@ uvx sheetforge-mcp stdio
 
 ### Streamable HTTP
 
-Use `streamable-http` when you want a long-running local or remote server process.
+Use `streamable-http` when you want a long-running local server process.
 
 ```bash
 EXCEL_FILES_PATH=/path/to/excel-files uvx sheetforge-mcp streamable-http
@@ -96,6 +97,17 @@ Example client config:
 }
 ```
 
+Remote binding is an explicit opt-in because the HTTP transports do not provide built-in authentication:
+
+```bash
+FASTMCP_HOST=0.0.0.0 \
+SHEETFORGE_ALLOW_REMOTE=true \
+EXCEL_FILES_PATH=/path/to/excel-files \
+uvx sheetforge-mcp streamable-http
+```
+
+Only expose a remote listener behind an authenticated and access-controlled network boundary.
+
 ### SSE
 
 SSE is kept for compatibility, but new integrations should prefer `streamable-http`.
@@ -114,7 +126,7 @@ http://127.0.0.1:8017/sse
 
 - In `stdio` mode, `filepath` values must be absolute paths.
 - In `streamable-http` and `sse` mode, relative paths are resolved under `EXCEL_FILES_PATH`.
-- Absolute paths are accepted in every transport.
+- In `streamable-http` and `sse` mode, absolute paths are accepted only when they remain inside `EXCEL_FILES_PATH`; parent traversal and symlink escapes are rejected.
 - In `streamable-http` and `sse` mode, the server creates `EXCEL_FILES_PATH` automatically if it does not exist.
 
 ## Environment Variables
@@ -124,6 +136,7 @@ http://127.0.0.1:8017/sse
 | `FASTMCP_HOST` | `127.0.0.1` | HTTP and SSE | Bind address for the server process |
 | `FASTMCP_PORT` | `8017` | HTTP and SSE | Port for the server process |
 | `EXCEL_FILES_PATH` | `./excel_files` | HTTP and SSE | Base directory for relative workbook paths |
+| `SHEETFORGE_ALLOW_REMOTE` | unset | HTTP and SSE | Required opt-in for any non-loopback bind; does not add authentication |
 
 ## Tooling Overview
 
@@ -173,7 +186,7 @@ The most agent-friendly read tools are:
 - `read_excel_as_table`: compact `headers + rows` output for structured datasets, with `compact=True` for the smallest payload, `start_row` for page-like reads, and `start_col` / `end_col` for narrower column slices
 - `read_data_from_excel`: cell-address-aware range reader that supports `max_rows` and `max_cols` windowing for large non-tabular ranges, `values_only=True` for smaller 2D payloads, and cursor-based continuations for multi-step 2D traversal
 - `read_range_formatting`: compact formatting readback for a worksheet range, grouped by distinct style signatures instead of noisy per-cell dumps, with merged-range and conditional-format overlap summaries
-- `search_in_sheet`: exact or partial value search across a worksheet
+- `search_in_sheet`: exact or partial value search across instantiated worksheet cells, so distant style-only cells do not force a scan of the entire rectangular used range
 
 Workbook inventory tools such as `list_all_sheets`, `profile_workbook`, and `list_charts` surface both worksheets and chart sheets. Grid-oriented tools such as `quick_read`, `read_excel_table`, `create_table`, formatting, formulas, and validation require a real worksheet and return a clear chartsheet error if you target the wrong sheet type.
 
@@ -211,6 +224,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - `append_table_rows` now refuses to write directly under an adjacent native Excel table and points you at `append_excel_table_rows` instead of silently leaving the table range stale
 - token-aware structured writes can pass `expected_structure_token` to abort on structural drift; append-style writes additionally require `allow_structure_change=True`, and successful writes report both previous and new structure/content tokens
 - `rename_worksheet` now updates formula cells as well as chart references and named ranges, and it also renames the default sibling pivot sheet (`Data_pivot` -> `Revenue_pivot`) when that move is conflict-free
+- `copy_worksheet` preserves native tables with workbook-unique copied names, data validations, conditional formatting, freeze panes, autofilters, print settings, protection, charts with their exact anchor geometry, and sheet-scoped names; copied self-references and structured table references are rewritten to the new sheet
 - formatting color inputs accept `RRGGBB`, `#RRGGBB`, `AARRGGBB`, or `#AARRGGBB`, so prompts do not need to strip CSS-style `#` prefixes first
 - `audit_workbook` is the fastest workbook-wide preflight when you need to know whether a spreadsheet is safe and predictable enough for autonomous editing
 - `audit_workbook` now treats dominant native-table sheets more honestly when nearby dashboard/layout artifacts extend the used range, so unrelated merged/chart areas do not create false blank-header risk on an otherwise clean table
@@ -295,6 +309,7 @@ uv build
 
 - Update `pyproject.toml`, `manifest.json`, and the tracked `.mcpb` bundle together for each release.
 - Keep the tracked bundle filename in sync with the package version, for example `sheetforge-mcp-<version>.mcpb`.
+- Every distribution-building workflow verifies both the wheel and source distribution against the shared public-artifact policy before release or publication.
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
 
@@ -305,6 +320,7 @@ uv build
 - `src/excel_mcp/data.py`: read, write, table, and search helpers
 - `src/excel_mcp/sheet.py`: worksheet and range mutations
 - `tests/`: regression tests covering data, layout, charts, pivots, formatting, tables, and resource safety
+- `scripts/verify_release_artifacts.py`: shared wheel/sdist content verifier used by CI and release workflows
 - `manifest.json`: packaged MCP bundle metadata
 - `docs/index.html`: static project landing page
 
@@ -316,7 +332,7 @@ uv build
 - safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range, including downstream formula chains plus validation-rule and conditional-format references elsewhere in the workbook even when formulas point at the range through named ranges or structured table references
 - layout planning: `find_free_canvas` suggests safe empty slots for charts or dashboard blocks before you place them, defaulting to the standard chart footprint when you omit explicit sizing
 - practical Excel output: formatting, print setup, worksheet protection, table upserts, chart authoring, and autofit helpers cover real reporting workflows
-- Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or remotely over HTTP
+- Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or through a deliberately gated HTTP deployment
 
 ## Notes For Integrators
 
@@ -344,8 +360,11 @@ uv build
 - Core mutation tools now default to compact responses on committed writes, including data writes, formatting, worksheet layout helpers, and merge/unmerge helpers. Use `include_changes=True` for detailed diffs.
 - Token-aware structured writes now return `previous_structure_token`, `new_structure_token`, `previous_content_token`, `new_content_token`, and `snapshot_metadata`, which makes multi-agent or read-then-write flows safer without adding hidden workbook metadata.
 - `dry_run` versions of those structured writes now label snapshot metadata as `token_basis="dry_run_preview"` and keep the on-disk file facts under `source_file_*`, so preview tokens are no longer mixed with live-file metadata.
-- Workbook saves that go through `safe_workbook(..., save=True)` now use a temp-file plus atomic replace path and reopen verification instead of trusting in-memory state alone.
-- `format_ranges` batches multiple formatting operations into one workbook pass, and now reports per-range `errors` without discarding successful ranges in the same batch.
+- Workbook saves that go through `safe_workbook(..., save=True)` use a timeout-aware same-host workbook lock plus temp-file save, `fsync`, atomic replace, rollback-on-verification-failure, and reopen verification. Symlink paths update their real target without replacing the symlink itself. If automatic rollback fails, the recovery backup is retained and identified in the error. This protects cooperating SheetForge processes on one machine; it is not a distributed lock for cloud-sync providers.
+- `format_ranges` batches multiple formatting operations into one workbook pass and reports per-range `errors` without discarding successful ranges. A failed range is rolled back to its pre-operation styles, values, comments, hyperlinks, merge state, and conditional-format rules before the batch continues.
+- `validate_formula_syntax` performs structural token validation, checks Excel coordinate limits, and rejects risky functions such as `INDIRECT`, `HYPERLINK`, `WEBSERVICE`, `DGET`, and `RTD` case-insensitively. It does not calculate formulas or replace Excel's own calculation engine.
+- `write_data_to_excel` remains a raw cell-write primitive and can store formula strings directly; use it only with trusted data, or use `apply_formula` when you want SheetForge's formula safety checks.
+- Server logs rotate at 5 MiB with two backups instead of growing without a bound.
 - `autofit_columns` estimates practical column widths from the current cell contents, with optional column filters and min/max bounds.
 - `list_charts` now reports chart `width` and `height` in centimeters in addition to anchor, type, and series metadata.
 - `get_worksheet_protection` and `set_worksheet_protection` add a safe worksheet-level wrapper around Excel protection flags.

@@ -45,6 +45,31 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/excel_mcp"]
 
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/scripts/verify_release_artifacts.py",
+    "/assets",
+    "/docs",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/README.md",
+    "/TOOLS.md",
+    "/icon.png",
+    "/manifest.json",
+    "/pyproject.toml",
+]
+exclude = [
+    "/CONTEXT.md",
+    "/context.md",
+    "/LOCAL_*.md",
+    "/*.tape",
+    "/*.log",
+    "/*.mcpb",
+    "/.env*",
+]
+
 [tool.ruff]
 target-version = "py310"
 

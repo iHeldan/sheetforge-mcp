@@ -6,7 +6,10 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 
 - In `stdio` mode, `filepath` must be an absolute path.
 - In `streamable-http` and `sse` mode, relative `filepath` values resolve under `EXCEL_FILES_PATH`.
+- HTTP/SSE paths, including absolute paths, must remain inside `EXCEL_FILES_PATH`; traversal and symlink escapes are rejected.
+- HTTP/SSE binds are loopback-only unless `SHEETFORGE_ALLOW_REMOTE=true` is set explicitly. That opt-in does not add authentication.
 - Destructive tools update the workbook on disk in place unless `dry_run=True`.
+- Workbook mutations are serialized per canonical workbook path on the same host with a bounded wait and persisted via verified atomic replace. If post-save verification and automatic rollback both fail, the recovery backup is retained and identified in the error.
 - Every tool returns a JSON envelope with `ok`, `operation`, `message`, and `data`.
 
 ## Structured Output Shapes
@@ -237,7 +240,7 @@ Returns matches under `data.matches`:
 - `infer_schema`
   When `infer_schema=True`, the response includes `schema` entries with `field`, `header`, `type`, and `nullable` hints inferred from the returned rows. Formula cells are surfaced as formula text rather than recalculated values, and formula-backed columns are therefore typed as `formula` instead of pretending to be ordinary strings or numbers.
 - `search_in_sheet(filepath: str, sheet_name: str, query: Any, exact: bool = True, max_results: int = 50) -> str`
-  Returns exact or partial value matches across the worksheet.
+  Returns exact or partial value matches across instantiated worksheet cells in row-major order. `max_results` must be a positive integer. Sparse style-only outliers do not expand the search into a full blank rectangle.
 - `append_table_rows(filepath: str, sheet_name: str, rows: List[Dict[str, Any]], header_row: int = 1, dry_run: bool = False, include_changes: Optional[bool] = None, expected_structure_token: Optional[str] = None, allow_structure_change: bool = False) -> str`
   Appends header-aware rows using dictionary keys that match worksheet headers. Returns `changed_cells` always, and detailed `changes` only when requested or during previews.
   This tool is for worksheet-shaped datasets, not native Excel tables. Appends target the end of the main contiguous worksheet data block, so sparse footer notes below a large blank gap are left in place instead of being treated as part of the dataset. If the target rows would land directly under an adjacent native table, SheetForge now rejects the write and points you at `append_excel_table_rows`.
@@ -252,13 +255,13 @@ Returns matches under `data.matches`:
 ## Formula And Validation Tools
 
 - `apply_formula(filepath: str, sheet_name: str, cell: str, formula: str) -> str`
-  Writes a validated Excel formula into the target cell.
+  Writes a structurally validated Excel formula into the target cell. Risky functions such as `INDIRECT`, `HYPERLINK`, `WEBSERVICE`, `DGET`, and `RTD` are rejected case-insensitively before mutation.
 - `validate_formula_syntax(filepath: str, sheet_name: str, cell: str, formula: str) -> str`
-  Validates formula syntax without changing the workbook.
+  Performs structural token, operator, parenthesis, unsafe-function, and Excel-coordinate checks without changing the workbook. It does not execute or calculate the formula.
 - `inspect_formula(formula: str) -> str`
   Inspects a formula string without workbook context. Returns function inventory, reference token classification, literal-token counts, and flags for volatile or risky functions such as `INDIRECT`, `WEBSERVICE`, or `RTD`.
 - `validate_excel_range(filepath: str, sheet_name: str, start_cell: str, end_cell: Optional[str] = None) -> str`
-  Validates a cell or range reference against the worksheet.
+  Validates a cell or range against Excel's physical limits (`A1:XFD1048576`) and separately reports whether the requested range extends beyond the worksheet's current data.
 - `get_data_validation_info(filepath: str, sheet_name: str) -> str`
   Returns JSON for data-validation rules defined in the worksheet. Chart sheets are rejected with a clear worksheet-only error.
 - `inspect_data_validation_rules(filepath: str, sheet_name: str, broken_only: bool = False) -> str`
@@ -276,7 +279,7 @@ Returns matches under `data.matches`:
   Applies formatting options to a cell or range and supports preview mode. Returns compact summaries by default on committed writes.
   Color arguments accept `RRGGBB`, `#RRGGBB`, `AARRGGBB`, or `#AARRGGBB`.
 - `format_ranges(filepath: str, sheet_name: str, ranges: List[Dict[str, Any]], dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
-  Applies formatting to multiple ranges in one workbook pass. Each range object uses the same option keys as `format_range`, such as `start_cell`, `end_cell`, `bold`, `font_size`, `bg_color`, or `conditional_format`. Invalid operations are reported under `errors` while successful ranges still apply.
+  Applies formatting to multiple ranges in one workbook pass. Each range object uses the same option keys as `format_range`, such as `start_cell`, `end_cell`, `bold`, `font_size`, `bg_color`, or `conditional_format`. Invalid operations are reported under `errors` while successful ranges still apply; every failed operation is rolled back to its own pre-operation cell styles, values, comments, hyperlinks, merge state, and conditional-format rules.
   Color arguments accept `RRGGBB`, `#RRGGBB`, `AARRGGBB`, or `#AARRGGBB`.
 - `read_range_formatting(filepath: str, sheet_name: str, range_ref: str, sample_limit: int = 10) -> str`
   Reads a compact formatting summary for a worksheet range. Instead of returning one style object per cell, the response groups the range into distinct `style_groups` with sample cells, reports overlapping merged ranges and conditional-format rules, and warns when the sampled style groups were truncated.
@@ -310,10 +313,9 @@ Returns matches under `data.matches`:
 ## Worksheet And Range Mutation Tools
 
 - `copy_worksheet(filepath: str, source_sheet: str, target_sheet: str) -> str`
-  Copies a worksheet inside the same workbook, including duplicating any sheet-scoped named ranges onto the copied sheet with references rewritten to the new sheet.
+  Copies a worksheet inside the same workbook. The copy preserves native tables with workbook-unique names, data validations, conditional formatting, freeze panes and view state, autofilters, print area/titles, worksheet protection, charts with their exact anchor geometry, and sheet-scoped named ranges. Self-referencing formulas and copied table structured references are rewritten to the target sheet and copied table names.
 - `delete_worksheet(filepath: str, sheet_name: str) -> str`
   Deletes the target sheet, but fails early if that would leave the workbook without any visible sheet.
-  Deletes a worksheet. The final remaining sheet cannot be deleted.
 - `rename_worksheet(filepath: str, old_name: str, new_name: str) -> str`
   Renames a worksheet and keeps formula cells, chart-series references, and named-range sheet references aligned. When a default sibling pivot sheet such as `Data_pivot` exists, SheetForge also renames it to match the new worksheet name when no conflict blocks that move.
 - `set_worksheet_visibility(filepath: str, sheet_name: str, visibility: str, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
@@ -379,5 +381,5 @@ Returns matches under `data.matches`:
 - A strong default repair workflow is `audit_workbook` -> `plan_workbook_repairs` -> `apply_workbook_repairs(dry_run=True)` -> `apply_workbook_repairs(dry_run=False)` -> `audit_workbook`.
 - A strong default reporting workflow is aggregate or join first with `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, or `cross_workbook_lookup`, then write the summary into a presentation sheet and finish with `format_ranges`, `find_free_canvas`, `create_chart`, and `autofit_columns`.
 - Use `search_in_sheet` to find a value before mutating a workbook.
-- Prefer `streamable-http` for long-running remote integrations.
+- Prefer `streamable-http` for long-running local integrations. Remote binding requires `SHEETFORGE_ALLOW_REMOTE=true` and an external authenticated network boundary.
 - Prefer `stdio` for local desktop MCP clients.

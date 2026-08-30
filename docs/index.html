@@ -279,7 +279,8 @@
           <li><strong>Port:</strong> `8017`</li>
           <li><strong>HTTP endpoint:</strong> `/mcp`</li>
           <li><strong>SSE endpoint:</strong> `/sse`</li>
-          <li><strong>Relative file root:</strong> `EXCEL_FILES_PATH` in HTTP and SSE modes</li>
+          <li><strong>File sandbox:</strong> all HTTP/SSE paths stay inside `EXCEL_FILES_PATH`</li>
+          <li><strong>Remote bind:</strong> explicit opt-in plus external authentication boundary required</li>
         </ul>
       </article>
 
@@ -306,7 +307,7 @@
           <li><strong>`read_data_from_excel`</strong><br>Read non-tabular ranges with compact payloads and cursor-based continuations.</li>
           <li><strong>`analyze_range_impact`</strong><br>Inspect blast radius before edits, including formulas, validation rules, and conditional formatting.</li>
           <li><strong>`create_chart`</strong><br>Create charts from either contiguous ranges or explicit series definitions.</li>
-          <li><strong>`format_ranges`</strong><br>Apply batch formatting across multiple areas in one workbook pass.</li>
+          <li><strong>`format_ranges`</strong><br>Apply batch formatting across multiple areas with range-level rollback on failure.</li>
           <li><strong>`autofit_columns`</strong><br>Fit columns to content without hand-tuning widths.</li>
           <li><strong>`search_in_sheet`</strong><br>Find a value before mutating a workbook.</li>
           <li><strong>`upsert_excel_table_rows`</strong><br>Update matching rows in a native table and append missing keys in one call.</li>
@@ -336,6 +337,7 @@
       <article class="card">
         <h2>Streamable HTTP example</h2>
         <pre><code>EXCEL_FILES_PATH=/path/to/excel-files uvx sheetforge-mcp streamable-http</code></pre>
+        <p>Loopback-only by default. Remote binding requires explicit opt-in and an external authenticated network boundary.</p>
       </article>
 
       <article class="card">

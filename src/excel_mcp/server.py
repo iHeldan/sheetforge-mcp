@@ -2,6 +2,7 @@ import logging
 import os
 import json
 import ipaddress
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -124,7 +125,12 @@ logging.basicConfig(
     handlers=[
         # Referring to https://github.com/modelcontextprotocol/python-sdk/issues/409#issuecomment-2816831318
         # The stdio mode server MUST NOT write anything to its stdout that is not a valid MCP message.
-        logging.FileHandler(LOG_FILE)
+        RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=5 * 1024 * 1024,
+            backupCount=2,
+            encoding="utf-8",
+        )
     ],
 )
 logger = logging.getLogger("excel-mcp")
@@ -1465,7 +1471,7 @@ def copy_worksheet(
     source_sheet: str,
     target_sheet: str
 ) -> str:
-    """Copy worksheet within workbook."""
+    """Copy a worksheet with tables, rules, charts, names, and layout settings."""
     return _run_tool(
         "copy_worksheet",
         lambda: copy_sheet(get_excel_path(filepath), source_sheet, target_sheet),

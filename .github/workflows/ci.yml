@@ -36,15 +36,5 @@ jobs:
       - name: Build package
         run: uv build
 
-      - name: Verify built wheel contents
-        run: |
-          python - <<'PY'
-          import pathlib
-          import zipfile
-
-          wheels = sorted(pathlib.Path("dist").glob("sheetforge_mcp-*.whl"))
-          assert wheels, "No wheel produced in dist/"
-          with zipfile.ZipFile(wheels[-1]) as wheel:
-              members = set(wheel.namelist())
-          assert "excel_mcp/__main__.py" in members, "Built wheel is missing excel_mcp package files"
-          PY
+      - name: Verify release artifacts
+        run: python scripts/verify_release_artifacts.py dist

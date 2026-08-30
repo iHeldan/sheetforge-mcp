@@ -4,6 +4,12 @@ excel_files/
 __pycache__/
 .notes/
 *.log
+*.log.*
+*.tape
+*.pem
+*.key
+.env*
+!.env.example
 CONTEXT.md
 context.md
 LOCAL_*.md

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- Serialized all `safe_workbook(..., save=True)` mutation paths with timeout-aware same-host workbook locks held from pre-load through verified atomic persistence, preventing concurrent SheetForge writers from silently dropping one another's changes.
+- Sandboxed HTTP/SSE workbook paths under the canonical `EXCEL_FILES_PATH`, including absolute-path and symlink containment checks, and made non-loopback binding an explicit `SHEETFORGE_ALLOW_REMOTE=true` opt-in with no implied authentication.
+- Expanded `copy_worksheet` to preserve native tables, data validations, conditional formatting, view/freeze state, autofilters, print settings, worksheet protection, charts with exact anchor geometry, and local names while rewriting copied self-references and table references.
+- Made each `format_ranges` operation transactional inside the batch: failed operations now restore their own values, styles, comments, hyperlinks, merges, and conditional-format state before later operations continue.
+- Replaced the unbounded server log with a 5 MiB rotating log and two backups.
+- Added an explicit public-file allowlist for source distributions plus a shared wheel/sdist verifier used by every CI, release-build, and PyPI publish workflow.
+
+### Fixed
+
+- Fixed formula validation so unsafe functions are detected case-insensitively, structurally incomplete formulas such as `=1+` are rejected, modern spill/LAMBDA forms remain accepted even with ordinary spacing, and exact formula matches no longer return an empty tool payload.
+- Fixed `validate_excel_range` so valid empty cells inside Excel's physical `A1:XFD1048576` grid are accepted and reported separately from the worksheet's current data boundary; explicit end cells are no longer dropped by the MCP wrapper, and reversed ranges are rejected consistently across range-based tools.
+- Fixed `search_in_sheet` so sparse style-only outliers no longer trigger rectangular blank-cell materialization, and invalid `max_results` values are rejected before scanning.
+- Fixed symlink-target workbook saves so the real workbook is updated without replacing the symlink entry.
+- Fixed failed post-save verification so a rollback failure retains the original workbook backup for explicit recovery instead of deleting the last safe copy.
+
 ## 0.8.0 - 2026-04-20
 
 ### Added
