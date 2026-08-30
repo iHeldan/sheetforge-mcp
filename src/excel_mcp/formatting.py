@@ -487,6 +487,8 @@ def _snapshot_format_range(
                 "merged": isinstance(cell, MergedCell),
                 "value": cell.value,
                 "style": copy(cell._style),
+                "comment": copy(getattr(cell, "comment", None)),
+                "hyperlink": copy(getattr(cell, "hyperlink", None)),
             }
 
     return {
@@ -509,6 +511,8 @@ def _restore_format_range(sheet: Worksheet, snapshot: dict[str, Any]) -> None:
         cell._style = copy(cell_snapshot["style"])
         if not cell_snapshot["merged"] and not isinstance(cell, MergedCell):
             cell.value = cell_snapshot["value"]
+            cell.comment = copy(cell_snapshot["comment"])
+            cell._hyperlink = copy(cell_snapshot["hyperlink"])
 
     sheet.conditional_formatting._cf_rules = snapshot["conditional_formats"]
 

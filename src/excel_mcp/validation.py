@@ -191,7 +191,7 @@ def validate_formula(formula: str) -> tuple[bool, str]:
 def _normalize_spill_operators_for_tokenizer(formula: str) -> str:
     """Represent dynamic-array spill markers with a tokenizer-supported postfix."""
     return re.sub(
-        r"(?<=[A-Za-z0-9_\]\)])#(?=$|[,+\-*/^&=<>%)])",
+        r"(?<=[A-Za-z0-9_\]\)])#(?=$|[\s,+\-*/^&=<>%)])",
         "%",
         formula,
     )

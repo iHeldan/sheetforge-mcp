@@ -993,20 +993,27 @@ def _rename_generated_pivot_sheet(
 def _copy_local_named_ranges(
     source_sheet: Worksheet,
     target_sheet: Worksheet,
-) -> int:
+    *,
+    table_name_map: dict[str, str],
+) -> tuple[int, int]:
     copied_count = 0
+    formula_update_count = 0
 
     for _, defined_name in source_sheet.defined_names.items():
         cloned_name = copy(defined_name)
-        cloned_name.attr_text = _rewrite_sheet_references_in_text(
-            getattr(defined_name, "attr_text", None),
-            old_sheet_name=source_sheet.title,
-            new_sheet_name=target_sheet.title,
+        original_text = getattr(defined_name, "attr_text", None)
+        cloned_name.attr_text = _rewrite_copied_formula_text(
+            original_text,
+            source_sheet_name=source_sheet.title,
+            target_sheet_name=target_sheet.title,
+            table_name_map=table_name_map,
         )
+        if cloned_name.attr_text != original_text:
+            formula_update_count += 1
         target_sheet.defined_names.add(cloned_name)
         copied_count += 1
 
-    return copied_count
+    return copied_count, formula_update_count
 
 
 def _copy_embedded_charts(
@@ -1022,12 +1029,7 @@ def _copy_embedded_charts(
             old_sheet_name=source_sheet.title,
             new_sheet_name=target_sheet.title,
         )
-        marker = getattr(getattr(chart, "anchor", None), "_from", None)
-        if marker is not None:
-            target_anchor = f"{get_column_letter(marker.col + 1)}{marker.row + 1}"
-        else:
-            target_anchor = "A1"
-        target_sheet.add_chart(cloned_chart, target_anchor)
+        target_sheet.add_chart(cloned_chart)
         copied_count += 1
 
     return copied_count
@@ -1278,12 +1280,18 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
             )
             target = wb.copy_worksheet(source)
             target.title = target_sheet
-            copied_named_range_count = _copy_local_named_ranges(source, target)
             copied_tables, table_formula_updates = _copy_native_tables(wb, source, target)
             table_name_map = {
                 table["source_name"]: table["target_name"]
                 for table in copied_tables
             }
+            copied_named_range_count, named_range_formula_updates = (
+                _copy_local_named_ranges(
+                    source,
+                    target,
+                    table_name_map=table_name_map,
+                )
+            )
             copied_validation_count, validation_formula_updates = (
                 _copy_data_validations(
                     source,
@@ -1316,6 +1324,7 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
             "copied_settings": copied_settings,
             "formula_reference_updates": (
                 table_formula_updates
+                + named_range_formula_updates
                 + validation_formula_updates
                 + conditional_formula_updates
                 + copied_cell_formula_updates

@@ -53,6 +53,7 @@ def test_validate_formula_rejects_structurally_incomplete_formulas(formula):
         "=SUM()",
         "=A1 B1",
         "=A1#",
+        "=A1# + 1",
         "=LAMBDA(x,x+1)(2)",
     ],
 )

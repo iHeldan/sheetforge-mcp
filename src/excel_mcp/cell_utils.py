@@ -44,6 +44,10 @@ def parse_cell_range(
 
     if end_cell:
         end_row, end_col = _parse_cell_reference(end_cell)
+        if end_row < start_row:
+            raise ValueError("End row cannot be before start row")
+        if end_col < start_col:
+            raise ValueError("End column cannot be before start column")
     else:
         end_row = None
         end_col = None

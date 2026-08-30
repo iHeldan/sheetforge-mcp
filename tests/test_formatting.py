@@ -2,6 +2,7 @@ import json
 
 import pytest
 from openpyxl import load_workbook
+from openpyxl.comments import Comment
 from openpyxl.formatting.formatting import ConditionalFormattingList
 
 from excel_mcp.formatting import format_range, format_ranges
@@ -305,6 +306,13 @@ def test_format_ranges_allows_partial_success(tmp_workbook):
 
 
 def test_format_ranges_rolls_back_failed_merge_operation(tmp_workbook, monkeypatch):
+    wb = load_workbook(tmp_workbook)
+    ws = wb["Sheet1"]
+    ws["A2"].comment = Comment("Keep this note", "SheetForge")
+    ws["B2"].hyperlink = "https://example.invalid/keep"
+    wb.save(tmp_workbook)
+    wb.close()
+
     def fail_add(self, range_string, rule):
         raise ValueError("simulated conditional format failure")
 
@@ -336,7 +344,19 @@ def test_format_ranges_rolls_back_failed_merge_operation(tmp_workbook, monkeypat
     assert ws["A2"].value == "Alice"
     assert ws["B2"].value == 30
     assert ws["A2"].font.bold is not True
+    assert ws["A2"].comment.text == "Keep this note"
+    assert ws["B2"].hyperlink.target == "https://example.invalid/keep"
     assert len(ws.conditional_formatting) == 0
+    wb.close()
+
+
+def test_format_range_rejects_reversed_range_without_mutation(tmp_workbook):
+    with pytest.raises(ValidationError, match="End row cannot be before start row"):
+        format_range(tmp_workbook, "Sheet1", "B2", end_cell="A1", bold=True)
+
+    wb = load_workbook(tmp_workbook)
+    assert wb["Sheet1"]["A1"].font.bold is not True
+    assert wb["Sheet1"]["B2"].font.bold is not True
     wb.close()
 
 

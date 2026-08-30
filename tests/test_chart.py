@@ -581,6 +581,31 @@ def test_copy_sheet_duplicates_embedded_charts_with_rewritten_references(chart_w
     assert source_charts[0]["series"][0]["values"] == "'Sales'!$B$2:$B$5"
 
 
+def test_copy_sheet_preserves_chart_anchor_offsets(chart_workbook):
+    create_chart_in_sheet(chart_workbook, "Sales", "A1:B5", "bar", "E1", title="Revenue")
+
+    wb = load_workbook(chart_workbook)
+    source_anchor = wb["Sales"]._charts[0].anchor
+    source_anchor._from.colOff = 123_456
+    source_anchor._from.rowOff = 654_321
+    wb.save(chart_workbook)
+    wb.close()
+
+    copy_sheet(chart_workbook, "Sales", "Sales Copy")
+
+    wb = load_workbook(chart_workbook)
+    source_anchor = wb["Sales"]._charts[0].anchor
+    copied_anchor = wb["Sales Copy"]._charts[0].anchor
+    assert type(copied_anchor) is type(source_anchor)
+    assert copied_anchor._from.col == source_anchor._from.col
+    assert copied_anchor._from.row == source_anchor._from.row
+    assert copied_anchor._from.colOff == source_anchor._from.colOff
+    assert copied_anchor._from.rowOff == source_anchor._from.rowOff
+    assert copied_anchor.ext.cx == source_anchor.ext.cx
+    assert copied_anchor.ext.cy == source_anchor.ext.cy
+    wb.close()
+
+
 def test_list_charts_can_filter_by_sheet(chart_workbook):
     wb = load_workbook(chart_workbook)
     ws = wb.create_sheet("Inventory")

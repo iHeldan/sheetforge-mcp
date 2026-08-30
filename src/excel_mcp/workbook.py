@@ -3,9 +3,11 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import tempfile
 import threading
 import time
+import weakref
 from collections import Counter, OrderedDict, deque
 from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
@@ -35,7 +37,7 @@ logger = logging.getLogger(__name__)
 _WORKBOOK_LOCK_TIMEOUT_SECONDS = 30.0
 _WORKBOOK_LOCK_POLL_SECONDS = 0.05
 _WORKBOOK_LOCKS_GUARD = threading.Lock()
-_WORKBOOK_LOCKS: dict[str, threading.RLock] = {}
+_WORKBOOK_LOCKS: weakref.WeakValueDictionary[str, Any] = weakref.WeakValueDictionary()
 _ACTIVE_WORKBOOK_LOCKS = threading.local()
 
 AUDIT_SAMPLE_ROWS = 25
@@ -2476,10 +2478,31 @@ def _canonical_workbook_path(filepath: str, *, must_exist: bool) -> Path:
 
 
 def _workbook_lock_path(filepath: Path) -> Path:
-    lock_root = Path(tempfile.gettempdir()) / "sheetforge-workbook-locks"
-    lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with suppress(OSError):
+    if hasattr(os, "getuid"):
+        user_token = str(os.getuid())
+    else:  # pragma: no cover - Windows fallback
+        user_token = hashlib.sha256(os.fsencode(str(Path.home()))).hexdigest()[:12]
+
+    lock_root = Path(tempfile.gettempdir()) / f"sheetforge-workbook-locks-{user_token}"
+    try:
+        lock_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        root_stat = os.lstat(lock_root)
+        if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+            raise WorkbookError(
+                f"Workbook lock directory must be a real directory: {lock_root}"
+            )
+        if hasattr(os, "getuid") and root_stat.st_uid != os.getuid():
+            raise WorkbookError(
+                f"Workbook lock directory is owned by another user: {lock_root}"
+            )
         os.chmod(lock_root, 0o700)
+    except WorkbookError:
+        raise
+    except OSError as exc:
+        raise WorkbookError(
+            f"Unable to prepare workbook lock directory {lock_root}: {exc!s}"
+        ) from exc
+
     digest = hashlib.sha256(os.fsencode(str(filepath))).hexdigest()
     return lock_root / f"{digest}.lock"
 
@@ -2525,7 +2548,13 @@ def _exclusive_workbook_lock(
 ):
     key = str(filepath)
     local_lock = _get_in_process_workbook_lock(filepath)
-    with local_lock:
+    deadline = time.monotonic() + max(timeout, 0.0)
+    if not local_lock.acquire(timeout=max(timeout, 0.0)):
+        raise WorkbookError(
+            f"Timed out waiting for another writer to release workbook: {filepath}"
+        )
+
+    try:
         active = getattr(_ACTIVE_WORKBOOK_LOCKS, "paths", set())
         if key in active:
             raise WorkbookError(
@@ -2539,7 +2568,6 @@ def _exclusive_workbook_lock(
                 if os.fstat(lock_fd).st_size == 0:
                     os.write(lock_fd, b"\0")
 
-            deadline = time.monotonic() + timeout
             while not _try_lock_file(lock_fd):
                 if time.monotonic() >= deadline:
                     raise WorkbookError(
@@ -2556,6 +2584,8 @@ def _exclusive_workbook_lock(
                 _unlock_file(lock_fd)
         finally:
             os.close(lock_fd)
+    finally:
+        local_lock.release()
 
 
 @contextmanager
@@ -2614,6 +2644,15 @@ def _fsync_directory(path: Path) -> None:
         os.close(dir_fd)
 
 
+def _remove_save_artifact_best_effort(path: Path, *, label: str) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("Unable to remove %s '%s': %s", label, path, exc)
+
+
 def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
     """Persist workbook changes via temp file + atomic replace + reopen verify."""
     destination = Path(filepath)
@@ -2629,6 +2668,7 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
     )
     os.close(fd)
     temp_path = Path(temp_name)
+    preserve_backup = False
 
     try:
         wb.save(temp_path)
@@ -2653,23 +2693,29 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
         _fsync_directory(destination.parent)
         try:
             _verify_saved_workbook(str(destination))
-        except Exception:
+        except Exception as verification_error:
             if backup_path is not None and backup_path.exists():
-                os.replace(backup_path, destination)
-                _fsync_directory(destination.parent)
+                try:
+                    os.replace(backup_path, destination)
+                    _fsync_directory(destination.parent)
+                except Exception as rollback_error:
+                    preserve_backup = True
+                    raise WorkbookError(
+                        "Post-save verification failed and the original workbook could not "
+                        f"be restored. Recovery backup retained at {backup_path}: "
+                        f"{rollback_error!s}"
+                    ) from rollback_error
             else:
                 with suppress(FileNotFoundError):
                     destination.unlink()
                 _fsync_directory(destination.parent)
-            raise
+            raise verification_error
     except Exception as exc:
         raise WorkbookError(f"Failed to save workbook atomically: {exc!s}") from exc
     finally:
-        with suppress(FileNotFoundError):
-            temp_path.unlink()
-        if backup_path is not None:
-            with suppress(FileNotFoundError):
-                backup_path.unlink()
+        _remove_save_artifact_best_effort(temp_path, label="temporary workbook")
+        if backup_path is not None and not preserve_backup:
+            _remove_save_artifact_best_effort(backup_path, label="workbook backup")
 
 def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> dict[str, Any]:
     """Create a new Excel workbook with optional custom sheet name"""

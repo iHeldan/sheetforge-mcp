@@ -847,6 +847,12 @@ def test_copy_sheet_preserves_worksheet_semantics_and_rewrites_self_references(t
     table = Table(displayName="SalesData", ref="A1:B3")
     ws.add_table(table)
     ws["C2"] = "=SUM(Data!B2)+SUM(SalesData[Amount])"
+    ws.defined_names.add(
+        DefinedName(
+            "LocalTableAmount",
+            attr_text="=SUM(SalesData[Amount])+Data!$B$2",
+        )
+    )
 
     validation = DataValidation(type="whole", formula1="Data!$B$2", formula2="100")
     validation.add("B2:B3")
@@ -877,7 +883,8 @@ def test_copy_sheet_preserves_worksheet_semantics_and_rewrites_self_references(t
     ]
     assert result["copied_data_validations"] == 1
     assert result["copied_conditional_formats"] == 1
-    assert result["formula_reference_updates"] == 3
+    assert result["copied_local_named_ranges"] == 1
+    assert result["formula_reference_updates"] == 4
 
     wb = load_workbook(filepath)
     source = wb["Data"]
@@ -886,6 +893,10 @@ def test_copy_sheet_preserves_worksheet_semantics_and_rewrites_self_references(t
     assert list(copied.tables) == ["SalesData_Copy"]
     assert copied.tables["SalesData_Copy"].ref == "A1:B3"
     assert copied["C2"].value == "=SUM('Data Copy'!B2)+SUM(SalesData_Copy[Amount])"
+    assert (
+        copied.defined_names["LocalTableAmount"].attr_text
+        == "=SUM(SalesData_Copy[Amount])+'Data Copy'!$B$2"
+    )
     assert len(copied.data_validations.dataValidation) == 1
     assert copied.data_validations.dataValidation[0].formula1 == "'Data Copy'!$B$2"
     copied_rules = [
