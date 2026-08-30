@@ -1,7 +1,6 @@
 import json
-import shutil
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import PatternFill
@@ -12,14 +11,16 @@ from excel_mcp.server import (
     analyze_range_impact,
     apply_workbook_repairs,
     audit_workbook,
+    autofit_columns,
     bulk_aggregate_workbooks,
     create_chart,
     create_table,
     create_workbook,
-    create_worksheet,
+    create_workbook_snapshot,
     describe_sheet_layout,
     diff_workbooks,
     find_free_canvas,
+    format_ranges,
     list_all_sheets,
     plan_workbook_repairs,
     profile_workbook,
@@ -60,7 +61,8 @@ def test_agent_workflow_orientation_mutation_and_diff(tmp_path):
     workbook.close()
 
     _load_tool_payload(create_table(filepath, "Data", "A1:B5", "SalesTable"))
-    shutil.copyfile(filepath, before_path)
+    snapshot_payload = _load_tool_payload(create_workbook_snapshot(filepath, before_path))
+    assert snapshot_payload["data"]["snapshot_filepath"] == before_path
 
     sheets_payload = _load_tool_payload(list_all_sheets(filepath))
     assert [sheet["name"] for sheet in sheets_payload["data"]["sheets"]] == ["Data", "Dashboard"]
@@ -162,8 +164,7 @@ def test_agent_workflow_multi_workbook_report_to_dashboard_tab(tmp_path):
         workbook.close()
         _load_tool_payload(create_table(filepath, "Sales", "A1:C3", "SalesTable"))
 
-    _load_tool_payload(create_workbook(report))
-    _load_tool_payload(create_worksheet(report, "Summary"))
+    _load_tool_payload(create_workbook(report, sheet_name="Summary"))
 
     aggregate_payload = _load_tool_payload(
         bulk_aggregate_workbooks(
@@ -180,6 +181,31 @@ def test_agent_workflow_multi_workbook_report_to_dashboard_tab(tmp_path):
 
     rows = [aggregate_payload["data"]["headers"]] + aggregate_payload["data"]["rows"]
     _load_tool_payload(write_data_to_excel(report, "Summary", rows, "A1"))
+    formatting_payload = _load_tool_payload(
+        format_ranges(
+            report,
+            "Summary",
+            [
+                {
+                    "start_cell": "A1",
+                    "end_cell": "B1",
+                    "bold": True,
+                    "font_color": "#FFFFFF",
+                    "bg_color": "#1F4E78",
+                },
+                {
+                    "start_cell": "B2",
+                    "end_cell": "B3",
+                    "number_format": "#,##0",
+                },
+            ],
+        )
+    )
+    assert formatting_payload["data"]["ranges_formatted"] == 2
+    autofit_payload = _load_tool_payload(
+        autofit_columns(report, "Summary", columns=["A", "B"], max_width=30)
+    )
+    assert autofit_payload["data"]["columns_fitted"] == 2
 
     canvas_payload = _load_tool_payload(find_free_canvas(report, "Summary", min_rows=8, min_cols=6, limit=1))
     suggestion = canvas_payload["data"]["suggestions"][0]
@@ -202,3 +228,12 @@ def test_agent_workflow_multi_workbook_report_to_dashboard_tab(tmp_path):
     layout_payload = _load_tool_payload(describe_sheet_layout(report, "Summary"))
     assert layout_payload["data"]["summary"]["chart_count"] == 1
     assert layout_payload["data"]["used_range"] == "A1:B3"
+
+    workbook = load_workbook(report)
+    try:
+        worksheet = workbook["Summary"]
+        assert workbook.sheetnames == ["Summary"]
+        assert worksheet["A1"].font.bold is True
+        assert worksheet.column_dimensions["B"].width > 8.43
+    finally:
+        workbook.close()

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import excel_mcp.server as server_module
@@ -53,6 +55,22 @@ def test_file_transport_rejects_symlink_escape(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="must stay within"):
         server_module.get_excel_path("linked/report.xlsx")
+
+
+def test_snapshot_tool_contains_both_paths_inside_file_transport(tmp_path, monkeypatch):
+    base_path = tmp_path / "excel-files"
+    base_path.mkdir()
+    monkeypatch.setattr(server_module, "EXCEL_FILES_PATH", str(base_path))
+    created = json.loads(server_module.create_workbook("source.xlsx"))
+    assert created["ok"] is True
+
+    payload = json.loads(
+        server_module.create_workbook_snapshot("source.xlsx", "../outside.xlsx")
+    )
+
+    assert payload["ok"] is False
+    assert "must stay within EXCEL_FILES_PATH" in payload["error"]["message"]
+    assert not (tmp_path / "outside.xlsx").exists()
 
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "sheetforge.local"])

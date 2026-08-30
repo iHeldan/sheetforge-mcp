@@ -11,14 +11,14 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
 Published package release: `0.8.0`
-Repository docs track the current main-branch tool surface, which currently exposes `76` MCP tools.
+Repository docs track the current main-branch tool surface, which currently exposes `77` MCP tools.
 
 ## Why SheetForge
 
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
-- safer workbook creation: `create_workbook` now refuses to overwrite an existing `.xlsx`
+- safer workbook creation and baselines: `create_workbook` refuses to overwrite an existing `.xlsx`, while `create_workbook_snapshot` creates a verified non-overwriting copy for before/after validation
 - serialized workbook mutation: same-host writers lock each workbook before loading it, then keep the lock through atomic replace and reopen verification so concurrent agents do not silently overwrite one another
-- smarter worksheet boundaries so compact readers stop at the main contiguous data block and surface trailing-row hints instead of over-reading sparse footer noise
+- smarter worksheet boundaries with bounded `strict`, `default`, and `extended` read presets plus compact metadata for any trailing blocks that were intentionally left out
 - workbook and layout awareness via `profile_workbook`, `describe_sheet_layout`, `list_tables`, `list_charts`, and `analyze_range_impact`
 - safer local mutation through `dry_run`, compact write responses, guarded native-table append/upsert flows, and workbook diff/audit/repair loops
 - local-first performance and privacy with `openpyxl`, no desktop Excel dependency, and no cloud-auth requirement
@@ -140,9 +140,9 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 76 MCP tools across these groups:
+The server currently registers 77 MCP tools across these groups:
 
-- workbook overview: `create_workbook`, `create_worksheet`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
+- workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
 - data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, `cross_workbook_lookup`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `append_excel_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `format_ranges`, `read_range_formatting`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
@@ -161,7 +161,7 @@ For chart authoring, prefer `create_chart` as the primary entry point:
 The most agent-friendly read tools are:
 
 - `suggest_read_strategy`: recommends the best next read tool for a workbook target, including whether SheetForge should treat it as a native Excel table, a clean worksheet dataset, a layout-heavy dashboard sheet, or a chart sheet
-- `describe_dataset`: samples a worksheet or native Excel table and returns headers, schema hints, key-candidate guesses, structural signals, and a recommended follow-up read path
+- `describe_dataset`: samples a worksheet or native Excel table and returns headers, schema hints, key-candidate guesses, structural signals, guarded worksheet-boundary metadata, and a recommended follow-up read path
 - `query_table`: filters, projects, sorts, and limits worksheet-shaped data or native Excel tables with a declarative JSON query instead of ad hoc cell loops
 - `aggregate_table`: computes grouped metrics such as `count`, `sum`, `avg`, `min`, and `max` over worksheet-shaped data or native Excel tables
 - `bulk_aggregate_workbooks`: computes the same grouped metrics across many workbook files in one call, with explicit schema handling via `strict`, `intersect`, or `union`
@@ -174,16 +174,17 @@ The most agent-friendly read tools are:
 - `plan_workbook_repairs`: converts workbook audit findings into prioritized next steps, including suggested SheetForge tool calls for inspection, safe dry runs, and repair workflows
 - `apply_workbook_repairs`: dry-runs or applies the safe repair subset from those plans, including broken named ranges, broken validation rules, broken conditional formats, and optional hidden-sheet reveals
 - `diff_workbooks`: compares two workbook files and reports structural changes plus sampled cell-value diffs, which is useful for before/after verification in agent workflows
+- `create_workbook_snapshot`: creates the verified, non-overwriting baseline that makes `diff_workbooks` usable without an external copy script
 - `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, data validations, conditional formats, autofilters, print areas, formula cells inside the range, and formulas or rule expressions elsewhere that depend on it directly or transitively, through named ranges, or through structured table references such as `Table1[Sales]`
 - `explain_formula_cell`: resolves a formula cell's direct references, shows upstream formula-chain cells, returns a compact `formula_chain` summary with depth layers and sampled paths, and reports downstream dependents so agents can debug workbook logic without manual tracing
 - `detect_circular_dependencies`: scans workbook formula graphs, including named-range-driven edges, and reports self-references plus multi-cell circular dependency groups before they surprise downstream automation
 - `create_named_range`: creates workbook-level or sheet-scoped named ranges with `dry_run` and `replace` support, so agents can promote important workbook regions into stable references without dropping to ad hoc Python
 - `inspect_formula`: inspects a formula string without workbook context, listing functions, reference token types, volatile functions, and risky functions such as `INDIRECT`
 - `inspect_named_range`: inspects one defined name, including its scope, destinations, and whether it points at missing sheets or broken references
-- `quick_read`: single-call compact table read that auto-selects the first sheet when needed, now with `start_row` pagination and `start_col` / `end_col` column windowing for large sheets
+- `quick_read`: single-call compact table read that auto-selects the first sheet when needed, with guarded `strict` / `default` / `extended` boundaries, `start_row` pagination, and `start_col` / `end_col` column windowing for large sheets
 - `read_excel_table`: read a native Excel table by `table_name` without guessing worksheet bounds, now with `start_row` pagination and optional `start_col` / `end_col` table column windowing
 - `list_all_sheets`: quick workbook inventory with sheet sizes, emptiness flags, and `sheet_type` for worksheets versus chart sheets
-- `read_excel_as_table`: compact `headers + rows` output for structured datasets, with `compact=True` for the smallest payload, `start_row` for page-like reads, and `start_col` / `end_col` for narrower column slices
+- `read_excel_as_table`: compact `headers + rows` output for structured datasets, with guarded boundary presets, `compact=True` for the smallest payload, `start_row` for page-like reads, and `start_col` / `end_col` for narrower column slices
 - `read_data_from_excel`: cell-address-aware range reader that supports `max_rows` and `max_cols` windowing for large non-tabular ranges, `values_only=True` for smaller 2D payloads, and cursor-based continuations for multi-step 2D traversal
 - `read_range_formatting`: compact formatting readback for a worksheet range, grouped by distinct style signatures instead of noisy per-cell dumps, with merged-range and conditional-format overlap summaries
 - `search_in_sheet`: exact or partial value search across instantiated worksheet cells, so distant style-only cells do not force a scan of the entire rectangular used range
@@ -211,7 +212,9 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 - `describe_dataset` provides a lighter-weight dataset summary than a full read, including sample rows, header quality, key candidates, and recommended next tool
 - `describe_dataset`, `quick_read`, `read_excel_as_table`, and `read_excel_table` now also return `structure_token`, `content_token`, and `snapshot_metadata`, so agents can carry read-time identity forward into safer optimistic-concurrency writes
 - worksheet-shaped compact readers and row-mutation helpers favor the first contiguous data block after the header, so sparse footer notes or distant outlier rows do not silently stretch `total_rows`, append targets, or key-based update scans
-- `describe_dataset` now surfaces `data_end_row` and `ignored_trailing_row_count` when later non-empty rows are treated as a separate block below a large blank gap
+- worksheet reads can opt into `read_boundary_mode="strict"` (0 blank rows), `"default"` (5), or `"extended"` (100); the bounded presets deliberately avoid an unlimited raw gap parameter
+- `describe_dataset`, `quick_read`, and `read_excel_as_table` surface a `read_boundary` object with the effective tolerance, data end, ignored row count, and compact trailing-block locations
+- non-default boundary views are read-only diagnostics and return `write_precondition_compatible=false`; reread with the default mode before carrying a structure token into a write
 - `query_table` is the lightest way to pull just the matching rows and columns you need from a worksheet dataset or native Excel table
 - `query_table` and `bulk_filter_workbooks` accept `ne` as a shorthand for `neq`, and membership filters can use either `values` or the shorter `value` list form
 - `aggregate_table` lets agents compute grouped summaries directly in SheetForge instead of over-reading the full dataset into context first
@@ -235,7 +238,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 ## Recommended Agent Workflows
 
 1. Unfamiliar workbook -> safe mutation -> verification
-   Start with `list_all_sheets` or `profile_workbook`, inspect layout-heavy tabs with `describe_sheet_layout`, run `analyze_range_impact` before overwriting an important range, then confirm the before/after result with `diff_workbooks`.
+   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, run `analyze_range_impact`, create a baseline with `create_workbook_snapshot`, perform the mutation, then compare the snapshot and live workbook with `diff_workbooks`.
 2. Workbook repair loop
    Use `audit_workbook` to find high-signal issues, `plan_workbook_repairs` to turn them into an action queue, `apply_workbook_repairs(..., dry_run=True)` to preview the safe subset, then rerun `audit_workbook` after applying repairs to confirm the workbook is back to a low-risk state.
 3. Multi-workbook reporting
@@ -309,7 +312,7 @@ uv build
 
 - Update `pyproject.toml`, `manifest.json`, and the tracked `.mcpb` bundle together for each release.
 - Keep the tracked bundle filename in sync with the package version, for example `sheetforge-mcp-<version>.mcpb`.
-- Every distribution-building workflow verifies both the wheel and source distribution against the shared public-artifact policy before release or publication.
+- Every distribution-building workflow verifies the wheel, source distribution, and tracked MCPB bundle against shared public-artifact allowlists before release or publication.
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
 

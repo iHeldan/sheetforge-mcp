@@ -2717,6 +2717,99 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
         if backup_path is not None and not preserve_backup:
             _remove_save_artifact_best_effort(backup_path, label="workbook backup")
 
+
+def _file_identity(stat_result: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+    )
+
+
+def create_workbook_snapshot(filepath: str, snapshot_filepath: str) -> dict[str, Any]:
+    """Create a verified, non-overwriting byte-for-byte workbook snapshot."""
+    source = _canonical_workbook_path(filepath, must_exist=True)
+    destination = _canonical_workbook_path(snapshot_filepath, must_exist=False)
+    if source == destination:
+        raise WorkbookError("Snapshot path must be different from the source workbook")
+    if destination.suffix.lower() != ".xlsx":
+        raise WorkbookError("snapshot_filepath must end with .xlsx")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    destination_created = False
+
+    try:
+        with _exclusive_workbook_lock(source):
+            if destination.exists() or destination.is_symlink():
+                raise WorkbookError(f"Snapshot already exists: {snapshot_filepath}")
+
+            _verify_saved_workbook(str(source))
+            source_stat_before = source.stat()
+            digest = hashlib.sha256()
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f".{destination.stem}.sheetforge-snapshot-",
+                suffix=destination.suffix,
+                dir=str(destination.parent),
+            )
+            temp_path = Path(temp_name)
+            try:
+                with source.open("rb") as source_handle, os.fdopen(fd, "wb") as snapshot_handle:
+                    while chunk := source_handle.read(1024 * 1024):
+                        snapshot_handle.write(chunk)
+                        digest.update(chunk)
+                    snapshot_handle.flush()
+                    os.fsync(snapshot_handle.fileno())
+            except Exception:
+                with suppress(OSError):
+                    os.close(fd)
+                raise
+
+            source_stat_after = source.stat()
+            if _file_identity(source_stat_before) != _file_identity(source_stat_after):
+                raise WorkbookError(
+                    "Source workbook changed while the snapshot was being created; retry from a fresh read"
+                )
+
+            with suppress(OSError):
+                os.chmod(temp_path, source_stat_before.st_mode)
+            _verify_saved_workbook(str(temp_path))
+
+            try:
+                os.link(temp_path, destination)
+            except FileExistsError as exc:
+                raise WorkbookError(f"Snapshot already exists: {snapshot_filepath}") from exc
+            except OSError as exc:
+                raise WorkbookError(
+                    f"Unable to create snapshot atomically at {snapshot_filepath}: {exc!s}"
+                ) from exc
+
+            destination_created = True
+            _fsync_directory(destination.parent)
+            _verify_saved_workbook(str(destination))
+
+        return {
+            "message": f"Created workbook snapshot at {destination}",
+            "source_filepath": str(source),
+            "snapshot_filepath": str(destination),
+            "file_size": source_stat_before.st_size,
+            "sha256": digest.hexdigest(),
+        }
+    except WorkbookError:
+        if destination_created:
+            _remove_save_artifact_best_effort(destination, label="invalid workbook snapshot")
+            _fsync_directory(destination.parent)
+        raise
+    except Exception as exc:
+        if destination_created:
+            _remove_save_artifact_best_effort(destination, label="invalid workbook snapshot")
+            _fsync_directory(destination.parent)
+        raise WorkbookError(f"Failed to create workbook snapshot: {exc!s}") from exc
+    finally:
+        if temp_path is not None:
+            _remove_save_artifact_best_effort(temp_path, label="temporary workbook snapshot")
+
 def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> dict[str, Any]:
     """Create a new Excel workbook with optional custom sheet name"""
     wb: Workbook | None = None

@@ -39,6 +39,7 @@ from excel_mcp.workbook import (
     apply_workbook_repairs as apply_workbook_repairs_impl,
     analyze_range_impact as analyze_range_impact_impl,
     audit_workbook as audit_workbook_impl,
+    create_workbook_snapshot as create_workbook_snapshot_impl,
     create_named_range as create_named_range_impl,
     detect_circular_dependencies as detect_circular_dependencies_impl,
     delete_named_range as delete_named_range_impl,
@@ -243,9 +244,19 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             hints.append("switch to row_mode='arrays' for a smaller payload")
         if operation in {"read_excel_as_table", "read_excel_table"} and "sheet_name" in data_dict:
             hints.append("set compact=True to trim nonessential metadata")
+        boundary = data_dict.get("read_boundary")
+        if isinstance(boundary, dict) and boundary.get("mode") == "extended":
+            hints.append(
+                "switch read_boundary_mode to 'default' or 'strict' if trailing blocks are not needed"
+            )
     elif operation == "describe_dataset":
         hints.append("set sample_rows to inspect a smaller sample")
         hints.append("use suggest_read_strategy when you only need the recommended next tool")
+        boundary = data_dict.get("read_boundary")
+        if isinstance(boundary, dict) and boundary.get("mode") == "extended":
+            hints.append(
+                "switch read_boundary_mode to 'default' or 'strict' if trailing blocks are not needed"
+            )
     elif operation in {
         "profile_workbook",
         "audit_workbook",
@@ -714,6 +725,7 @@ def read_excel_as_table(
     include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
+    read_boundary_mode: str = "default",
 ) -> str:
     """
     Read Excel data as a compact table with headers and rows or record objects.
@@ -734,6 +746,7 @@ def read_excel_as_table(
             include_headers=include_headers,
             row_mode=row_mode,
             infer_schema=infer_schema,
+            read_boundary_mode=read_boundary_mode,
         ),
     )
 
@@ -755,6 +768,7 @@ def quick_read(
     include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
+    read_boundary_mode: str = "default",
 ) -> str:
     """Read a compact table from an explicit sheet or the first workbook sheet.
 
@@ -774,6 +788,7 @@ def quick_read(
             include_headers=include_headers,
             row_mode=row_mode,
             infer_schema=infer_schema,
+            read_boundary_mode=read_boundary_mode,
         ),
     )
 
@@ -791,6 +806,7 @@ def describe_dataset(
     table_name: Optional[str] = None,
     header_row: int = 1,
     sample_rows: int = 25,
+    read_boundary_mode: str = "default",
 ) -> str:
     """Summarize a worksheet or native Excel table for agent-friendly orientation."""
     return _run_tool(
@@ -801,6 +817,7 @@ def describe_dataset(
             table_name=table_name,
             header_row=header_row,
             sample_rows=sample_rows,
+            read_boundary_mode=read_boundary_mode,
         ),
     )
 
@@ -1202,13 +1219,13 @@ def write_data_to_excel(
         destructiveHint=True,
     ),
 )
-def create_workbook(filepath: str) -> str:
-    """Create new Excel workbook."""
+def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> str:
+    """Create a new Excel workbook with an optional initial worksheet name."""
     def action() -> Any:
         full_path = get_excel_path(filepath)
         from excel_mcp.workbook import create_workbook as create_workbook_impl
 
-        result = create_workbook_impl(full_path)
+        result = create_workbook_impl(full_path, sheet_name=sheet_name)
         result.pop("workbook", None)
         result["filepath"] = full_path
         return result
@@ -1735,6 +1752,24 @@ def diff_workbooks(
             get_excel_path(after_filepath),
             sample_limit=sample_limit,
             include_cell_changes=include_cell_changes,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Create Workbook Snapshot",
+        destructiveHint=True,
+    ),
+)
+def create_workbook_snapshot(filepath: str, snapshot_filepath: str) -> str:
+    """Create a verified workbook snapshot without overwriting an existing file."""
+    return _run_tool(
+        "create_workbook_snapshot",
+        lambda: create_workbook_snapshot_impl(
+            get_excel_path(filepath),
+            get_excel_path(snapshot_filepath),
         ),
     )
 

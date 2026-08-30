@@ -1169,6 +1169,160 @@ def test_describe_dataset_reports_sparse_trailing_rows_as_separate_block(tmp_pat
     assert any("separate block" in observation.lower() for observation in result["observations"])
 
 
+def test_read_boundary_modes_expose_controlled_worksheet_views(tmp_path):
+    filepath = tmp_path / "boundary-modes.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Name", "Value"])
+    ws.append(["Alpha", 10])
+    ws.append(["Beta", 20])
+    ws.append([None, None])
+    ws.append(["Gamma", 30])
+    ws["A15"] = "Footer"
+    ws["B15"] = 99
+    wb.save(filepath)
+    wb.close()
+
+    strict = quick_read_impl(
+        str(filepath),
+        sheet_name="Data",
+        read_boundary_mode="strict",
+    )
+    default = quick_read_impl(str(filepath), sheet_name="Data")
+    extended = quick_read_impl(
+        str(filepath),
+        sheet_name="Data",
+        read_boundary_mode="extended",
+        max_rows=20,
+    )
+
+    assert strict["total_rows"] == 2
+    assert strict["read_boundary"] == {
+        "mode": "strict",
+        "blank_gap_tolerance": 0,
+        "data_end_row": 3,
+        "ignored_trailing_row_count": 2,
+        "ignored_trailing_block_count": 2,
+        "write_precondition_compatible": False,
+        "ignored_trailing_blocks": [
+            {
+                "start_row": 5,
+                "end_row": 5,
+                "non_empty_row_count": 1,
+                "gap_before": 1,
+            },
+            {
+                "start_row": 15,
+                "end_row": 15,
+                "non_empty_row_count": 1,
+                "gap_before": 9,
+            },
+        ],
+    }
+
+    assert default["total_rows"] == 4
+    assert default["read_boundary"]["data_end_row"] == 5
+    assert default["read_boundary"]["ignored_trailing_blocks"] == [
+        {
+            "start_row": 15,
+            "end_row": 15,
+            "non_empty_row_count": 1,
+            "gap_before": 9,
+        }
+    ]
+    assert default["read_boundary"]["write_precondition_compatible"] is True
+
+    assert extended["total_rows"] == 14
+    assert extended["rows"][-1] == ["Footer", 99]
+    assert extended["read_boundary"]["data_end_row"] == 15
+    assert extended["read_boundary"]["ignored_trailing_row_count"] == 0
+    assert extended["read_boundary"]["write_precondition_compatible"] is False
+    assert strict["structure_token"] != default["structure_token"]
+    assert default["structure_token"] != extended["structure_token"]
+
+
+def test_describe_dataset_boundary_mode_reports_advisory_metadata(tmp_path):
+    filepath = tmp_path / "describe-boundary-mode.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Name", "Value"])
+    ws.append(["Alpha", 10])
+    ws["A20"] = "Trailing block"
+    wb.save(filepath)
+    wb.close()
+
+    result = describe_dataset_impl(
+        str(filepath),
+        sheet_name="Data",
+        read_boundary_mode="default",
+    )
+
+    assert result["data_end_row"] == 2
+    assert result["read_boundary"]["ignored_trailing_row_count"] == 1
+    assert result["read_boundary"]["ignored_trailing_blocks"][0]["start_row"] == 20
+
+
+def test_read_boundary_metadata_caps_trailing_block_samples(tmp_path):
+    filepath = tmp_path / "many-trailing-blocks.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Name"])
+    ws.append(["Alpha"])
+    for row in range(20, 260, 20):
+        ws.cell(row=row, column=1, value=f"Block {row}")
+    wb.save(filepath)
+    wb.close()
+
+    result = quick_read_impl(str(filepath), sheet_name="Data")
+    boundary = result["read_boundary"]
+
+    assert boundary["ignored_trailing_block_count"] == 12
+    assert len(boundary["ignored_trailing_blocks"]) == 10
+    assert boundary["ignored_trailing_blocks_truncated"] is True
+
+
+def test_read_boundary_mode_rejects_invalid_values_and_native_tables(tmp_workbook):
+    with pytest.raises(DataError, match="read_boundary_mode must be one of"):
+        read_as_table(tmp_workbook, "Sheet1", read_boundary_mode="unbounded")
+
+    from excel_mcp.tables import create_excel_table
+
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    with pytest.raises(DataError, match="native Excel tables already have explicit boundaries"):
+        describe_dataset_impl(
+            tmp_workbook,
+            table_name="Customers",
+            read_boundary_mode="extended",
+        )
+
+
+def test_quick_read_tool_exposes_boundary_mode(tmp_path):
+    filepath = tmp_path / "tool-boundary-mode.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Name"])
+    ws.append(["Alpha"])
+    ws["A10"] = "Trailing"
+    wb.save(filepath)
+    wb.close()
+
+    payload = _load_tool_payload(
+        quick_read(
+            str(filepath),
+            sheet_name="Data",
+            read_boundary_mode="extended",
+            max_rows=20,
+        )
+    )
+
+    assert payload["data"]["rows"][-1] == ["Trailing"]
+    assert payload["data"]["read_boundary"]["mode"] == "extended"
+
+
 def test_describe_dataset_summarizes_native_excel_table(tmp_workbook):
     from excel_mcp.tables import create_excel_table
 
@@ -1307,13 +1461,20 @@ def test_quick_read_returns_guided_error_before_oversized_payload(
 ):
     monkeypatch.setattr(server_module, "MCP_RESPONSE_CHAR_LIMIT", 120)
 
-    payload = json.loads(quick_read(tmp_workbook, sheet_name="Sheet1"))
+    payload = json.loads(
+        quick_read(
+            tmp_workbook,
+            sheet_name="Sheet1",
+            read_boundary_mode="extended",
+        )
+    )
 
     assert payload["ok"] is False
     assert payload["error"]["type"] == "ResponseTooLargeError"
     assert any("max_rows" in hint for hint in payload["error"]["hints"])
     assert any("start_row" in hint for hint in payload["error"]["hints"])
     assert any("start_col/end_col" in hint for hint in payload["error"]["hints"])
+    assert any("read_boundary_mode" in hint for hint in payload["error"]["hints"])
 
 
 def test_write_data_dry_run_does_not_persist(tmp_workbook):
@@ -1559,6 +1720,35 @@ def test_update_rows_by_key_rejects_stale_structure_token(tmp_workbook):
             "Name",
             [{"Name": "Alice", "City": "Vantaa"}],
             expected_structure_token=dataset["structure_token"],
+        )
+
+
+def test_non_default_boundary_token_fails_closed_for_structured_write(tmp_path):
+    filepath = tmp_path / "non-default-token.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws.append(["Name", "Value"])
+    ws.append(["Alpha", 10])
+    ws["A20"] = "Trailing"
+    ws["B20"] = 99
+    wb.save(filepath)
+    wb.close()
+
+    extended = describe_dataset_impl(
+        str(filepath),
+        sheet_name="Data",
+        read_boundary_mode="extended",
+    )
+    assert extended["read_boundary"]["write_precondition_compatible"] is False
+
+    with pytest.raises(PreconditionFailedError, match="Dataset structure changed"):
+        update_rows_by_key(
+            str(filepath),
+            "Data",
+            "Name",
+            [{"Name": "Alpha", "Value": 11}],
+            expected_structure_token=extended["structure_token"],
         )
 
 

@@ -9,7 +9,7 @@ from openpyxl import load_workbook
 
 import excel_mcp.workbook as workbook_module
 from excel_mcp.exceptions import WorkbookError
-from excel_mcp.workbook import safe_workbook
+from excel_mcp.workbook import create_workbook_snapshot, safe_workbook
 
 
 def _process_workbook_writer(
@@ -58,6 +58,32 @@ def test_safe_workbook_closes_on_error(tmp_workbook):
         pass
     with safe_workbook(tmp_workbook) as wb:
         assert "Sheet1" in wb.sheetnames
+
+
+def test_snapshot_verification_failure_removes_destination_and_temp_artifacts(
+    tmp_workbook,
+    tmp_path,
+    monkeypatch,
+):
+    snapshot_path = tmp_path / "failed-snapshot.xlsx"
+    original_verify = workbook_module._verify_saved_workbook
+
+    def fail_destination_verification(filepath: str) -> None:
+        if Path(filepath) == snapshot_path:
+            raise ValueError("simulated snapshot verification failure")
+        original_verify(filepath)
+
+    monkeypatch.setattr(
+        workbook_module,
+        "_verify_saved_workbook",
+        fail_destination_verification,
+    )
+
+    with pytest.raises(WorkbookError, match="simulated snapshot verification failure"):
+        create_workbook_snapshot(tmp_workbook, str(snapshot_path))
+
+    assert not snapshot_path.exists()
+    assert list(tmp_path.glob(".failed-snapshot.sheetforge-snapshot-*.xlsx")) == []
 
 
 def test_safe_workbook_saves_when_requested(tmp_workbook):

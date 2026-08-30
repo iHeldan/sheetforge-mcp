@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -16,6 +17,8 @@ from excel_mcp.server import (
     analyze_range_impact as analyze_range_impact_tool,
     audit_workbook as audit_workbook_tool,
     create_named_range as create_named_range_tool,
+    create_workbook as create_workbook_tool,
+    create_workbook_snapshot as create_workbook_snapshot_tool,
     delete_named_range as delete_named_range_tool,
     diff_workbooks as diff_workbooks_tool,
     explain_formula_cell as explain_formula_cell_tool,
@@ -35,6 +38,7 @@ from excel_mcp.workbook import (
     analyze_range_impact,
     audit_workbook,
     create_workbook,
+    create_workbook_snapshot,
     create_named_range,
     delete_named_range,
     diff_workbooks,
@@ -91,6 +95,53 @@ def test_create_workbook_rejects_existing_file_without_overwriting(tmp_path):
         assert reopened.active["A1"].value == "KEEP"
     finally:
         reopened.close()
+
+
+def test_create_workbook_tool_accepts_initial_sheet_name(tmp_path):
+    filepath = tmp_path / "custom-initial-sheet.xlsx"
+
+    payload = _load_tool_payload(
+        create_workbook_tool(str(filepath), sheet_name="Summary")
+    )
+
+    assert payload["data"]["active_sheet"] == "Summary"
+    reopened = load_workbook(filepath)
+    try:
+        assert reopened.sheetnames == ["Summary"]
+    finally:
+        reopened.close()
+
+
+def test_create_workbook_snapshot_is_verified_and_never_overwrites(tmp_workbook, tmp_path):
+    snapshot_path = tmp_path / "before.xlsx"
+
+    result = create_workbook_snapshot(tmp_workbook, str(snapshot_path))
+
+    assert result["snapshot_filepath"] == str(snapshot_path)
+    assert result["file_size"] == snapshot_path.stat().st_size
+    assert len(result["sha256"]) == 64
+    assert snapshot_path.read_bytes() == Path(tmp_workbook).read_bytes()
+
+    with pytest.raises(WorkbookError, match="Snapshot already exists"):
+        create_workbook_snapshot(tmp_workbook, str(snapshot_path))
+
+    reopened = load_workbook(snapshot_path)
+    try:
+        assert reopened["Sheet1"]["A2"].value == "Alice"
+    finally:
+        reopened.close()
+
+
+def test_create_workbook_snapshot_tool_returns_compact_payload(tmp_workbook, tmp_path):
+    snapshot_path = tmp_path / "tool-before.xlsx"
+
+    payload = _load_tool_payload(
+        create_workbook_snapshot_tool(tmp_workbook, str(snapshot_path))
+    )
+
+    assert payload["operation"] == "create_workbook_snapshot"
+    assert payload["data"]["snapshot_filepath"] == str(snapshot_path)
+    assert snapshot_path.exists()
 
 
 def test_delete_sheet_rejects_only_visible_sheet_when_others_are_hidden(tmp_path):

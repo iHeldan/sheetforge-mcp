@@ -23,6 +23,12 @@ RANGE_READ_CURSOR_VERSION = 2
 DEFAULT_DATASET_SAMPLE_ROWS = 25
 KEY_CANDIDATE_SCAN_LIMIT = 100
 TABULAR_BLANK_GAP_TOLERANCE = 5
+READ_BOUNDARY_GAP_TOLERANCES = {
+    "strict": 0,
+    "default": TABULAR_BLANK_GAP_TOLERANCE,
+    "extended": 100,
+}
+READ_BOUNDARY_BLOCK_SAMPLE_LIMIT = 10
 DATASET_TOKEN_VERSION = 1
 CONTENT_TOKEN_QUANTILES = (0.25, 0.5, 0.75)
 
@@ -178,10 +184,16 @@ def _worksheet_structure_summary(
     *,
     sheet_name: str,
     header_row: int,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
     columns = _token_header_columns(ws, header_row)
     headers = [ws.cell(row=header_row, column=col).value for col in columns]
-    data_extent = _detect_tabular_data_extent(ws, header_row, columns)
+    data_extent = _detect_tabular_data_extent(
+        ws,
+        header_row,
+        columns,
+        read_boundary_mode=read_boundary_mode,
+    )
     return {
         "target_kind": "worksheet",
         "sheet_name": sheet_name,
@@ -201,8 +213,14 @@ def _worksheet_dataset_tokens(
     *,
     sheet_name: str,
     header_row: int,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
-    summary = _worksheet_structure_summary(ws, sheet_name=sheet_name, header_row=header_row)
+    summary = _worksheet_structure_summary(
+        ws,
+        sheet_name=sheet_name,
+        header_row=header_row,
+        read_boundary_mode=read_boundary_mode,
+    )
     headers = summary["headers"]
     columns = summary["header_columns"]
     first_data_row = summary["first_data_row"]
@@ -630,13 +648,88 @@ def _row_has_selected_data(ws: Worksheet, row: int, columns: List[int]) -> bool:
     return any(ws.cell(row=row, column=col).value is not None for col in columns)
 
 
+def _validate_read_boundary_mode(read_boundary_mode: str) -> int:
+    if read_boundary_mode not in READ_BOUNDARY_GAP_TOLERANCES:
+        supported = ", ".join(sorted(READ_BOUNDARY_GAP_TOLERANCES))
+        raise DataError(f"read_boundary_mode must be one of: {supported}")
+    return READ_BOUNDARY_GAP_TOLERANCES[read_boundary_mode]
+
+
+def _summarize_trailing_blocks(
+    rows: List[int],
+    *,
+    preceding_row: int,
+    blank_gap_tolerance: int,
+) -> List[Dict[str, int]]:
+    if not rows:
+        return []
+
+    blocks: List[Dict[str, int]] = []
+    block_start = rows[0]
+    block_end = rows[0]
+    block_count = 1
+    gap_before = block_start - preceding_row - 1
+
+    for row in rows[1:]:
+        blank_gap = row - block_end - 1
+        if blank_gap > blank_gap_tolerance:
+            blocks.append(
+                {
+                    "start_row": block_start,
+                    "end_row": block_end,
+                    "non_empty_row_count": block_count,
+                    "gap_before": gap_before,
+                }
+            )
+            block_start = row
+            block_count = 1
+            gap_before = blank_gap
+        else:
+            block_count += 1
+        block_end = row
+
+    blocks.append(
+        {
+            "start_row": block_start,
+            "end_row": block_end,
+            "non_empty_row_count": block_count,
+            "gap_before": gap_before,
+        }
+    )
+    return blocks
+
+
+def _read_boundary_metadata(
+    data_extent: Dict[str, Any],
+    *,
+    read_boundary_mode: str,
+) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {
+        "mode": read_boundary_mode,
+        "blank_gap_tolerance": _validate_read_boundary_mode(read_boundary_mode),
+        "data_end_row": data_extent["last_data_row"],
+        "ignored_trailing_row_count": data_extent["ignored_trailing_row_count"],
+        "ignored_trailing_block_count": len(data_extent["ignored_trailing_blocks"]),
+        "write_precondition_compatible": read_boundary_mode == "default",
+    }
+    trailing_blocks = data_extent["ignored_trailing_blocks"]
+    if trailing_blocks:
+        metadata["ignored_trailing_blocks"] = trailing_blocks[
+            :READ_BOUNDARY_BLOCK_SAMPLE_LIMIT
+        ]
+        if len(trailing_blocks) > READ_BOUNDARY_BLOCK_SAMPLE_LIMIT:
+            metadata["ignored_trailing_blocks_truncated"] = True
+    return metadata
+
+
 def _detect_tabular_data_extent(
     ws: Worksheet,
     header_row: int,
     columns: List[int],
     *,
-    blank_gap_tolerance: int = TABULAR_BLANK_GAP_TOLERANCE,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
+    blank_gap_tolerance = _validate_read_boundary_mode(read_boundary_mode)
     # Worksheet-shaped readers favor the first contiguous data block after the header.
     # This keeps sparse footer notes or distant outlier cells from stretching a table read.
     non_empty_rows = [
@@ -650,6 +743,7 @@ def _detect_tabular_data_extent(
             "last_data_row": header_row,
             "ignored_trailing_rows": [],
             "ignored_trailing_row_count": 0,
+            "ignored_trailing_blocks": [],
         }
 
     last_data_row = non_empty_rows[0]
@@ -670,11 +764,27 @@ def _detect_tabular_data_extent(
         "last_data_row": last_data_row,
         "ignored_trailing_rows": ignored_trailing_rows,
         "ignored_trailing_row_count": len(ignored_trailing_rows),
+        "ignored_trailing_blocks": _summarize_trailing_blocks(
+            ignored_trailing_rows,
+            preceding_row=last_data_row,
+            blank_gap_tolerance=blank_gap_tolerance,
+        ),
     }
 
 
-def _find_last_data_row(ws: Worksheet, header_row: int, columns: List[int]) -> int:
-    return _detect_tabular_data_extent(ws, header_row, columns)["last_data_row"]
+def _find_last_data_row(
+    ws: Worksheet,
+    header_row: int,
+    columns: List[int],
+    *,
+    read_boundary_mode: str = "default",
+) -> int:
+    return _detect_tabular_data_extent(
+        ws,
+        header_row,
+        columns,
+        read_boundary_mode=read_boundary_mode,
+    )["last_data_row"]
 
 
 def _native_table_append_conflict(
@@ -1070,6 +1180,7 @@ def _describe_worksheet_dataset(
     sheet_name: Optional[str] = None,
     header_row: int = 1,
     sample_rows: int = DEFAULT_DATASET_SAMPLE_ROWS,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
     from .tables import _build_table_metadata
 
@@ -1105,6 +1216,7 @@ def _describe_worksheet_dataset(
             include_headers=True,
             row_mode="arrays",
             infer_schema=True,
+            read_boundary_mode=read_boundary_mode,
         )
         native_tables = [
             _build_table_metadata(resolved_sheet_name, worksheet, table)
@@ -1115,6 +1227,7 @@ def _describe_worksheet_dataset(
             worksheet,
             header_row,
             selected_columns,
+            read_boundary_mode=read_boundary_mode,
         )
 
         used_range = _worksheet_used_range(worksheet)
@@ -1195,6 +1308,7 @@ def _describe_worksheet_dataset(
             worksheet,
             sheet_name=resolved_sheet_name,
             header_row=header_row,
+            read_boundary_mode=read_boundary_mode,
         )
 
         return _attach_dataset_identity({
@@ -1218,6 +1332,10 @@ def _describe_worksheet_dataset(
             "has_autofilter": bool(worksheet.auto_filter.ref),
             "freeze_panes": getattr(worksheet.freeze_panes, "coordinate", worksheet.freeze_panes),
             "ignored_trailing_row_count": data_extent["ignored_trailing_row_count"],
+            "read_boundary": _read_boundary_metadata(
+                data_extent,
+                read_boundary_mode=read_boundary_mode,
+            ),
             "native_table_count": len(native_tables),
             "native_tables": [
                 {
@@ -1240,13 +1358,20 @@ def describe_dataset(
     table_name: Optional[str] = None,
     header_row: int = 1,
     sample_rows: int = DEFAULT_DATASET_SAMPLE_ROWS,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
     """Describe the most likely dataset shape for a worksheet or native Excel table."""
     try:
         _validate_positive_integer(header_row, argument_name="header_row")
         _validate_positive_integer(sample_rows, argument_name="sample_rows")
+        _validate_read_boundary_mode(read_boundary_mode)
 
         if table_name is not None:
+            if read_boundary_mode != "default":
+                raise DataError(
+                    "read_boundary_mode applies only to worksheet-shaped datasets; "
+                    "native Excel tables already have explicit boundaries"
+                )
             return _describe_table_dataset(
                 filepath,
                 table_name=table_name,
@@ -1259,6 +1384,7 @@ def describe_dataset(
             sheet_name=sheet_name,
             header_row=header_row,
             sample_rows=sample_rows,
+            read_boundary_mode=read_boundary_mode,
         )
     except DataError:
         raise
@@ -1947,6 +2073,7 @@ def read_as_table(
     include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
     """Read Excel data as a compact table with headers.
 
@@ -1974,6 +2101,7 @@ def read_as_table(
                 include_headers=include_headers,
                 row_mode=row_mode,
                 infer_schema=infer_schema,
+                read_boundary_mode=read_boundary_mode,
             )
     except DataError:
         raise
@@ -1996,6 +2124,7 @@ def _read_table_from_worksheet(
     include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
     _validate_positive_integer(header_row, argument_name="header_row")
     start_col_idx = _column_index(start_col, argument_name="start_col")
@@ -2013,7 +2142,13 @@ def _read_table_from_worksheet(
         raise DataError("start_row must be greater than header_row")
 
     selected_columns = _selected_columns(start_col_idx, end_col_idx)
-    last_data_row = _find_last_data_row(ws, header_row, selected_columns)
+    data_extent = _detect_tabular_data_extent(
+        ws,
+        header_row,
+        selected_columns,
+        read_boundary_mode=read_boundary_mode,
+    )
+    last_data_row = data_extent["last_data_row"]
 
     headers = []
     for col in selected_columns:
@@ -2055,11 +2190,16 @@ def _read_table_from_worksheet(
         infer_schema=infer_schema,
         next_start_row=next_start_row,
     )
+    payload["read_boundary"] = _read_boundary_metadata(
+        data_extent,
+        read_boundary_mode=read_boundary_mode,
+    )
     if filepath is not None:
         dataset_tokens = _worksheet_dataset_tokens(
             ws,
             sheet_name=sheet_name,
             header_row=header_row,
+            read_boundary_mode=read_boundary_mode,
         )
         payload = _attach_dataset_identity(
             payload,
@@ -2080,6 +2220,7 @@ def quick_read(
     include_headers: bool = True,
     row_mode: str = "arrays",
     infer_schema: bool = False,
+    read_boundary_mode: str = "default",
 ) -> Dict[str, Any]:
     """Read a compact table from an explicit sheet or the first sheet automatically.
 
@@ -2112,6 +2253,7 @@ def quick_read(
                 include_headers=include_headers,
                 row_mode=row_mode,
                 infer_schema=infer_schema,
+                read_boundary_mode=read_boundary_mode,
             )
             result["auto_selected_sheet"] = auto_selected_sheet
             return result
