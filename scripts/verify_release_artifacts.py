@@ -7,6 +7,8 @@ import sys
 import stat
 import tarfile
 import zipfile
+import json
+import re
 from pathlib import Path, PurePosixPath
 
 FORBIDDEN_DIRECTORY_NAMES = {".git", ".notes", ".venv", "__pycache__"}
@@ -27,6 +29,14 @@ ALLOWED_SDIST_TOP_LEVEL = {
     "src",
     "tests",
     "TOOLS.md",
+}
+ALLOWED_MCPB_MEMBERS = {
+    PurePosixPath(".python-version"),
+    PurePosixPath("CHANGELOG.md"),
+    PurePosixPath("LICENSE"),
+    PurePosixPath("README.md"),
+    PurePosixPath("icon.png"),
+    PurePosixPath("manifest.json"),
 }
 
 
@@ -126,6 +136,57 @@ def _verify_sdist(sdist_path: Path) -> None:
         raise AssertionError(f"{sdist_path.name} is missing required files: {missing}")
 
 
+def _package_version(root: Path) -> str:
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version = "([^"]+)"$', pyproject, flags=re.MULTILINE)
+    if match is None:
+        raise AssertionError("Unable to read project version from pyproject.toml")
+    return match.group(1)
+
+
+def _verify_mcpb(bundle_path: Path, *, expected_version: str) -> None:
+    with zipfile.ZipFile(bundle_path) as bundle:
+        members: set[PurePosixPath] = set()
+        manifest_payload = None
+        for archive_member in bundle.infolist():
+            member = PurePosixPath(archive_member.filename)
+            if archive_member.is_dir():
+                continue
+            unix_mode = archive_member.external_attr >> 16
+            if stat.S_IFMT(unix_mode) == stat.S_IFLNK:
+                raise AssertionError(f"Symlink in {bundle_path.name}: {member}")
+            _assert_safe_relative_path(member, artifact=bundle_path)
+            if len(member.parts) != 1 or member not in ALLOWED_MCPB_MEMBERS:
+                raise AssertionError(
+                    f"Unexpected MCPB entry in {bundle_path.name}: {member}"
+                )
+            if member == PurePosixPath("manifest.json"):
+                manifest_payload = json.loads(bundle.read(archive_member).decode("utf-8"))
+            members.add(member)
+
+    if members != ALLOWED_MCPB_MEMBERS:
+        missing = sorted(str(path) for path in ALLOWED_MCPB_MEMBERS - members)
+        extras = sorted(str(path) for path in members - ALLOWED_MCPB_MEMBERS)
+        raise AssertionError(
+            f"MCPB member mismatch in {bundle_path.name}; missing={missing}, extras={extras}"
+        )
+    if manifest_payload is None or manifest_payload.get("version") != expected_version:
+        raise AssertionError(
+            f"{bundle_path.name} manifest version does not match {expected_version}"
+        )
+
+
+def verify_repository_bundle(root: Path) -> None:
+    version = _package_version(root)
+    bundles = sorted(root.glob("sheetforge-mcp-*.mcpb"))
+    expected_bundle = root / f"sheetforge-mcp-{version}.mcpb"
+    if bundles != [expected_bundle]:
+        raise AssertionError(
+            f"Expected only {expected_bundle.name}, found {[path.name for path in bundles]}"
+        )
+    _verify_mcpb(expected_bundle, expected_version=version)
+
+
 def verify_dist(dist_dir: Path) -> None:
     wheels = sorted(dist_dir.glob("sheetforge_mcp-*.whl"))
     sdists = sorted(dist_dir.glob("sheetforge_mcp-*.tar.gz"))
@@ -141,4 +202,6 @@ def verify_dist(dist_dir: Path) -> None:
 if __name__ == "__main__":
     output_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
     verify_dist(output_dir)
-    print(f"Verified SheetForge release artifacts in {output_dir}")
+    repository_root = Path(__file__).resolve().parents[1]
+    verify_repository_bundle(repository_root)
+    print(f"Verified SheetForge release artifacts in {output_dir} and repository MCPB")

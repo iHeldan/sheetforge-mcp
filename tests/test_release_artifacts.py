@@ -3,6 +3,7 @@ import io
 import json
 import re
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,8 @@ def test_tracked_bundle_matches_package_version():
 
     bundles = sorted(root.glob("sheetforge-mcp-*.mcpb"))
     assert bundles == [root / f"sheetforge-mcp-{version}.mcpb"]
+    verifier = _load_release_verifier()
+    verifier.verify_repository_bundle(root)
 
 
 def test_sdist_uses_public_allowlist_and_private_artifact_excludes():
@@ -122,3 +125,32 @@ def test_release_verifier_rejects_sdist_symlinks(tmp_path):
 
     with pytest.raises(AssertionError, match="Non-regular archive entry"):
         verifier._verify_sdist(artifact)
+
+
+def test_release_verifier_rejects_private_mcpb_entries(tmp_path):
+    verifier = _load_release_verifier()
+    artifact = tmp_path / "sheetforge-mcp-0.8.0.mcpb"
+    with zipfile.ZipFile(artifact, "w") as bundle:
+        for member in verifier.ALLOWED_MCPB_MEMBERS:
+            content = b'\x89PNG\r\n' if member.name == "icon.png" else b"public"
+            if member.name == "manifest.json":
+                content = b'{"version":"0.8.0"}'
+            bundle.writestr(str(member), content)
+        bundle.writestr("LOCAL_ROADMAP.md", "private")
+
+    with pytest.raises(AssertionError, match="Forbidden file"):
+        verifier._verify_mcpb(artifact, expected_version="0.8.0")
+
+
+def test_release_verifier_rejects_mcpb_manifest_version_drift(tmp_path):
+    verifier = _load_release_verifier()
+    artifact = tmp_path / "sheetforge-mcp-0.8.0.mcpb"
+    with zipfile.ZipFile(artifact, "w") as bundle:
+        for member in verifier.ALLOWED_MCPB_MEMBERS:
+            content = b'\x89PNG\r\n' if member.name == "icon.png" else b"public"
+            if member.name == "manifest.json":
+                content = b'{"version":"0.7.0"}'
+            bundle.writestr(str(member), content)
+
+    with pytest.raises(AssertionError, match="manifest version does not match"):
+        verifier._verify_mcpb(artifact, expected_version="0.8.0")
