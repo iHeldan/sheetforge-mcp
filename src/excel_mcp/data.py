@@ -2144,6 +2144,7 @@ def search_cells(
 ) -> List[Dict[str, Any]]:
     """Search for cells matching a value."""
     try:
+        _validate_positive_integer(max_results, argument_name="max_results")
         with safe_workbook(str(filepath)) as wb:
             ws = require_worksheet(
                 wb,
@@ -2153,28 +2154,26 @@ def search_cells(
             )
             results = []
 
-            for row in range(1, ws.max_row + 1):
-                for col in range(1, ws.max_column + 1):
-                    cell = ws.cell(row=row, column=col)
-                    val = cell.value
-                    if val is None:
-                        continue
+            for (row, col), cell in sorted(ws._cells.items()):
+                val = cell.value
+                if val is None:
+                    continue
 
-                    matched = False
-                    if exact:
-                        matched = _matches_exact_query(val, query)
-                    else:
-                        matched = str(query).lower() in str(val).lower()
+                matched = False
+                if exact:
+                    matched = _matches_exact_query(val, query)
+                else:
+                    matched = str(query).lower() in str(val).lower()
 
-                    if matched:
-                        results.append({
-                            "cell": f"{get_column_letter(col)}{row}",
-                            "value": val,
-                            "row": row,
-                            "column": col,
-                        })
-                        if len(results) >= max_results:
-                            return results
+                if matched:
+                    results.append({
+                        "cell": f"{get_column_letter(col)}{row}",
+                        "value": val,
+                        "row": row,
+                        "column": col,
+                    })
+                    if len(results) >= max_results:
+                        return results
 
             return results
     except DataError:

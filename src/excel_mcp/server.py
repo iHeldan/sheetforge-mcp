@@ -2239,10 +2239,14 @@ def validate_excel_range(
     end_cell: Optional[str] = None
 ) -> str:
     """Validate if a range exists and is properly formatted."""
-    range_str = start_cell if not end_cell else f"{start_cell}:{end_cell}"
     return _run_tool(
         "validate_excel_range",
-        lambda: validate_range_impl(get_excel_path(filepath), sheet_name, range_str),
+        lambda: validate_range_impl(
+            get_excel_path(filepath),
+            sheet_name,
+            start_cell,
+            end_cell,
+        ),
     )
 
 @mcp.tool(

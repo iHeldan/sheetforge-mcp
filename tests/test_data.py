@@ -4,6 +4,8 @@ import json
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
+from openpyxl.styles import PatternFill
+from openpyxl.worksheet.worksheet import Worksheet
 import excel_mcp.server as server_module
 
 from excel_mcp.data import (
@@ -377,6 +379,34 @@ def test_search_in_sheet_accepts_numeric_queries(tmp_workbook):
     assert payload["operation"] == "search_in_sheet"
     assert len(payload["data"]["matches"]) == 1
     assert payload["data"]["matches"][0]["cell"] == "B2"
+
+
+@pytest.mark.parametrize("max_results", [0, -1, True])
+def test_search_cells_rejects_invalid_max_results(tmp_workbook, max_results):
+    with pytest.raises(DataError, match="max_results must be a positive integer"):
+        search_cells(tmp_workbook, "Sheet1", "Alice", max_results=max_results)
+
+
+def test_search_cells_scans_only_instantiated_sparse_cells(tmp_path, monkeypatch):
+    filepath = str(tmp_path / "sparse-search.xlsx")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws["A1"] = "needle"
+    ws["A50000"].fill = PatternFill(fill_type="solid", fgColor="FF0000")
+    wb.save(filepath)
+    wb.close()
+
+    original_cell = Worksheet.cell
+
+    def guarded_cell(self, row, column, value=None):
+        if row not in {1, 50000}:
+            raise AssertionError("search materialized a blank worksheet cell")
+        return original_cell(self, row=row, column=column, value=value)
+
+    monkeypatch.setattr(Worksheet, "cell", guarded_cell)
+
+    assert search_cells(filepath, "Sheet1", "missing") == []
 
 
 def test_read_data_from_excel_preview_only_limits_output(tmp_path):

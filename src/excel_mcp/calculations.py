@@ -7,10 +7,9 @@ from openpyxl.utils import range_boundaries
 from .workbook import require_worksheet, safe_workbook
 from .cell_utils import validate_cell_reference
 from .exceptions import ValidationError, CalculationError
-from .validation import validate_formula
+from .validation import UNSAFE_FORMULA_FUNCTIONS, validate_formula
 
 logger = logging.getLogger(__name__)
-UNSAFE_FORMULA_FUNCTIONS = {"INDIRECT", "HYPERLINK", "WEBSERVICE", "DGET", "RTD"}
 VOLATILE_FORMULA_FUNCTIONS = {
     "CELL",
     "INFO",
