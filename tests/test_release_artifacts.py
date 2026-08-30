@@ -92,6 +92,20 @@ def test_every_distribution_build_workflow_runs_shared_artifact_verifier():
         ), f"{workflow.name} builds distributions without the shared artifact verifier"
 
 
+def test_github_actions_use_node24_compatible_setup_versions():
+    root = Path(__file__).resolve().parents[1]
+    expected_actions = {
+        "ci.yml": ("actions/setup-python@v6", "astral-sh/setup-uv@v9.0.0"),
+        "publish.yml": ("actions/setup-python@v6",),
+        "release-build.yml": ("actions/setup-python@v6",),
+    }
+
+    for workflow_name, required_actions in expected_actions.items():
+        content = (root / ".github" / "workflows" / workflow_name).read_text()
+        for action in required_actions:
+            assert action in content
+
+
 @pytest.mark.parametrize(
     ("member_name", "expected_error"),
     [
