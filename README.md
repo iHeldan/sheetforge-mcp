@@ -16,7 +16,7 @@ Repository docs track the current main-branch tool surface, which currently expo
 ## Why SheetForge
 
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
-- verified multi-step edits via `apply_workbook_changeset`: preview the complete candidate, assertions, structural diff, and sampled cell changes, then commit that exact plan only if the source workbook still matches
+- verified multi-step edits via `apply_workbook_changeset`: preview the complete candidate, value/table/layout assertions, structural diff, and sampled cell changes, then commit that exact plan only if the source workbook still matches
 - safer workbook creation and baselines: `create_workbook` refuses to overwrite an existing `.xlsx`, while `create_workbook_snapshot` creates a verified non-overwriting copy for before/after validation
 - serialized workbook mutation: same-host writers lock each workbook before loading it, then keep the lock through atomic replace and reopen verification so concurrent agents do not silently overwrite one another
 - smarter worksheet boundaries with bounded `strict`, `default`, and `extended` read presets plus compact metadata for any trailing blocks that were intentionally left out
@@ -336,7 +336,7 @@ uv build
 - agent-friendly responses: consistent JSON envelopes, compact writes, and `dry_run` previews reduce context waste
 - workbook introspection: `profile_workbook`, `list_all_sheets`, `list_tables`, and `list_charts` make unfamiliar spreadsheets easier to navigate
 - safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range, including downstream formula chains plus validation-rule and conditional-format references elsewhere in the workbook even when formulas point at the range through named ranges or structured table references
-- verified transactions: `apply_workbook_changeset` binds a bounded operation/assertion plan to the canonical target path and exact source SHA-256, tests it on an isolated candidate, and replaces the source once only after all checks pass
+- verified transactions: `apply_workbook_changeset` binds a bounded operation/assertion plan to the canonical target path and exact source SHA-256, tests it on an isolated candidate, verifies cells, tables, freeze panes, autofilters, and chart placement, and replaces the source once only after all checks pass
 - layout planning: `find_free_canvas` suggests safe empty slots for charts or dashboard blocks before you place them, defaulting to the standard chart footprint when you omit explicit sizing
 - practical Excel output: formatting, print setup, worksheet protection, table upserts, chart authoring, and autofit helpers cover real reporting workflows
 - Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or through a deliberately gated HTTP deployment

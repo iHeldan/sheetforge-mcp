@@ -2,6 +2,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import threading
 
 from openpyxl import load_workbook
 import pytest
@@ -101,6 +102,35 @@ def test_changeset_mcp_tool_defaults_to_preview(tmp_workbook):
     assert payload["data"]["mode"] == "preview"
     assert payload["data"]["ready_to_commit"] is True
     assert Path(tmp_workbook).read_bytes() == original_bytes
+
+
+def test_changeset_cell_assertions_distinguish_booleans_from_numbers(tmp_workbook):
+    result = apply_workbook_changeset(
+        tmp_workbook,
+        [
+            {
+                "tool": "write_data_to_excel",
+                "args": {
+                    "sheet_name": "Sheet1",
+                    "start_cell": "D1",
+                    "data": [[True]],
+                },
+            }
+        ],
+        [
+            {
+                "type": "cell_equals",
+                "sheet_name": "Sheet1",
+                "cell": "$D$1",
+                "expected": 1,
+            }
+        ],
+        create_snapshot=False,
+    )
+
+    assert result["ready_to_commit"] is False
+    assert result["assertions"][0]["passed"] is False
+    assert result["assertions"][0]["details"]["actual"] is True
 
 
 def test_changeset_preview_supports_explicit_noncontiguous_chart_series(tmp_workbook):
@@ -221,7 +251,26 @@ def test_changeset_commits_full_report_workflow_with_verified_snapshot(tmp_workb
             "type": "table_exists",
             "sheet_name": "Report",
             "table_name": "RevenueReport",
-            "range_ref": "A1:B3",
+            "range_ref": "$A$1:$B$3",
+        },
+        {
+            "type": "freeze_panes_equals",
+            "sheet_name": "Report",
+            "cell": "$A$2",
+        },
+        {
+            "type": "autofilter_equals",
+            "sheet_name": "Report",
+            "range_ref": "$A$1:$B$3",
+        },
+        {
+            "type": "chart_exists",
+            "sheet_name": "Report",
+            "chart_type": "BAR",
+            "target_cell": "$D$2",
+            "title": "Revenue by region",
+            "width": 12,
+            "height": 7,
         },
         {
             "type": "range_values_unchanged",
@@ -528,6 +577,135 @@ def test_changeset_rechecks_reused_snapshot_after_candidate_operations(
     _assert_no_changeset_artifacts(tmp_workbook)
 
 
+def test_changeset_removes_new_snapshot_when_source_recheck_fails(
+    tmp_workbook,
+    monkeypatch,
+):
+    source = Path(tmp_workbook).resolve()
+    original_bytes = source.read_bytes()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "data": [[1]], "start_cell": "D1"},
+        }
+    ]
+    preview = apply_workbook_changeset(tmp_workbook, operations)
+    snapshot_path = Path(preview["snapshot"]["path"])
+    original_sha256_file = changeset_module._sha256_file
+    source_digest_calls = 0
+
+    def report_drift_after_snapshot(path: Path) -> str:
+        nonlocal source_digest_calls
+        if path.resolve() == source:
+            source_digest_calls += 1
+            if source_digest_calls == 2:
+                return "0" * 64
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(changeset_module, "_sha256_file", report_drift_after_snapshot)
+
+    with pytest.raises(PreconditionFailedError) as exc_info:
+        apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            mode="commit",
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+            changeset_token=preview["changeset_token"],
+        )
+
+    assert exc_info.value.code == "stale_workbook"
+    assert exc_info.value.details["snapshot_cleanup"]["status"] == "removed"
+    assert source.read_bytes() == original_bytes
+    assert not snapshot_path.exists()
+    _assert_no_changeset_artifacts(source)
+
+
+def test_changeset_never_deletes_snapshot_changed_by_another_actor(
+    tmp_workbook,
+    monkeypatch,
+):
+    source = Path(tmp_workbook).resolve()
+    original_bytes = source.read_bytes()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "data": [[1]], "start_cell": "D1"},
+        }
+    ]
+    preview = apply_workbook_changeset(tmp_workbook, operations)
+    snapshot_path = Path(preview["snapshot"]["path"])
+    changed_snapshot = b"changed by another actor"
+    original_sha256_file = changeset_module._sha256_file
+    source_digest_calls = 0
+
+    def report_drift_and_change_snapshot(path: Path) -> str:
+        nonlocal source_digest_calls
+        if path.resolve() == source:
+            source_digest_calls += 1
+            if source_digest_calls == 2:
+                snapshot_path.write_bytes(changed_snapshot)
+                return "0" * 64
+        return original_sha256_file(path)
+
+    monkeypatch.setattr(
+        changeset_module,
+        "_sha256_file",
+        report_drift_and_change_snapshot,
+    )
+
+    with pytest.raises(PreconditionFailedError) as exc_info:
+        apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            mode="commit",
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+            changeset_token=preview["changeset_token"],
+        )
+
+    assert exc_info.value.code == "stale_workbook"
+    assert exc_info.value.details["snapshot_cleanup"]["status"] == "retained"
+    assert snapshot_path.read_bytes() == changed_snapshot
+    assert source.read_bytes() == original_bytes
+    _assert_no_changeset_artifacts(source)
+
+
+def test_changeset_removes_new_snapshot_when_replace_fails(
+    tmp_workbook,
+    monkeypatch,
+):
+    source = Path(tmp_workbook).resolve()
+    original_bytes = source.read_bytes()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "data": [[1]], "start_cell": "D1"},
+        }
+    ]
+    preview = apply_workbook_changeset(tmp_workbook, operations)
+    snapshot_path = Path(preview["snapshot"]["path"])
+    original_replace = changeset_module.os.replace
+
+    def fail_source_replace(source_path, destination_path):
+        if Path(destination_path).resolve() == source:
+            raise OSError("simulated source replace failure")
+        return original_replace(source_path, destination_path)
+
+    monkeypatch.setattr(changeset_module.os, "replace", fail_source_replace)
+
+    with pytest.raises(WorkbookError, match="before replacing the original workbook"):
+        apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            mode="commit",
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+            changeset_token=preview["changeset_token"],
+        )
+
+    assert source.read_bytes() == original_bytes
+    assert not snapshot_path.exists()
+    _assert_no_changeset_artifacts(source)
+
+
 def test_changeset_preserves_source_symlink(tmp_workbook, tmp_path):
     alias = tmp_path / "alias.xlsx"
     try:
@@ -719,6 +897,89 @@ def test_changeset_cleans_baseline_if_candidate_temp_creation_fails(
     _assert_no_changeset_artifacts(tmp_workbook)
 
 
+def test_changeset_serializes_with_regular_sheetforge_writer(
+    tmp_workbook,
+    monkeypatch,
+):
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {
+                "sheet_name": "Sheet1",
+                "data": [["changeset"]],
+                "start_cell": "D1",
+            },
+        }
+    ]
+    preview = apply_workbook_changeset(
+        tmp_workbook, operations, create_snapshot=False
+    )
+    changeset_entered = threading.Event()
+    release_changeset = threading.Event()
+    writer_attempting = threading.Event()
+    writer_entered = threading.Event()
+    errors: list[BaseException] = []
+    original_apply_operations = changeset_module._apply_operations
+
+    def pause_changeset(*args, **kwargs):
+        changeset_entered.set()
+        if not release_changeset.wait(timeout=5):
+            raise TimeoutError("test did not release ChangeSet")
+        return original_apply_operations(*args, **kwargs)
+
+    monkeypatch.setattr(changeset_module, "_apply_operations", pause_changeset)
+
+    def commit_changeset() -> None:
+        try:
+            apply_workbook_changeset(
+                tmp_workbook,
+                operations,
+                mode="commit",
+                expected_workbook_sha256=preview["expected_workbook_sha256"],
+                changeset_token=preview["changeset_token"],
+                create_snapshot=False,
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def run_regular_writer() -> None:
+        try:
+            writer_attempting.set()
+            with changeset_module.workbook_module.safe_workbook(
+                tmp_workbook, save=True
+            ) as wb:
+                writer_entered.set()
+                wb["Sheet1"]["E1"] = "regular writer"
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    changeset_thread = threading.Thread(target=commit_changeset)
+    writer_thread = threading.Thread(target=run_regular_writer)
+    changeset_thread.start()
+    try:
+        assert changeset_entered.wait(timeout=5)
+        writer_thread.start()
+        assert writer_attempting.wait(timeout=5)
+        assert not writer_entered.wait(timeout=0.2)
+    finally:
+        release_changeset.set()
+
+    changeset_thread.join(timeout=5)
+    writer_thread.join(timeout=5)
+    assert not changeset_thread.is_alive()
+    assert not writer_thread.is_alive()
+    assert errors == []
+    assert writer_entered.is_set()
+
+    wb = load_workbook(tmp_workbook)
+    try:
+        assert wb["Sheet1"]["D1"].value == "changeset"
+        assert wb["Sheet1"]["E1"].value == "regular writer"
+    finally:
+        wb.close()
+    _assert_no_changeset_artifacts(tmp_workbook)
+
+
 @pytest.mark.parametrize(
     "operations,match",
     [
@@ -778,6 +1039,15 @@ def test_changeset_cleans_baseline_if_candidate_temp_creation_fails(
                 }
             ],
             "must stay inside Excel's",
+        ),
+        (
+            [
+                {
+                    "tool": "freeze_panes",
+                    "args": {"sheet_name": "Sheet1", "cell": []},
+                }
+            ],
+            "must be a non-empty string",
         ),
     ],
 )

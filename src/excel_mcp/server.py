@@ -1765,7 +1765,8 @@ def apply_workbook_changeset(
     create_worksheet, write_data_to_excel, format_range, format_ranges, freeze_panes,
     set_autofilter, set_column_widths, set_row_heights, autofit_columns, create_table,
     and create_chart. Assertions support sheet_exists, cell_equals, range_equals,
-    range_values_unchanged, table_exists, and no_cell_ref_errors.
+    range_values_unchanged, table_exists, freeze_panes_equals, autofilter_equals,
+    chart_exists, and no_cell_ref_errors.
 
     Call preview first. Commit the identical plan with expected_workbook_sha256 and
     changeset_token from that preview. Snapshot creation defaults to enabled.

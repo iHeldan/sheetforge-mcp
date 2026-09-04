@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -20,7 +21,13 @@ from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 
 from . import workbook as workbook_module
-from .chart import create_chart_in_sheet
+from .chart import (
+    _chart_type_name,
+    _extract_chart_anchor,
+    _extract_chart_dimensions,
+    _extract_title_text,
+    create_chart_in_sheet,
+)
 from .data import write_data
 from .exceptions import (
     PreconditionFailedError,
@@ -142,6 +149,26 @@ _ASSERTION_SPECS: dict[str, tuple[set[str], set[str]]] = {
         {"type", "table_name", "sheet_name", "range_ref"},
         {"type", "table_name"},
     ),
+    "freeze_panes_equals": (
+        {"type", "sheet_name", "cell"},
+        {"type", "sheet_name", "cell"},
+    ),
+    "autofilter_equals": (
+        {"type", "sheet_name", "range_ref"},
+        {"type", "sheet_name", "range_ref"},
+    ),
+    "chart_exists": (
+        {
+            "type",
+            "sheet_name",
+            "chart_type",
+            "target_cell",
+            "title",
+            "width",
+            "height",
+        },
+        {"type", "sheet_name"},
+    ),
     "no_cell_ref_errors": (
         {"type", "sheet_name", "range_ref"},
         {"type"},
@@ -220,6 +247,35 @@ def _single_cell_bounds(cell_ref: Any, *, location: str) -> tuple[int, int]:
     if min_col != max_col or min_row != max_row:
         raise ValidationError(f"{location} must identify exactly one cell")
     return min_col, min_row
+
+
+def _canonical_range_ref(range_ref: Any, *, location: str) -> str:
+    min_col, min_row, max_col, max_row = _range_bounds(
+        range_ref, location=location
+    )
+    start = f"{get_column_letter(min_col)}{min_row}"
+    end = f"{get_column_letter(max_col)}{max_row}"
+    return start if start == end else f"{start}:{end}"
+
+
+def _canonical_freeze_cell(cell_ref: Any, *, location: str) -> str | None:
+    if cell_ref is None or cell_ref == "":
+        return None
+    canonical = _canonical_range_ref(cell_ref, location=location)
+    if ":" in canonical:
+        raise ValidationError(f"{location} must identify exactly one cell")
+    return None if canonical == "A1" else canonical
+
+
+def _validate_positive_number(value: Any, *, location: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValidationError(f"{location} must be a positive finite number")
+    return float(value)
 
 
 def _format_range_ref(operation: dict[str, Any], *, location: str) -> str:
@@ -339,10 +395,10 @@ def _normalize_operations(operations: Any) -> list[dict[str, Any]]:
                 normalized_args.get("data_range"),
                 location=f"{location}.args.data_range",
             )
-        elif tool == "freeze_panes" and normalized_args.get("cell") not in {
+        elif tool == "freeze_panes" and normalized_args.get("cell") not in (
             None,
             "",
-        }:
+        ):
             _single_cell_bounds(
                 normalized_args["cell"], location=f"{location}.args.cell"
             )
@@ -414,7 +470,11 @@ def _normalize_assertions(assertions: Any) -> list[dict[str, Any]]:
                     f"{location}.sheet_type must be any, worksheet, or chartsheet"
                 )
         elif assertion_type == "cell_equals":
-            _single_cell_bounds(assertion["cell"], location=f"{location}.cell")
+            assertion["cell"] = _canonical_range_ref(
+                assertion["cell"], location=f"{location}.cell"
+            )
+            if ":" in assertion["cell"]:
+                raise ValidationError(f"{location}.cell must identify exactly one cell")
         elif assertion_type in {"range_equals", "range_values_unchanged"}:
             cell_count = _range_cell_count(
                 assertion["range_ref"], location=f"{location}.range_ref"
@@ -440,12 +500,46 @@ def _normalize_assertions(assertions: Any) -> list[dict[str, Any]]:
                         f"{location}.expected shape must match {assertion['range_ref']} "
                         f"({expected_rows} row(s) x {expected_cols} column(s))"
                     )
+            assertion["range_ref"] = _canonical_range_ref(
+                assertion["range_ref"], location=f"{location}.range_ref"
+            )
         elif assertion_type == "table_exists":
             _validate_non_empty_string(
                 assertion["table_name"], location=f"{location}.table_name"
             )
             if "range_ref" in assertion:
-                _range_bounds(assertion["range_ref"], location=f"{location}.range_ref")
+                assertion["range_ref"] = _canonical_range_ref(
+                    assertion["range_ref"], location=f"{location}.range_ref"
+                )
+        elif assertion_type == "freeze_panes_equals":
+            assertion["cell"] = _canonical_freeze_cell(
+                assertion["cell"], location=f"{location}.cell"
+            )
+        elif assertion_type == "autofilter_equals":
+            assertion["range_ref"] = _canonical_range_ref(
+                assertion["range_ref"], location=f"{location}.range_ref"
+            )
+        elif assertion_type == "chart_exists":
+            if "chart_type" in assertion:
+                _validate_non_empty_string(
+                    assertion["chart_type"], location=f"{location}.chart_type"
+                )
+                assertion["chart_type"] = assertion["chart_type"].strip().lower()
+            if "target_cell" in assertion:
+                assertion["target_cell"] = _canonical_range_ref(
+                    assertion["target_cell"], location=f"{location}.target_cell"
+                )
+                if ":" in assertion["target_cell"]:
+                    raise ValidationError(
+                        f"{location}.target_cell must identify exactly one cell"
+                    )
+            if "title" in assertion and not isinstance(assertion["title"], str):
+                raise ValidationError(f"{location}.title must be a string")
+            for dimension in ("width", "height"):
+                if dimension in assertion:
+                    assertion[dimension] = _validate_positive_number(
+                        assertion[dimension], location=f"{location}.{dimension}"
+                    )
         elif assertion_type == "no_cell_ref_errors" and "range_ref" in assertion:
             cell_count = _range_cell_count(
                 assertion["range_ref"], location=f"{location}.range_ref"
@@ -454,6 +548,9 @@ def _normalize_assertions(assertions: Any) -> list[dict[str, Any]]:
                 raise ValidationError(
                     f"{location}.range_ref exceeds the {MAX_ASSERTED_RANGE_CELLS}-cell assertion limit"
                 )
+            assertion["range_ref"] = _canonical_range_ref(
+                assertion["range_ref"], location=f"{location}.range_ref"
+            )
 
         normalized.append(assertion)
     return normalized
@@ -828,6 +925,12 @@ def _range_values(ws: Worksheet, range_ref: str) -> list[list[Any]]:
     ]
 
 
+def _cell_values_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    return left == right
+
+
 def _assert_sheet_exists(wb: Any, assertion: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
     sheet_name = assertion["sheet_name"]
     if sheet_name not in wb.sheetnames:
@@ -851,7 +954,7 @@ def _assert_cell_equals(wb: Any, assertion: dict[str, Any]) -> tuple[bool, dict[
         assertion["cell"], location="assertion cell"
     )
     actual = ws.cell(row=min_row, column=min_col).value
-    return actual == assertion["expected"], {
+    return _cell_values_equal(actual, assertion["expected"]), {
         "sheet_name": assertion["sheet_name"],
         "cell": assertion["cell"],
         "expected": _bound_response_value(assertion["expected"]),
@@ -876,7 +979,7 @@ def _range_comparison_details(
         for column_offset, (before_value, after_value) in enumerate(
             zip(before_row, after_row)
         ):
-            if before_value == after_value:
+            if _cell_values_equal(before_value, after_value):
                 continue
             mismatch_count += 1
             if len(mismatches) < sample_limit:
@@ -972,6 +1075,114 @@ def _assert_table_exists(wb: Any, assertion: dict[str, Any]) -> tuple[bool, dict
     }
 
 
+def _assert_freeze_panes_equals(
+    wb: Any,
+    assertion: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    ws = _worksheet_or_none(wb, assertion["sheet_name"])
+    if ws is None:
+        return False, {"reason": f"Worksheet '{assertion['sheet_name']}' does not exist"}
+    actual_value = ws.freeze_panes
+    if hasattr(actual_value, "coordinate"):
+        actual_value = actual_value.coordinate
+    actual = _canonical_freeze_cell(actual_value, location="worksheet freeze panes")
+    expected = assertion["cell"]
+    return actual == expected, {
+        "sheet_name": assertion["sheet_name"],
+        "expected_cell": expected,
+        "actual_cell": actual,
+    }
+
+
+def _assert_autofilter_equals(
+    wb: Any,
+    assertion: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    ws = _worksheet_or_none(wb, assertion["sheet_name"])
+    if ws is None:
+        return False, {"reason": f"Worksheet '{assertion['sheet_name']}' does not exist"}
+    actual_ref = ws.auto_filter.ref
+    actual = (
+        _canonical_range_ref(actual_ref, location="worksheet autofilter")
+        if actual_ref
+        else None
+    )
+    expected = assertion["range_ref"]
+    return actual == expected, {
+        "sheet_name": assertion["sheet_name"],
+        "expected_range": expected,
+        "actual_range": actual,
+    }
+
+
+def _chart_matches_assertion(
+    chart: Any,
+    assertion: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    width, height = _extract_chart_dimensions(chart)
+    metadata = {
+        "chart_type": _chart_type_name(chart),
+        "target_cell": _extract_chart_anchor(chart),
+        "title": _extract_title_text(getattr(chart, "title", None)),
+        "width": width,
+        "height": height,
+    }
+    for field in ("chart_type", "target_cell"):
+        if field in assertion and metadata[field] != assertion[field]:
+            return False, metadata
+    if "title" in assertion:
+        expected_title = assertion["title"] or None
+        if metadata["title"] != expected_title:
+            return False, metadata
+    for dimension in ("width", "height"):
+        if dimension not in assertion:
+            continue
+        actual_dimension = metadata[dimension]
+        if actual_dimension is None or not math.isclose(
+            actual_dimension,
+            assertion[dimension],
+            rel_tol=1e-6,
+            abs_tol=0.01,
+        ):
+            return False, metadata
+    return True, metadata
+
+
+def _assert_chart_exists(
+    wb: Any,
+    assertion: dict[str, Any],
+    *,
+    sample_limit: int,
+) -> tuple[bool, dict[str, Any]]:
+    ws = _worksheet_or_none(wb, assertion["sheet_name"])
+    if ws is None:
+        return False, {"reason": f"Worksheet '{assertion['sheet_name']}' does not exist"}
+
+    inspected: list[dict[str, Any]] = []
+    matches: list[dict[str, Any]] = []
+    for chart_index, chart in enumerate(getattr(ws, "_charts", []), start=1):
+        matched, metadata = _chart_matches_assertion(chart, assertion)
+        item = {"chart_index": chart_index, **metadata}
+        inspected.append(item)
+        if matched:
+            matches.append(item)
+
+    expected = {
+        key: assertion[key]
+        for key in ("chart_type", "target_cell", "title", "width", "height")
+        if key in assertion
+    }
+    return bool(matches), {
+        "sheet_name": assertion["sheet_name"],
+        "expected": expected,
+        "match_count": len(matches),
+        "matches": matches[:sample_limit],
+        "inspected_chart_count": len(inspected),
+        "inspected": inspected[:sample_limit] if not matches else [],
+        "truncated": len(inspected) > sample_limit,
+    }
+
+
 def _assert_no_cell_ref_errors(
     wb: Any,
     assertion: dict[str, Any],
@@ -1059,10 +1270,26 @@ def _evaluate_assertions(
                 )
             elif assertion_type == "table_exists":
                 passed, details = _assert_table_exists(candidate_wb, assertion)
-            else:
+            elif assertion_type == "freeze_panes_equals":
+                passed, details = _assert_freeze_panes_equals(
+                    candidate_wb, assertion
+                )
+            elif assertion_type == "autofilter_equals":
+                passed, details = _assert_autofilter_equals(
+                    candidate_wb, assertion
+                )
+            elif assertion_type == "chart_exists":
+                passed, details = _assert_chart_exists(
+                    candidate_wb,
+                    assertion,
+                    sample_limit=sample_limit,
+                )
+            elif assertion_type == "no_cell_ref_errors":
                 passed, details = _assert_no_cell_ref_errors(
                     candidate_wb, assertion, sample_limit=sample_limit
                 )
+            else:  # pragma: no cover - normalization guarantees a known assertion type
+                raise AssertionError(f"Unhandled assertion type: {assertion_type}")
             results.append(
                 {
                     "index": index,
@@ -1129,6 +1356,55 @@ def _create_or_reuse_snapshot(
         "sha256": result["sha256"],
         "reused": False,
     }
+
+
+def _discard_uncommitted_snapshot(snapshot_result: dict[str, Any] | None) -> dict[str, Any]:
+    if snapshot_result is None or snapshot_result.get("status") != "created":
+        return {"attempted": False, "status": "not_created"}
+
+    path = Path(snapshot_result["path"])
+    cleanup = {"attempted": True, "path": str(path)}
+    try:
+        if not path.exists() and not path.is_symlink():
+            return {**cleanup, "status": "already_absent"}
+        if path.is_symlink() or not path.is_file():
+            return {
+                **cleanup,
+                "status": "retained",
+                "reason": "snapshot path changed type before cleanup",
+            }
+
+        stat_before = path.stat()
+        actual_sha256 = _sha256_file(path)
+        stat_after = path.stat()
+        if workbook_module._file_identity(stat_before) != workbook_module._file_identity(
+            stat_after
+        ):
+            return {
+                **cleanup,
+                "status": "retained",
+                "reason": "snapshot changed while cleanup was being verified",
+            }
+        if actual_sha256 != snapshot_result.get("sha256"):
+            return {
+                **cleanup,
+                "status": "retained",
+                "reason": "snapshot content changed before cleanup",
+                "actual_sha256": actual_sha256,
+            }
+
+        path.unlink()
+        workbook_module._fsync_directory(path.parent)
+        return {**cleanup, "status": "removed"}
+    except FileNotFoundError:
+        return {**cleanup, "status": "already_absent"}
+    except OSError as exc:
+        logger.warning("Unable to remove uncommitted ChangeSet snapshot '%s': %s", path, exc)
+        return {
+            **cleanup,
+            "status": "retained",
+            "reason": f"snapshot cleanup failed: {exc!s}",
+        }
 
 
 def _restore_baseline(source: Path, baseline: Path, *, expected_sha256: str) -> None:
@@ -1465,25 +1741,26 @@ def apply_workbook_changeset(
                     },
                     suggested_next_tool="apply_workbook_changeset",
                 )
-            snapshot_result = _create_or_reuse_snapshot(
-                baseline,
-                snapshot,
-                source_sha256=source_sha256,
-            )
-            live_sha256 = _sha256_file(source)
-            if live_sha256 != source_sha256:
-                raise PreconditionFailedError(
-                    "Workbook changed while the ChangeSet snapshot was being prepared; no changes were committed",
-                    code="stale_workbook",
-                    details={
-                        "expected_workbook_sha256": source_sha256,
-                        "actual_workbook_sha256": live_sha256,
-                    },
-                    suggested_next_tool="apply_workbook_changeset",
-                )
-
+            snapshot_result: dict[str, Any] | None = None
             destination_replaced = False
             try:
+                snapshot_result = _create_or_reuse_snapshot(
+                    baseline,
+                    snapshot,
+                    source_sha256=source_sha256,
+                )
+                live_sha256 = _sha256_file(source)
+                if live_sha256 != source_sha256:
+                    raise PreconditionFailedError(
+                        "Workbook changed while the ChangeSet snapshot was being prepared; no changes were committed",
+                        code="stale_workbook",
+                        details={
+                            "expected_workbook_sha256": source_sha256,
+                            "actual_workbook_sha256": live_sha256,
+                        },
+                        suggested_next_tool="apply_workbook_changeset",
+                    )
+
                 os.replace(candidate, source)
                 destination_replaced = True
                 workbook_module._fsync_directory(source.parent)
@@ -1501,9 +1778,31 @@ def apply_workbook_changeset(
                 after_sha256 = _sha256_file(source)
             except Exception as commit_error:
                 if not destination_replaced:
+                    snapshot_cleanup = _discard_uncommitted_snapshot(snapshot_result)
+                    if isinstance(commit_error, PreconditionFailedError):
+                        if snapshot_cleanup["attempted"]:
+                            commit_error.details = {
+                                **commit_error.details,
+                                "snapshot_cleanup": snapshot_cleanup,
+                            }
+                        if snapshot_cleanup["status"] == "retained":
+                            raise PreconditionFailedError(
+                                f"{commit_error!s}. Uncommitted snapshot retained at "
+                                f"{snapshot_cleanup['path']}: {snapshot_cleanup['reason']}",
+                                code=commit_error.code,
+                                details=commit_error.details,
+                                suggested_next_tool=commit_error.suggested_next_tool,
+                            ) from commit_error
+                        raise
+                    cleanup_note = ""
+                    if snapshot_cleanup["status"] == "retained":
+                        cleanup_note = (
+                            f" Uncommitted snapshot retained at {snapshot_cleanup['path']}: "
+                            f"{snapshot_cleanup['reason']}"
+                        )
                     raise WorkbookError(
                         "ChangeSet commit failed before replacing the original workbook: "
-                        f"{commit_error!s}"
+                        f"{commit_error!s}.{cleanup_note}"
                     ) from commit_error
                 try:
                     _restore_baseline(
@@ -1515,9 +1814,14 @@ def apply_workbook_changeset(
                         "ChangeSet verification failed and rollback could not be verified. "
                         f"Recovery baseline retained at {baseline}: {rollback_error!s}"
                     ) from rollback_error
+                snapshot_note = ""
+                if snapshot_result is not None and snapshot_result.get("enabled"):
+                    snapshot_note = (
+                        f" Verified snapshot retained at {snapshot_result['path']}."
+                    )
                 raise WorkbookError(
                     "ChangeSet commit verification failed; the original workbook was restored: "
-                    f"{commit_error!s}"
+                    f"{commit_error!s}.{snapshot_note}"
                 ) from commit_error
 
             committed_at = datetime.now(timezone.utc).isoformat()
