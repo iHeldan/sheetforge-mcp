@@ -73,6 +73,34 @@ def test_snapshot_tool_contains_both_paths_inside_file_transport(tmp_path, monke
     assert not (tmp_path / "outside.xlsx").exists()
 
 
+def test_changeset_tool_contains_custom_snapshot_inside_file_transport(
+    tmp_path,
+    monkeypatch,
+):
+    base_path = tmp_path / "excel-files"
+    base_path.mkdir()
+    monkeypatch.setattr(server_module, "EXCEL_FILES_PATH", str(base_path))
+    created = json.loads(server_module.create_workbook("source.xlsx"))
+    assert created["ok"] is True
+
+    payload = json.loads(
+        server_module.apply_workbook_changeset(
+            "source.xlsx",
+            [
+                {
+                    "tool": "write_data_to_excel",
+                    "args": {"sheet_name": "Sheet1", "data": [[1]]},
+                }
+            ],
+            snapshot_filepath="../outside.xlsx",
+        )
+    )
+
+    assert payload["ok"] is False
+    assert "must stay within EXCEL_FILES_PATH" in payload["error"]["message"]
+    assert not (tmp_path / "outside.xlsx").exists()
+
+
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10", "sheetforge.local"])
 def test_remote_binding_requires_explicit_opt_in(monkeypatch, host):
     monkeypatch.setenv("FASTMCP_HOST", host)

@@ -11,11 +11,12 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
 Published package release: `0.9.0`
-Repository docs track the current main-branch tool surface, which currently exposes `77` MCP tools.
+Repository docs track the current main-branch tool surface, which currently exposes `78` MCP tools.
 
 ## Why SheetForge
 
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
+- verified multi-step edits via `apply_workbook_changeset`: preview the complete candidate, assertions, structural diff, and sampled cell changes, then commit that exact plan only if the source workbook still matches
 - safer workbook creation and baselines: `create_workbook` refuses to overwrite an existing `.xlsx`, while `create_workbook_snapshot` creates a verified non-overwriting copy for before/after validation
 - serialized workbook mutation: same-host writers lock each workbook before loading it, then keep the lock through atomic replace and reopen verification so concurrent agents do not silently overwrite one another
 - smarter worksheet boundaries with bounded `strict`, `default`, and `extended` read presets plus compact metadata for any trailing blocks that were intentionally left out
@@ -140,9 +141,9 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 77 MCP tools across these groups:
+The server currently registers 78 MCP tools across these groups:
 
-- workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
+- workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `apply_workbook_changeset`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
 - data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, `cross_workbook_lookup`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `append_excel_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `format_ranges`, `read_range_formatting`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
@@ -173,6 +174,7 @@ The most agent-friendly read tools are:
 - `audit_workbook`: workbook-level audit for high-signal problems such as broken `#REF!` formulas, error cells, hidden sheets, header-quality issues, layout-heavy sheets, and named ranges that reference missing sheets
 - `plan_workbook_repairs`: converts workbook audit findings into prioritized next steps, including suggested SheetForge tool calls for inspection, safe dry runs, and repair workflows
 - `apply_workbook_repairs`: dry-runs or applies the safe repair subset from those plans, including broken named ranges, broken validation rules, broken conditional formats, and optional hidden-sheet reveals
+- `apply_workbook_changeset`: previews a bounded multi-tool report mutation on an isolated candidate, evaluates explicit postconditions, and commits it with exact-file stale-write protection plus optional verified snapshot and rollback
 - `diff_workbooks`: compares two workbook files and reports structural changes plus sampled cell-value diffs, which is useful for before/after verification in agent workflows
 - `create_workbook_snapshot`: creates the verified, non-overwriting baseline that makes `diff_workbooks` usable without an external copy script
 - `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, data validations, conditional formats, autofilters, print areas, formula cells inside the range, and formulas or rule expressions elsewhere that depend on it directly or transitively, through named ranges, or through structured table references such as `Table1[Sales]`
@@ -237,8 +239,8 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 
 ## Recommended Agent Workflows
 
-1. Unfamiliar workbook -> safe mutation -> verification
-   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, run `analyze_range_impact`, create a baseline with `create_workbook_snapshot`, perform the mutation, then compare the snapshot and live workbook with `diff_workbooks`.
+1. Unfamiliar workbook -> verified multi-step mutation
+   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, and run `analyze_range_impact`. Put supported report-building edits and explicit postconditions into `apply_workbook_changeset(mode="preview")`; if `ready_to_commit=true`, repeat the same plan with `mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from the preview.
 2. Workbook repair loop
    Use `audit_workbook` to find high-signal issues, `plan_workbook_repairs` to turn them into an action queue, `apply_workbook_repairs(..., dry_run=True)` to preview the safe subset, then rerun `audit_workbook` after applying repairs to confirm the workbook is back to a low-risk state.
 3. Multi-workbook reporting
@@ -320,6 +322,7 @@ uv build
 
 - `src/excel_mcp/server.py`: MCP server, transport setup, and tool registration
 - `src/excel_mcp/workbook.py`: workbook lifecycle helpers and workbook metadata
+- `src/excel_mcp/changeset.py`: verified multi-operation preview/commit transactions and assertions
 - `src/excel_mcp/data.py`: read, write, table, and search helpers
 - `src/excel_mcp/sheet.py`: worksheet and range mutations
 - `tests/`: regression tests covering data, layout, charts, pivots, formatting, tables, and resource safety
@@ -333,6 +336,7 @@ uv build
 - agent-friendly responses: consistent JSON envelopes, compact writes, and `dry_run` previews reduce context waste
 - workbook introspection: `profile_workbook`, `list_all_sheets`, `list_tables`, and `list_charts` make unfamiliar spreadsheets easier to navigate
 - safer edits: `analyze_range_impact` gives agents a read-only preflight before overwriting, deleting, or restructuring an important range, including downstream formula chains plus validation-rule and conditional-format references elsewhere in the workbook even when formulas point at the range through named ranges or structured table references
+- verified transactions: `apply_workbook_changeset` binds a bounded operation/assertion plan to the canonical target path and exact source SHA-256, tests it on an isolated candidate, and replaces the source once only after all checks pass
 - layout planning: `find_free_canvas` suggests safe empty slots for charts or dashboard blocks before you place them, defaulting to the standard chart footprint when you omit explicit sizing
 - practical Excel output: formatting, print setup, worksheet protection, table upserts, chart authoring, and autofit helpers cover real reporting workflows
 - Python ecosystem fit: built on `openpyxl`, packaged for `uvx`, and easy to run locally over `stdio` or through a deliberately gated HTTP deployment

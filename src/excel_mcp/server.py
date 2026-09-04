@@ -4,7 +4,7 @@ import json
 import ipaddress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -29,6 +29,7 @@ from excel_mcp.validation import (
     validate_range_in_sheet_operation as validate_range_impl
 )
 from excel_mcp.calculations import inspect_formula as inspect_formula_impl
+from excel_mcp.changeset import apply_workbook_changeset as apply_workbook_changeset_impl
 from excel_mcp.chart import (
     create_chart_from_series as create_chart_from_series_impl,
     create_chart_in_sheet as create_chart_impl,
@@ -262,6 +263,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         "audit_workbook",
         "plan_workbook_repairs",
         "apply_workbook_repairs",
+        "apply_workbook_changeset",
         "diff_workbooks",
         "inspect_named_range",
         "inspect_data_validation_rules",
@@ -270,8 +272,16 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         "list_tables",
         "list_charts",
     }:
-        if operation in {"audit_workbook", "plan_workbook_repairs", "apply_workbook_repairs", "diff_workbooks"}:
+        if operation in {
+            "audit_workbook",
+            "plan_workbook_repairs",
+            "apply_workbook_repairs",
+            "apply_workbook_changeset",
+            "diff_workbooks",
+        }:
             hints.append("set sample_limit to return a smaller audit sample")
+        if operation == "apply_workbook_changeset":
+            hints.append("split the ChangeSet into smaller verified transactions")
         if operation == "diff_workbooks":
             hints.append("set include_cell_changes=False to skip cell-level diff sampling")
         hints.append("query a smaller workbook slice, such as one sheet or one table")
@@ -1727,6 +1737,55 @@ def apply_workbook_repairs(
             header_row=header_row,
             sample_limit=sample_limit,
             dry_run=dry_run,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        title="Apply Workbook ChangeSet",
+        destructiveHint=True,
+    ),
+)
+def apply_workbook_changeset(
+    filepath: str,
+    operations: List[Dict[str, Any]],
+    assertions: Optional[List[Dict[str, Any]]] = None,
+    mode: Literal["preview", "commit"] = "preview",
+    expected_workbook_sha256: Optional[str] = None,
+    changeset_token: Optional[str] = None,
+    create_snapshot: bool = True,
+    snapshot_filepath: Optional[str] = None,
+    sample_limit: int = 25,
+) -> str:
+    """Preview or commit an assertion-backed group of workbook mutations as one transaction.
+
+    Each operation is {"tool": "name", "args": {...}}. Supported tool names are
+    create_worksheet, write_data_to_excel, format_range, format_ranges, freeze_panes,
+    set_autofilter, set_column_widths, set_row_heights, autofit_columns, create_table,
+    and create_chart. Assertions support sheet_exists, cell_equals, range_equals,
+    range_values_unchanged, table_exists, and no_cell_ref_errors.
+
+    Call preview first. Commit the identical plan with expected_workbook_sha256 and
+    changeset_token from that preview. Snapshot creation defaults to enabled.
+    """
+    return _run_tool(
+        "apply_workbook_changeset",
+        lambda: apply_workbook_changeset_impl(
+            get_excel_path(filepath),
+            operations=operations,
+            assertions=assertions,
+            mode=mode,
+            expected_workbook_sha256=expected_workbook_sha256,
+            changeset_token=changeset_token,
+            create_snapshot=create_snapshot,
+            snapshot_filepath=(
+                get_excel_path(snapshot_filepath)
+                if snapshot_filepath is not None
+                else None
+            ),
+            sample_limit=sample_limit,
         ),
     )
 

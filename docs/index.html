@@ -240,10 +240,10 @@
         </p>
         <p>
           Published package release: <strong>0.9.0</strong>. The repository currently
-          exposes <strong>77 MCP tools</strong>, including smart read-strategy suggestions,
+          exposes <strong>78 MCP tools</strong>, including smart read-strategy suggestions,
           lightweight dataset summaries, declarative table queries, grouped aggregates,
           cross-workbook aggregation, cross-workbook filtering, cross-workbook unions, cross-workbook lookups, workbook profiling, repair
-          planning and execution, verified workbook snapshots, workbook diffs, formula-lineage debugging,
+          planning and execution, assertion-backed ChangeSet previews and commits, verified workbook snapshots, workbook diffs, formula-lineage debugging,
           formula-string inspection, circular-dependency detection, named-range creation,
           native-table appends and upserts,
           guarded worksheet-boundary presets, compact mutation responses, grouped formatting readback, sheet-layout summaries,
@@ -261,7 +261,7 @@
         <h2>At a glance</h2>
         <ul class="meta-list">
           <li>Python 3.10+</li>
-          <li>77 MCP tools</li>
+          <li>78 MCP tools</li>
           <li>Smart dataset summaries and read-strategy guidance</li>
           <li>Supports `stdio`, `streamable-http`, and deprecated `sse`</li>
           <li>Uniform JSON envelopes for every tool response</li>
@@ -292,6 +292,7 @@
           <li><strong>`audit_workbook`</strong><br>Workbook-wide preflight for broken references, hidden sheets, header issues, and layout-heavy tabs.</li>
           <li><strong>`plan_workbook_repairs`</strong><br>Turn audit findings into a prioritized SheetForge repair and inspection queue.</li>
           <li><strong>`apply_workbook_repairs`</strong><br>Dry-run or apply safe workbook cleanup actions with audit summaries and structural diffs.</li>
+          <li><strong>`apply_workbook_changeset`</strong><br>Preview a multi-step edit with assertions and a diff, then commit that exact plan only if the source workbook is unchanged.</li>
           <li><strong>`diff_workbooks`</strong><br>Compare workbook versions and sample the actual before/after cell-value changes.</li>
           <li><strong>`create_workbook_snapshot`</strong><br>Create a verified, non-overwriting baseline before risky workbook edits.</li>
           <li><strong>`explain_formula_cell`</strong><br>Trace a formula cell through named ranges, structured references, upstream formula cells, compact formula-chain layers and sampled paths, and downstream dependents.</li>

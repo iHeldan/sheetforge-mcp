@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Added `apply_workbook_changeset`, a stateless preview/commit transaction for common report-building mutations. Preview runs the complete plan and assertions against an isolated workbook candidate without touching the source; commit requires the previewed exact-file SHA-256 and plan token, optionally creates a verified baseline snapshot, and replaces the original only after every operation and assertion succeeds.
+- Added compact ChangeSet assertions for sheet existence/type, exact cell and range values, unchanged protected cell-value ranges, native-table existence/range, and literal `#REF!` detection in cell values and formula text.
+
+### Changed
+
+- Added a deliberately narrow ChangeSet operation allowlist, bounded plan/write/format/assertion sizes, pre-commit response-budget checks, same-host workbook locking, source revalidation immediately before replace, and exact-byte rollback if post-replace verification fails.
+
 ## 0.9.0 - 2026-08-30
 
 ### Added

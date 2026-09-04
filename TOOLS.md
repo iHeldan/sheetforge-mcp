@@ -10,6 +10,7 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 - HTTP/SSE binds are loopback-only unless `SHEETFORGE_ALLOW_REMOTE=true` is set explicitly. That opt-in does not add authentication.
 - Destructive tools update the workbook on disk in place unless `dry_run=True`.
 - Workbook mutations are serialized per canonical workbook path on the same host with a bounded wait and persisted via verified atomic replace. If post-save verification and automatic rollback both fail, the recovery backup is retained and identified in the error.
+- `apply_workbook_changeset` adds exact-file optimistic concurrency for a bounded multi-operation plan. Its token is an integrity fingerprint, not an authentication credential or distributed cloud lock.
 - Every tool returns a JSON envelope with `ok`, `operation`, `message`, and `data`.
 
 ## Structured Output Shapes
@@ -184,6 +185,56 @@ Returns matches under `data.matches`:
   Turns workbook audit findings into prioritized next steps. The response includes ordered repair/inspection steps, suggested SheetForge tool calls, and a `quick_wins` list for issues that can be advanced entirely inside SheetForge.
 - `apply_workbook_repairs(filepath: str, repair_types: Optional[List[str]] = None, sheet_names: Optional[List[str]] = None, header_row: int = 1, sample_limit: int = 25, dry_run: bool = True) -> str`
   Dry-runs or applies the safe workbook-repair subset currently supported inside SheetForge: broken named ranges, broken data validation rules, broken conditional formatting rules, and optional hidden-sheet reveals. The response includes planned/applied actions, audit summary before and after, and a structural diff.
+- `apply_workbook_changeset(filepath: str, operations: List[Dict[str, Any]], assertions: Optional[List[Dict[str, Any]]] = None, mode: str = "preview", expected_workbook_sha256: Optional[str] = None, changeset_token: Optional[str] = None, create_snapshot: bool = True, snapshot_filepath: Optional[str] = None, sample_limit: int = 25) -> str`
+  Previews or commits a bounded, assertion-backed group of workbook edits. `mode="preview"` copies the exact source into an isolated candidate, runs every operation, checks every assertion, and returns `ready_to_commit`, `expected_workbook_sha256`, `changeset_token`, a structural diff, and sampled cell changes without changing the source. `mode="commit"` requires the same operations and assertions plus both identifiers returned by preview. It repeats the plan while holding the same-host workbook lock, rechecks the live source hash immediately before replacement, creates or reuses an exact matching verified snapshot by default, and replaces the source only after all preconditions pass. A failed post-replace verification triggers exact-byte rollback.
+
+  Each operation has the shape `{"tool": "...", "args": {...}}`. The v1 allowlist is intentionally limited to `create_worksheet`, `write_data_to_excel`, `format_range`, `format_ranges`, `freeze_panes`, `set_autofilter`, `set_column_widths`, `set_row_heights`, `autofit_columns`, `create_table`, and `create_chart`. Do not include `filepath`, `dry_run`, or `include_changes` inside operation arguments. `create_table` requires an explicit `table_name`, and ChangeSet formatting rejects `merge_cells=True` so preview and commit cannot hide value loss.
+
+  Assertions use one of these shapes:
+  - `{"type": "sheet_exists", "sheet_name": "Report", "sheet_type": "worksheet"}`
+  - `{"type": "cell_equals", "sheet_name": "Report", "cell": "B2", "expected": 120}`
+  - `{"type": "range_equals", "sheet_name": "Report", "range_ref": "A1:B2", "expected": [["Region", "Revenue"], ["North", 120]]}`
+  - `{"type": "range_values_unchanged", "sheet_name": "Raw", "range_ref": "A1:F100"}` checks cell values and formula text, not styles, comments, merges, or other presentation state
+  - `{"type": "table_exists", "table_name": "RevenueReport", "sheet_name": "Report", "range_ref": "A1:B3"}`
+  - `{"type": "no_cell_ref_errors", "sheet_name": "Report", "range_ref": "A1:Z100"}` checks instantiated cell values and formula text for literal `#REF!`; it does not replace `audit_workbook` for other workbook structures
+
+  A typical two-step call keeps `operations`, `assertions`, snapshot options, and target path identical between preview and commit:
+
+  ```json
+  {
+    "filepath": "/absolute/path/report.xlsx",
+    "mode": "preview",
+    "operations": [
+      {
+        "tool": "write_data_to_excel",
+        "args": {
+          "sheet_name": "Report",
+          "start_cell": "A1",
+          "data": [["Region", "Revenue"], ["North", 120]]
+        }
+      },
+      {
+        "tool": "format_range",
+        "args": {
+          "sheet_name": "Report",
+          "start_cell": "A1",
+          "end_cell": "B1",
+          "bold": true
+        }
+      }
+    ],
+    "assertions": [
+      {
+        "type": "cell_equals",
+        "sheet_name": "Report",
+        "cell": "B2",
+        "expected": 120
+      }
+    ]
+  }
+  ```
+
+  ChangeSet limits are 50 operations, 50 assertions, 50,000 written cells, 250,000 formatted cells, and 10,000 cells per range assertion. `sample_limit` is capped at 100. The server also validates response size before replace so a commit cannot succeed and then be reported as failed merely because its result was too large. The same-host lock serializes SheetForge writers; non-cooperating desktop or cloud editors are detected optimistically by source revalidation but are not governed by a distributed lock.
 - `diff_workbooks(before_filepath: str, after_filepath: str, sample_limit: int = 25, include_cell_changes: bool = True) -> str`
   Compares two workbook files and reports sheet/property changes, named-range changes, table/chart changes, validation and conditional-format changes, plus sampled cell-value diffs when `include_cell_changes=True`.
 - `create_workbook_snapshot(filepath: str, snapshot_filepath: str) -> str`
@@ -378,7 +429,7 @@ Returns matches under `data.matches`:
 - Use `set_print_area` and `set_print_titles` when the workbook is meant for printing, export, or PDF generation.
 - Use `get_worksheet_protection` before changing protection flags on an unfamiliar workbook.
 - Use `autofit_columns` after writing or formatting tables when you want readable output without hand-tuning widths.
-- A strong default edit workflow is `profile_workbook` -> `describe_sheet_layout` or `read_excel_table` -> `analyze_range_impact` -> `create_workbook_snapshot` -> mutate -> `diff_workbooks`.
+- A strong default edit workflow is `profile_workbook` -> `describe_sheet_layout` or `read_excel_table` -> `analyze_range_impact` -> `apply_workbook_changeset(mode="preview")` -> `apply_workbook_changeset(mode="commit")`.
 - A strong default repair workflow is `audit_workbook` -> `plan_workbook_repairs` -> `apply_workbook_repairs(dry_run=True)` -> `apply_workbook_repairs(dry_run=False)` -> `audit_workbook`.
 - A strong default reporting workflow is aggregate or join first with `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, or `cross_workbook_lookup`, then write the summary into a presentation sheet and finish with `format_ranges`, `find_free_canvas`, `create_chart`, and `autofit_columns`.
 - Use `search_in_sheet` to find a value before mutating a workbook.

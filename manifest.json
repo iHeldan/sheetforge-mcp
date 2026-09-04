@@ -32,6 +32,7 @@
     {"name": "audit_workbook", "description": "Audit workbook structure for high-signal issues that affect agent workflows"},
     {"name": "plan_workbook_repairs", "description": "Turn workbook audit findings into prioritized next steps for SheetForge workflows"},
     {"name": "apply_workbook_repairs", "description": "Dry-run or apply safe workbook repairs with before/after diff output"},
+    {"name": "apply_workbook_changeset", "description": "Preview or atomically commit an assertion-backed group of workbook mutations"},
     {"name": "diff_workbooks", "description": "Compare two workbooks and report structural plus sampled cell changes"},
     {"name": "create_workbook_snapshot", "description": "Create a verified, non-overwriting workbook snapshot for before/after validation"},
     {"name": "analyze_range_impact", "description": "Inspect workbook structures that overlap a worksheet range before mutation"},
