@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-09-04
+
 ### Added
 
 - Added `apply_workbook_changeset`, a stateless preview/commit transaction for common report-building mutations. Preview runs the complete plan and assertions against an isolated workbook candidate without touching the source; commit requires the previewed exact-file SHA-256 and plan token, optionally creates a verified baseline snapshot, and replaces the original only after every operation and assertion succeeds.

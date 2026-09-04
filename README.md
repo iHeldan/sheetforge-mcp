@@ -10,7 +10,7 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.9.0`
+Published package release: `0.10.0`
 Repository docs track the current main-branch tool surface, which currently exposes `78` MCP tools.
 
 ## Why SheetForge
