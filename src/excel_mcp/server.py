@@ -30,6 +30,7 @@ from excel_mcp.validation import (
 )
 from excel_mcp.calculations import inspect_formula as inspect_formula_impl
 from excel_mcp.changeset import apply_workbook_changeset as apply_workbook_changeset_impl
+from excel_mcp.recipes import run_workbook_recipe as run_workbook_recipe_impl
 from excel_mcp.chart import (
     create_chart_from_series as create_chart_from_series_impl,
     create_chart_in_sheet as create_chart_impl,
@@ -264,6 +265,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         "plan_workbook_repairs",
         "apply_workbook_repairs",
         "apply_workbook_changeset",
+        "run_workbook_recipe",
         "diff_workbooks",
         "inspect_named_range",
         "inspect_data_validation_rules",
@@ -277,11 +279,14 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             "plan_workbook_repairs",
             "apply_workbook_repairs",
             "apply_workbook_changeset",
+            "run_workbook_recipe",
             "diff_workbooks",
         }:
             hints.append("set sample_limit to return a smaller audit sample")
         if operation == "apply_workbook_changeset":
             hints.append("split the ChangeSet into smaller verified transactions")
+        if operation == "run_workbook_recipe":
+            hints.append("reduce sample_limit or the number of recipe fields/checks")
         if operation == "diff_workbooks":
             hints.append("set include_cell_changes=False to skip cell-level diff sampling")
         hints.append("query a smaller workbook slice, such as one sheet or one table")
@@ -1787,6 +1792,44 @@ def apply_workbook_changeset(
                 else None
             ),
             sample_limit=sample_limit,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(title="Run Workbook Recipe", destructiveHint=True),
+)
+def run_workbook_recipe(
+    filepath: str,
+    recipe: Dict[str, Any],
+    mode: Literal["preview", "commit"] = "preview",
+    expected_workbook_sha256: Optional[str] = None,
+    recipe_token: Optional[str] = None,
+    sample_limit: int = 5,
+) -> str:
+    """Preview or commit a reusable JSON recipe without echoing intermediate rows.
+
+    Recipe v1 requires version=1, source={table_name, optional sheet_name},
+    group_by=[exact header names], metrics=[{op, field, as}], and
+    output={sheet_name, range_ref, optional allow_overwrite=false}.
+    Optional filters use query_table operators; optional checks support unique_key
+    (fields), row_count (min/max), and sum_matches (source_field/output_field).
+    count metrics omit field. Other metrics: sum, avg, min, max, count_non_null,
+    count_distinct. Only literal finite JSON cells in referenced fields are supported.
+
+    Output is one reserved rectangle in the same workbook, fully replaced including
+    blank padding. Occupied output requires allow_overwrite=true; table/merge overlap
+    is rejected. Preview first, then commit the unchanged recipe with recipe_token
+    and expected_workbook_sha256 from preview. A verified snapshot is always enabled.
+    Limits: 50,000 source cells, 64 source columns, 10,000 output cells; sample_limit 1-10.
+    """
+    return _run_tool(
+        "run_workbook_recipe",
+        lambda: run_workbook_recipe_impl(
+            get_excel_path(filepath), recipe=recipe, mode=mode,
+            expected_workbook_sha256=expected_workbook_sha256,
+            recipe_token=recipe_token, sample_limit=sample_limit,
         ),
     )
 

@@ -1812,7 +1812,7 @@ def write_data(
                     row_idx = start_row + i
                     col_idx = start_col + j
                     old_value = None if existing_ws is None else existing_ws.cell(row=row_idx, column=col_idx).value
-                    if old_value != val:
+                    if old_value != val or isinstance(old_value, bool) != isinstance(val, bool):
                         changes.append(
                             _build_cell_change(
                                 sheet_name=sheet_name,
@@ -1871,7 +1871,7 @@ def _write_data_to_worksheet(
         # Write data
         for i, row in enumerate(data):
             for j, val in enumerate(row):
-                worksheet.cell(row=start_row + i, column=start_col + j, value=val)
+                worksheet.cell(row=start_row + i, column=start_col + j).value = val
     except DataError as e:
         logger.error(str(e))
         raise

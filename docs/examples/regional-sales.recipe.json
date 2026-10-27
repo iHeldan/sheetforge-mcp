@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "source": {"table_name": "Sales"},
+  "filters": [{"field": "Amount", "op": "gte", "value": 0}],
+  "group_by": ["Region"],
+  "metrics": [{"op": "sum", "field": "Amount", "as": "Revenue"}],
+  "output": {
+    "sheet_name": "Report",
+    "range_ref": "A1:B101",
+    "allow_overwrite": true
+  },
+  "checks": [
+    {"type": "unique_key", "fields": ["Id"]},
+    {"type": "row_count", "min": 1, "max": 100},
+    {"type": "sum_matches", "source_field": "Amount", "output_field": "Revenue"}
+  ]
+}

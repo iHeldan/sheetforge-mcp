@@ -760,7 +760,9 @@ def _assert_response_budget(payload: dict[str, Any]) -> None:
     encoded = json.dumps(
         payload,
         separators=(",", ":"),
-        ensure_ascii=False,
+        # Match the MCP envelope's escaping: non-ASCII characters can expand to
+        # six characters each, so UTF-8 byte size alone is not a safe wire bound.
+        ensure_ascii=True,
         default=str,
     ).encode("utf-8")
     if len(encoded) > MAX_CHANGESET_RESPONSE_BYTES:

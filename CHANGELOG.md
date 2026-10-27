@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- Added `run_workbook_recipe` for versioned JSON recipes that filter and aggregate one native Excel table directly into a reserved output range in the same workbook, without returning intermediate data through the model. Preview and commit use exact source/recipe preconditions and the existing verified ChangeSet snapshot/rollback path.
+- Added recipe checks for unique source keys, output row bounds, and sum reconciliation, plus full bounded column/row-order invariance probes, explicit header bindings, and sampled source-row lineage. Added a reusable JSON example and contract/limitations guide.
+
+### Fixed
+
+- Fixed raw cell writes so explicit nulls clear existing values and previews distinguish booleans from equal-valued numbers. Recipe output can now safely clear unused rows after a smaller recomputation.
+- Made ChangeSet response budgeting use the MCP envelope's ASCII escaping, preventing non-ASCII payload expansion from invalidating the size check after a mutation.
+- Made exact header matches take precedence over trimmed query/schema aliases, preserving recipe bindings for headers with surrounding whitespace.
+
 ## 0.10.0 - 2026-09-04
 
 ### Added

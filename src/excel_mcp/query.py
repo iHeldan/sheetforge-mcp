@@ -309,6 +309,11 @@ def _resolve_column(
         raise DataError(f"{argument_name} must be a non-empty string")
 
     lookup = _column_lookup(headers, schema)
+    # Preserve an exact header match before trimming or considering schema aliases.
+    # For example, " region " must not bind to another column's "region" alias.
+    if column_ref in lookup:
+        index = lookup[column_ref]
+        return index, "" if headers[index] is None else str(headers[index])
     normalized_ref = column_ref.strip()
     candidate_keys = [normalized_ref, normalized_ref.casefold()]
     for key in candidate_keys:
