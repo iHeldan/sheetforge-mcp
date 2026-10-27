@@ -559,6 +559,163 @@ def test_explanation_and_source_bounds_fail_closed(books, recipe, monkeypatch):
         _call(before, after, recipe)
 
 
+def test_documented_example_executes_unchanged(books):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    args = json.loads(
+        (root / "docs/examples/regional-sales.explanation.json").read_text()
+    )
+    before = books(
+        "before.xlsx", [[1, "North", 60000], [2, "South", 35000], [3, "West", 5000]]
+    )
+    after = books(
+        "after.xlsx", [[2, "South", 32000], [1, "North", 60000], [4, "North", 20000]]
+    )
+    args.update(before_filepath=str(before), after_filepath=str(after))
+    result = explain_recipe_delta(**args)
+    assert result["metrics"][0]["delta"] == "12000"
+    assert result["verification"]["recipe_checks"]["before"]["checks"][0]["passed"]
+
+
+@pytest.mark.parametrize("outside", ["before", "after"])
+def test_mcp_sandbox_checks_both_paths_before_loading(
+    books, recipe, monkeypatch, tmp_path, outside
+):
+    import excel_mcp.server as server
+
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    before = books("before.xlsx", [[1, "North", 10]])
+    after = books("after.xlsx", [[1, "North", 20]])
+    if outside == "before":
+        after = after.rename(allowed / after.name)
+    else:
+        before = before.rename(allowed / before.name)
+    loaded = []
+    monkeypatch.setattr(server, "EXCEL_FILES_PATH", str(allowed))
+    monkeypatch.setattr(
+        server, "explain_recipe_delta_impl", lambda *a, **kw: loaded.append(a)
+    )
+    reply = json.loads(
+        server.explain_recipe_delta(str(before), str(after), recipe, ["Id"])
+    )
+    assert not reply["ok"] and reply["operation"] == "explain_recipe_delta"
+    assert loaded == []
+
+
+def test_scoping_does_not_skip_invalid_results_elsewhere(books, recipe, monkeypatch):
+    before = books("before.xlsx", [[1, "North", 10], [2, "South", 20]])
+    after = books("after.xlsx", [[1, "North", 15], [2, "South", 25]])
+    original = explanations.recipes._aggregate
+
+    def wrong(*args):
+        result = original(*args)
+        result["rows"][1][1] += 10
+        return result
+
+    monkeypatch.setattr(explanations.recipes, "_aggregate", wrong)
+    with pytest.raises(PreconditionFailedError, match="independent exact arithmetic"):
+        _call(before, after, recipe, metric="Revenue", group={"Region": "North"})
+
+
+def test_result_bound_rejects_instead_of_sampling_calculations(
+    books, recipe, monkeypatch
+):
+    before = books("before.xlsx", [[1, "North", 10]])
+    after = books("after.xlsx", [[1, "North", 15]])
+    monkeypatch.setattr(explanations, "MAX_RESULT_CELLS", 1)
+    with pytest.raises(ValidationError, match="Recomputed result exceeds"):
+        _call(before, after, recipe)
+
+
+def test_readonly_sources_and_chartsheets_are_supported(books, recipe):
+    before = books("before.xlsx", [[1, "North", 10]])
+    after = books("after.xlsx", [[1, "North", 15]])
+    from openpyxl.chart import BarChart, Reference
+
+    for path in (before, after):
+        wb = load_workbook(path)
+        chart = BarChart()
+        chart.add_data(
+            Reference(wb["Data"], min_col=3, min_row=1, max_row=2),
+            titles_from_data=True,
+        )
+        wb.create_chartsheet("Charts").add_chart(chart)
+        wb.save(path)
+        wb.close()
+        path.chmod(0o444)
+    assert _call(before, after, recipe)["metrics"][0]["delta"] == "5"
+
+
+def test_sum_check_overflow_is_a_clear_validation_error(books, recipe):
+    before = books("before.xlsx", [[1, "North", 1e308], [2, "North", 1e308]])
+    after = books("after.xlsx", [[1, "North", 1e308]])
+    recipe["metrics"] = [{"op": "count", "as": "Lines"}]
+    recipe["checks"] = [
+        {"type": "sum_matches", "source_field": "Amount", "output_field": "Lines"}
+    ]
+    with pytest.raises(ValidationError, match="finite numeric range"):
+        _call(before, after, recipe)
+
+
+def test_fingerprint_binds_computed_values_but_not_sample_size(
+    books, recipe, monkeypatch
+):
+    before = books("before.xlsx", [[1, "North", 0.1]])
+    after = books("after.xlsx", [[1, "North", 0.2]])
+    first = _call(before, after, recipe, sample_limit=1)
+    assert (
+        _call(before, after, recipe, sample_limit=10)["explanation_token"]
+        == first["explanation_token"]
+    )
+    original = explanations.recipes._aggregate
+
+    def within_tolerance(*args):
+        result = original(*args)
+        for row in result["rows"]:
+            row[1] += 1e-13
+        return result
+
+    monkeypatch.setattr(explanations.recipes, "_aggregate", within_tolerance)
+    changed = _call(before, after, recipe, sample_limit=1)
+    assert changed["verification"]["numeric_match"] == "within_declared_tolerance"
+    assert changed["explanation_token"] != first["explanation_token"]
+
+
+def test_identical_bytes_in_distinct_files_are_supported(books, recipe):
+    before = books("before.xlsx", [[1, "North", 10]])
+    after = books("after.xlsx", [])
+    after.write_bytes(before.read_bytes())
+    result = _call(before, after, recipe)
+    assert result["sources"]["before"]["sha256"] == result["sources"]["after"]["sha256"]
+    assert result["changes"]["counts"]["unchanged"] == 1
+    assert result["metrics"][0]["delta"] == "0"
+
+
+@pytest.mark.parametrize("special", ["directory", "fifo"])
+def test_non_regular_sources_are_rejected_before_open(
+    books, recipe, monkeypatch, tmp_path, special
+):
+    import os
+
+    before = tmp_path / "not-a-file.xlsx"
+    after = books("after.xlsx", [[1, "North", 10]])
+    if special == "directory":
+        before.mkdir()
+    elif hasattr(os, "mkfifo"):
+        os.mkfifo(before)
+    else:
+        pytest.skip("FIFO is not available on this platform")
+    opened = []
+    monkeypatch.setattr(
+        explanations.changeset, "_stage_workbook", lambda *a: opened.append(a)
+    )
+    with pytest.raises(ValidationError, match="regular .xlsx files"):
+        _call(before, after, recipe)
+    assert opened == []
+
+
 def test_compensated_recipe_and_exact_decimal_comparison_agree(recipe):
     source = _source([[1, "North", 1e16], [2, "North", 1], [3, "North", -1e16]])
     records = _index(source, recipe, ["Id"], ["Id", "Region", "Amount"])

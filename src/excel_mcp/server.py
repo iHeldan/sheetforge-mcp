@@ -31,6 +31,7 @@ from excel_mcp.validation import (
 from excel_mcp.calculations import inspect_formula as inspect_formula_impl
 from excel_mcp.changeset import apply_workbook_changeset as apply_workbook_changeset_impl
 from excel_mcp.recipes import run_workbook_recipe as run_workbook_recipe_impl
+from excel_mcp.explanations import explain_recipe_delta as explain_recipe_delta_impl
 from excel_mcp.chart import (
     create_chart_from_series as create_chart_from_series_impl,
     create_chart_in_sheet as create_chart_impl,
@@ -266,6 +267,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         "apply_workbook_repairs",
         "apply_workbook_changeset",
         "run_workbook_recipe",
+        "explain_recipe_delta",
         "diff_workbooks",
         "inspect_named_range",
         "inspect_data_validation_rules",
@@ -280,6 +282,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             "apply_workbook_repairs",
             "apply_workbook_changeset",
             "run_workbook_recipe",
+            "explain_recipe_delta",
             "diff_workbooks",
         }:
             hints.append("set sample_limit to return a smaller audit sample")
@@ -287,6 +290,8 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             hints.append("split the ChangeSet into smaller verified transactions")
         if operation == "run_workbook_recipe":
             hints.append("reduce sample_limit or the number of recipe fields/checks")
+        if operation == "explain_recipe_delta":
+            hints.append("select one metric and/or one group for a narrower explanation")
         if operation == "diff_workbooks":
             hints.append("set include_cell_changes=False to skip cell-level diff sampling")
         hints.append("query a smaller workbook slice, such as one sheet or one table")
@@ -1830,6 +1835,52 @@ def run_workbook_recipe(
             get_excel_path(filepath), recipe=recipe, mode=mode,
             expected_workbook_sha256=expected_workbook_sha256,
             recipe_token=recipe_token, sample_limit=sample_limit,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(title="Explain Recipe Delta", readOnlyHint=True),
+)
+def explain_recipe_delta(
+    before_filepath: str,
+    after_filepath: str,
+    recipe: Dict[str, Any],
+    key_fields: List[str],
+    metric: Optional[str] = None,
+    group: Optional[Dict[str, Any]] = None,
+    sample_limit: int = 5,
+    expected_before_sha256: Optional[str] = None,
+    expected_after_sha256: Optional[str] = None,
+    expected_recipe_sha256: Optional[str] = None,
+) -> str:
+    """Explain sum/count changes by source identity, without modifying either file.
+
+    Recompute one shared Recipe v1 on two distinct .xlsx source versions. Requires
+    nonblank unique key_fields (exact headers) on every source data row, even if
+    excluded by recipe filters. Supports at most 8 metrics, all sum/count.
+    Returns added/removed/updated contributions, group changes and bounded physical
+    source-row examples. Numeric evidence uses exact decimal strings. Recipe float
+    differences are explicit numeric_adjustment values, not business explanations.
+
+    Optional metric selects one exact output alias; group must give all group_by
+    fields with exact literal values. All calculations/checks remain complete;
+    sample_limit (1-10) only bounds examples and omitted contributions are reported.
+    Pin both source sha256 values and recipe_sha256 from a previous response for
+    repeatable drilldown. The explanation_token is an integrity fingerprint, not
+    authorization or a commit token. Does not validate saved report cells, infer
+    historical recipe definitions, evaluate formulas or establish business causes.
+    Limits per source: 50,000 table cells, 64 columns, 10,000 recomputed result cells.
+    """
+    return _run_tool(
+        "explain_recipe_delta",
+        lambda: explain_recipe_delta_impl(
+            get_excel_path(before_filepath), get_excel_path(after_filepath),
+            recipe=recipe, key_fields=key_fields, metric=metric, group=group,
+            sample_limit=sample_limit, expected_before_sha256=expected_before_sha256,
+            expected_after_sha256=expected_after_sha256,
+            expected_recipe_sha256=expected_recipe_sha256,
         ),
     )
 

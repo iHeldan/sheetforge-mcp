@@ -85,6 +85,22 @@ def test_recipe_invariance_probes_do_not_hide_cancellation_error(source_book, re
     assert _commit(source_book, recipe, preview)["persisted"]
 
 
+def test_sum_reconciliation_overflow_has_a_clear_error(source_book, recipe):
+    def overflow(wb):
+        wb["Data"]["C2"] = 1e308
+        wb["Data"]["C3"] = 1e308
+
+    _edit(source_book, overflow)
+    recipe["metrics"] = [{"op": "count", "as": "Rows"}]
+    recipe["checks"] = [
+        {"type": "sum_matches", "source_field": "Amount", "output_field": "Rows"}
+    ]
+    frozen = source_book.read_bytes()
+    with pytest.raises(ValidationError, match="finite numeric range"):
+        run_workbook_recipe(str(source_book), recipe)
+    assert source_book.read_bytes() == frozen
+
+
 @pytest.mark.parametrize(
     "update",
     [

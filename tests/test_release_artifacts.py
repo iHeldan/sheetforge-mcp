@@ -61,6 +61,18 @@ def test_tracked_bundle_contains_current_public_files():
     version = _package_version(root)
     verifier = _load_release_verifier()
     with zipfile.ZipFile(root / f"sheetforge-mcp-{version}.mcpb") as bundle:
+        # A published bundle is immutable while unreleased source evolves. Always
+        # check its internal release metadata; require exact source parity again
+        # when preparing a release with an empty Unreleased section.
+        bundled_manifest = json.loads(bundle.read("manifest.json"))
+        bundled_readme = bundle.read("README.md").decode()
+        assert bundled_manifest["version"] == version
+        assert f"Published package release: `{version}`" in bundled_readme
+        match = re.search(r"currently exposes `(\d+)` MCP tools", bundled_readme)
+        assert match and int(match.group(1)) == len(bundled_manifest["tools"])
+        unreleased = (root / "CHANGELOG.md").read_text().split("## Unreleased\n", 1)[1].split("\n## ", 1)[0].strip()
+        if unreleased:
+            return
         for member in verifier.ALLOWED_MCPB_MEMBERS:
             assert bundle.read(str(member)) == (root / str(member)).read_bytes()
 

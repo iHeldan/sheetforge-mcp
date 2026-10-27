@@ -131,7 +131,9 @@ the exact input workbook. `verification.lineage_sample` identifies groups, their
 full contributing row counts, and bounded **physical worksheet row numbers**.
 Truncation flags describe samples only; the calculations and checks are complete
 within the stated limits. This version does not persist a row-level history or
-provide a cross-run "why did this value change" debugger.
+provide a cross-run "why did this value change" debugger itself. Development source
+also includes [Verified Explanations](verified-explanations.md), a separate read-only
+comparison of two source versions under one shared sum/count recipe.
 
 The generated ChangeSet verifies the complete reserved output values and confirms
 the complete source table's values/formula text are unchanged. It provides a

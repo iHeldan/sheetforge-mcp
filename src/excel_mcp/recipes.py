@@ -397,7 +397,10 @@ def _sum_values(rows: list, index: int) -> int | float:
         raise ValidationError("sum_matches requires numeric fields")
     if all(type(value) is int for value in values):
         return sum(values)
-    return math.fsum(values)
+    try:
+        return math.fsum(values)
+    except (OverflowError, ValueError) as exc:
+        raise ValidationError("sum_matches exceeds the supported finite numeric range") from exc
 
 
 def _verify_recipe(source: dict, recipe: dict, result: dict, sample_limit: int) -> dict:

@@ -11,14 +11,16 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
 Published package release: `0.11.0`
-Repository docs track the current main-branch tool surface, which currently exposes `79` MCP tools.
+Repository docs track the current main-branch tool surface, which currently exposes `80` MCP tools.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
+Verified Explanations is currently available in development source, not the published `0.11.0` package (79 tools).
 
 ## Why SheetForge
 
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
 - verified multi-step edits via `apply_workbook_changeset`: preview the complete candidate, value/table/layout assertions, structural diff, and sampled cell changes, then commit that exact plan only if the source workbook still matches
 - reusable report recipes via `run_workbook_recipe`: filter and aggregate a native table, check the result, and write it through a verified ChangeSet without passing intermediate rows through the model
+- explainable report changes via `explain_recipe_delta`: recompute the same recipe on two source versions, compare by unique keys, and reconcile added/removed/updated contributions without modifying either workbook (unreleased)
 - safer workbook creation and baselines: `create_workbook` refuses to overwrite an existing `.xlsx`, while `create_workbook_snapshot` creates a verified non-overwriting copy for before/after validation
 - serialized workbook mutation: same-host writers lock each workbook before loading it, then keep the lock through atomic replace and reopen verification so concurrent agents do not silently overwrite one another
 - smarter worksheet boundaries with bounded `strict`, `default`, and `extended` read presets plus compact metadata for any trailing blocks that were intentionally left out
@@ -143,9 +145,9 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 79 MCP tools across these groups:
+The server currently registers 80 MCP tools across these groups:
 
-- workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `apply_workbook_changeset`, `run_workbook_recipe`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
+- workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `apply_workbook_changeset`, `run_workbook_recipe`, `explain_recipe_delta`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
 - data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, `cross_workbook_lookup`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `append_excel_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
 - worksheet and range changes: `copy_worksheet`, `delete_worksheet`, `rename_worksheet`, `set_worksheet_visibility`, `get_worksheet_protection`, `set_worksheet_protection`, `copy_range`, `delete_range`, `insert_rows`, `insert_columns`, `delete_sheet_rows`, `delete_sheet_columns`
 - formatting and layout: `format_range`, `format_ranges`, `read_range_formatting`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
@@ -178,6 +180,7 @@ The most agent-friendly read tools are:
 - `apply_workbook_repairs`: dry-runs or applies the safe repair subset from those plans, including broken named ranges, broken validation rules, broken conditional formats, and optional hidden-sheet reveals
 - `apply_workbook_changeset`: previews a bounded multi-tool report mutation on an isolated candidate, evaluates explicit postconditions, and commits it with exact-file stale-write protection plus optional verified snapshot and rollback
 - `run_workbook_recipe`: executes a versioned JSON recipe over one native table, checks unique keys, row counts or sum reconciliation, probes column/row-order invariance, and writes a reserved rectangle in the same workbook through ChangeSet preview/commit. See the [Verified Recipes guide](docs/verified-recipes.md) and [example recipe](docs/examples/regional-sales.recipe.json).
+- `explain_recipe_delta`: independently reconciles changes in recomputed `sum`/`count` recipe results across two source versions by unique keys. Includes group drilldown, exact decimal evidence and explicit sample remainders. It does not inspect saved report cells or infer business causes. See [Verified Explanations](docs/verified-explanations.md) (unreleased).
 - `diff_workbooks`: compares two workbook files and reports structural changes plus sampled cell-value diffs, which is useful for before/after verification in agent workflows
 - `create_workbook_snapshot`: creates the verified, non-overwriting baseline that makes `diff_workbooks` usable without an external copy script
 - `analyze_range_impact`: preflight blast-radius check for a worksheet range, including overlaps with tables, chart footprints, merged cells, named ranges, data validations, conditional formats, autofilters, print areas, formula cells inside the range, and formulas or rule expressions elsewhere that depend on it directly or transitively, through named ranges, or through structured table references such as `Table1[Sales]`
@@ -327,6 +330,7 @@ uv build
 - `src/excel_mcp/workbook.py`: workbook lifecycle helpers and workbook metadata
 - `src/excel_mcp/changeset.py`: verified multi-operation preview/commit transactions and assertions
 - `src/excel_mcp/recipes.py`: bounded native-table report recipes, checks, lineage samples, and ChangeSet compilation
+- `src/excel_mcp/explanations.py`: read-only keyed recipe deltas with independent arithmetic/filter checks and bounded evidence
 - `src/excel_mcp/data.py`: read, write, table, and search helpers
 - `src/excel_mcp/sheet.py`: worksheet and range mutations
 - `tests/`: regression tests covering data, layout, charts, pivots, formatting, tables, and resource safety

@@ -15,6 +15,7 @@ from . import changeset, query, recipes, workbook
 from .exceptions import PreconditionFailedError, ResponseTooLargeError, ValidationError
 
 CATEGORIES = ("added", "removed", "updated", "unchanged")
+EXPLANATION_VERSION = 1
 ZERO = Fraction(0)
 MAX_METRICS = 8
 MAX_RESULT_CELLS = 10_000
@@ -624,6 +625,24 @@ def _assert_response_budget(payload: dict) -> None:
         )
 
 
+def _results_digest(*versions: dict) -> str:
+    digest = hashlib.sha256()
+    for groups in versions:
+        digest.update(len(groups).to_bytes(8, "big"))
+        for key in sorted(groups, key=repr):
+            row = [
+                [
+                    (kind, _text(value) if kind == "number" else value)
+                    for kind, value in key
+                ],
+                [_text(value) for value in groups[key]],
+            ]
+            encoded = changeset._canonical_json(row).encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    return digest.hexdigest()
+
+
 def explain_recipe_delta(
     before_filepath: str,
     after_filepath: str,
@@ -636,7 +655,7 @@ def explain_recipe_delta(
     expected_after_sha256: str | None = None,
     expected_recipe_sha256: str | None = None,
 ) -> dict:
-    """Explain recomputed recipe changes; never read or write saved output cells."""
+    """Explain recomputed source results, not historical saved report values."""
     if type(sample_limit) is not int or not 1 <= sample_limit <= 10:
         raise ValidationError("sample_limit must be an integer from 1 to 10")
     if metric is not None and not isinstance(metric, str):
@@ -665,6 +684,8 @@ def explain_recipe_delta(
     ]
     if any(path.suffix.lower() != ".xlsx" for path in paths):
         raise ValidationError("Both source files must end with .xlsx")
+    if any(not path.is_file() for path in paths):
+        raise ValidationError("Both source versions must be regular .xlsx files")
     if paths[0].samefile(paths[1]):
         raise ValidationError(
             "Source versions must be two distinct files, not aliases of the same file"
@@ -718,8 +739,17 @@ def explain_recipe_delta(
         group=group,
         sample_limit=sample_limit,
     )
+    result_sha = _results_digest(*oracles, *observed)
+    numeric_policy = {
+        "relative": _text(REL_TOL),
+        "absolute": _text(ABS_TOL),
+        "integer_only_and_count": "exact",
+    }
     identity = {
-        "version": 1,
+        "version": EXPLANATION_VERSION,
+        "recipe_engine_version": recipes.RECIPE_ENGINE_VERSION,
+        "numeric_policy": numeric_policy,
+        "result_sha256": result_sha,
         "before_sha256": digests[0],
         "after_sha256": digests[1],
         "recipe_sha256": recipe_sha,
@@ -729,10 +759,12 @@ def explain_recipe_delta(
     result.update(
         {
             "message": "Recipe delta explained and independently reconciled",
-            "explanation_version": 1,
+            "explanation_version": EXPLANATION_VERSION,
+            "recipe_engine_version": recipes.RECIPE_ENGINE_VERSION,
+            "result_sha256": result_sha,
             "status": "verified",
             "recipe_sha256": recipe_sha,
-            "explanation_token": "explanation_v1_"
+            "explanation_token": f"explanation_v{EXPLANATION_VERSION}_"
             + hashlib.sha256(
                 changeset._canonical_json(identity).encode("utf-8")
             ).hexdigest(),
@@ -762,20 +794,17 @@ def explain_recipe_delta(
             },
             "verification": {
                 "passed": True,
-                "coverage": "complete_bounded_sources_and_results",
+                "coverage": "complete_bounded_referenced_data_and_results",
                 "basis": "same_recipe_recomputed_on_both_sources",
                 "saved_outputs_checked": False,
+                "unreferenced_fields_compared": False,
                 "business_causes_inferred": False,
                 "snapshots": "independently_captured_not_cross_file_atomic",
                 "arithmetic": "exact_rational_on_loaded_decimal_representations",
                 "numeric_match": "exact"
                 if all(item[1]["numeric_match"] == "exact" for item in executions)
                 else "within_declared_tolerance",
-                "recipe_numeric_tolerance": {
-                    "relative": str(recipes.NUMERIC_REL_TOL),
-                    "absolute": str(recipes.NUMERIC_ABS_TOL),
-                    "integer_only_and_count": "exact",
-                },
+                "recipe_numeric_tolerance": numeric_policy,
                 "group_metric_checks": sum(len(oracle) for oracle in oracles)
                 * len(normalized["metrics"]),
                 "global_metric_checks": 2 * len(normalized["metrics"]),

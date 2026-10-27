@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Added read-only `explain_recipe_delta` to compare the same sum/count recipe across two stable source versions by unique keys, with independently checked arithmetic/filter semantics, group drilldown, explicit numerical differences and bounded source-row evidence.
+- Added exact decimal numerical evidence, disjoint added/removed/updated contributions, complete bounded calculation coverage, sample remainder totals, and optional source/recipe digest pins. This is a recomputed comparison, not an audit of saved report cells or an inference of business causes.
+
+### Fixed
+
+- Made overflowing recipe `sum_matches` checks fail with a clear validation error instead of an unhandled floating-point exception.
+
 ## 0.11.0 - 2026-10-27
 
 ### Added
