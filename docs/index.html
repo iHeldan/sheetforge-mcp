@@ -239,8 +239,8 @@
           inspect formulas, and plan safer edits before writing.
         </p>
         <p>
-          Published package release: <strong>0.11.0</strong>. The repository currently
-          exposes <strong>80 MCP tools</strong> in development source (79 in the published package), including smart read-strategy suggestions,
+          Published package release: <strong>0.12.0</strong>. The repository currently
+          exposes <strong>80 MCP tools</strong>, including smart read-strategy suggestions,
           lightweight dataset summaries, declarative table queries, grouped aggregates,
           cross-workbook aggregation, cross-workbook filtering, cross-workbook unions, cross-workbook lookups, workbook profiling, repair
           planning and execution, assertion-backed ChangeSet previews and commits, verified workbook snapshots, workbook diffs, formula-lineage debugging,
@@ -261,7 +261,7 @@
         <h2>At a glance</h2>
         <ul class="meta-list">
           <li>Python 3.10+</li>
-          <li>80 MCP tools in development source</li>
+          <li>80 MCP tools</li>
           <li>Smart dataset summaries and read-strategy guidance</li>
           <li>Supports `stdio`, `streamable-http`, and deprecated `sse`</li>
           <li>Uniform JSON envelopes for every tool response</li>
@@ -294,7 +294,7 @@
           <li><strong>`apply_workbook_repairs`</strong><br>Dry-run or apply safe workbook cleanup actions with audit summaries and structural diffs.</li>
           <li><strong>`apply_workbook_changeset`</strong><br>Preview a multi-step edit with value, table, freeze-pane, autofilter, and chart assertions plus a diff, then commit that exact plan only if the source workbook is unchanged.</li>
           <li><strong>`run_workbook_recipe`</strong><br>Reuse a JSON report recipe that aggregates a native table, checks its result, provides source-row lineage samples, and writes through verified preview/commit without echoing intermediate rows through the agent.</li>
-          <li><strong>`explain_recipe_delta` (unreleased)</strong><br>Explain recomputed report changes across source versions by unique keys, with independent arithmetic checks, group drilldown and bounded row evidence.</li>
+          <li><strong>`explain_recipe_delta`</strong><br>Explain recomputed report changes across source versions by unique keys, with independent arithmetic checks, group drilldown and bounded row evidence.</li>
           <li><strong>`diff_workbooks`</strong><br>Compare workbook versions and sample the actual before/after cell-value changes.</li>
           <li><strong>`create_workbook_snapshot`</strong><br>Create a verified, non-overwriting baseline before risky workbook edits.</li>
           <li><strong>`explain_formula_cell`</strong><br>Trace a formula cell through named ranges, structured references, upstream formula cells, compact formula-chain layers and sampled paths, and downstream dependents.</li>

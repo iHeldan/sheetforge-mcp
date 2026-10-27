@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-10-27
+
 ### Added
 
 - Added read-only `explain_recipe_delta` to compare the same sum/count recipe across two stable source versions by unique keys, with independently checked arithmetic/filter semantics, group drilldown, explicit numerical differences and bounded source-row evidence.

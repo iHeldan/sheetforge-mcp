@@ -1,6 +1,6 @@
 # Verified Explanations v1
 
-Status: development source, not included in the published `0.11.0` package.
+Available since SheetForge MCP `0.12.0`.
 
 `explain_recipe_delta` explains how changes to a native Excel source table affect
 the result of one shared [Recipe v1](verified-recipes.md). It compares records by

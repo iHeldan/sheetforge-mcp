@@ -252,7 +252,7 @@ Returns matches under `data.matches`:
 
   Optional `metric` selects an exact output alias; `group` must provide every `group_by` field and selects a group existing in either recomputed result. All checks remain complete; only examples are sampled. Both row and group samples report omitted contributions/deltas. Use source SHA-256s and `recipe_sha256` as `expected_*` pins for repeatable drilldown. The explanation fingerprint is not authentication or a commit token. Referenced type drift, invalid identities, unsupported metrics, recipe check failures and independent arithmetic disagreement fail cleanly.
 
-  This compares recomputed source results, not saved output cells or real-world causes. Source captures are individually stable, not a cross-file transaction. Limits per source: 50,000 table cells/64 columns, 10,000 recomputed result cells; `sample_limit` 1-10. See [the full contract and example](docs/verified-explanations.md). Development source only; not yet published.
+  This compares recomputed source results, not saved output cells or real-world causes. Source captures are individually stable, not a cross-file transaction. Limits per source: 50,000 table cells/64 columns, 10,000 recomputed result cells; `sample_limit` 1-10. See [the full contract and example](docs/verified-explanations.md). Available since `0.12.0`.
 
 - `diff_workbooks(before_filepath: str, after_filepath: str, sample_limit: int = 25, include_cell_changes: bool = True) -> str`
   Compares two workbook files and reports sheet/property changes, named-range changes, table/chart changes, validation and conditional-format changes, plus sampled cell-value diffs when `include_cell_changes=True`.
