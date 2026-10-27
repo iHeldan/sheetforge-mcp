@@ -43,6 +43,38 @@ def _create_query_workbook(tmp_path, filename: str, headers: list[str], rows: li
     return filepath
 
 
+@pytest.mark.parametrize("values", [[1e16, 1, -1e16], [-1e16, 1, 1e16], [1e16, 1, 1, -1e16]])
+def test_aggregate_preserves_small_adjustments_between_large_values(tmp_path, values):
+    from decimal import Decimal
+
+    path = _create_query_workbook(tmp_path, "adjustments.xlsx", ["Amount"], [(value,) for value in values])
+    result = aggregate_table_impl(
+        path, sheet_name="Sheet1", metrics=[
+            {"op": "sum", "field": "Amount", "as": "Total"},
+            {"op": "avg", "field": "Amount", "as": "Mean"},
+        ],
+    )
+    expected = sum((Decimal(str(value)) for value in values), Decimal(0))
+    assert result["rows"][0][0] == float(expected)
+    assert result["rows"][0][1] == pytest.approx(float(expected / len(values)))
+
+
+def test_aggregate_keeps_large_integer_totals_exact():
+    from excel_mcp.query import _compute_metric
+
+    values = [10**25, 1, -(10**25)]
+    assert _compute_metric({"op": "sum", "column_index": 0}, [[v] for v in values]) == 1
+
+
+@pytest.mark.parametrize("op", ["sum", "avg"])
+def test_aggregate_rejects_overflow_without_returning_infinity(tmp_path, op):
+    path = _create_query_workbook(tmp_path, "overflow.xlsx", ["Amount"], [(1e308,), (1e308,)])
+    with pytest.raises(DataError, match="finite numeric range"):
+        aggregate_table_impl(
+            path, sheet_name="Sheet1", metrics=[{"op": op, "field": "Amount", "as": "Total"}],
+        )
+
+
 def test_query_table_filters_selects_and_returns_records(tmp_workbook):
     result = query_table_impl(
         tmp_workbook,

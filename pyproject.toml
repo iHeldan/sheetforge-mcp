@@ -68,6 +68,8 @@ exclude = [
     "/*.log",
     "/*.mcpb",
     "/.env*",
+    "**/.DS_Store",
+    "**/._*",
 ]
 
 [tool.ruff]

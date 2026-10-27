@@ -95,10 +95,10 @@ def _mutation_snapshot_metadata(filepath: str, *, dry_run: bool) -> Dict[str, An
 
 
 def _normalize_decimal_string(value: Decimal) -> str:
-    normalized = value.normalize()
-    if normalized == normalized.to_integral():
-        return str(normalized.quantize(Decimal("1")))
-    return format(normalized, "f")
+    # Formatting does not round to the ambient Decimal context or require the
+    # hundreds of precision digits that quantize(1) needs for large exponents.
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _normalize_token_value(value: Any) -> Any:

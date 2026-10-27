@@ -1,4 +1,5 @@
 import logging
+import math
 from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
@@ -869,9 +870,24 @@ def _compute_metric(metric: Dict[str, Any], rows: List[List[Any]]) -> Any:
             raise DataError(
                 f"Metric '{metric['as']}' requires numeric values in field '{metric['resolved_header']}'"
             )
-        if operator == "sum":
-            return sum(numeric_values)
-        return sum(numeric_values) / len(numeric_values) if numeric_values else None
+        try:
+            # Compensated summation preserves small adjustments between large
+            # floating values. Keep integer-only totals exact and preserve
+            # Decimal arithmetic when no floating inputs are present.
+            total = (
+                math.fsum(numeric_values)
+                if any(isinstance(value, float) for value in numeric_values)
+                else sum(numeric_values)
+            )
+            if isinstance(total, float) and not math.isfinite(total):
+                raise ValueError("non-finite aggregate")
+            if operator == "sum":
+                return total
+            return total / len(numeric_values) if numeric_values else None
+        except (OverflowError, ValueError) as exc:
+            raise DataError(
+                f"Metric '{metric['as']}' exceeds the supported finite numeric range"
+            ) from exc
 
     comparable_values = list(non_blank_values)
     if not comparable_values:

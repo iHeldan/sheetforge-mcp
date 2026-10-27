@@ -112,6 +112,8 @@ def test_github_actions_use_node24_compatible_setup_versions():
         ("sheetforge_mcp-0.8.0/LOCAL_PRIVATE.md", "Forbidden file"),
         ("sheetforge_mcp-0.8.0/private-notes.txt", "Unexpected top-level file"),
         ("sheetforge_mcp-0.8.0/../secret.txt", "Unsafe archive path"),
+        ("sheetforge_mcp-0.8.0/docs/.DS_Store", "Forbidden file"),
+        ("sheetforge_mcp-0.8.0/src/excel_mcp/._recipes.py", "Forbidden file"),
     ],
 )
 def test_release_verifier_rejects_non_public_sdist_files(

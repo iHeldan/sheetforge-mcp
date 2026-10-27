@@ -9,6 +9,9 @@
 
 ### Fixed
 
+- Fixed floating-point sums and averages losing small adjustments between large opposing values. Aggregation now uses compensated summation for floating inputs, preserves exact integer-only totals, and rejects numeric overflow.
+- Fixed dataset-token normalization failing for large finite exponents or rounding according to the ambient Decimal context.
+- Excluded macOS Finder/AppleDouble metadata from source distributions and made the release verifier reject it in all archives.
 - Fixed raw cell writes so explicit nulls clear existing values and previews distinguish booleans from equal-valued numbers. Recipe output can now safely clear unused rows after a smaller recomputation.
 - Made ChangeSet response budgeting use the MCP envelope's ASCII escaping, preventing non-ASCII payload expansion from invalidating the size check after a mutation.
 - Made exact header matches take precedence over trimmed query/schema aliases, preserving recipe bindings for headers with surrounding whitespace.

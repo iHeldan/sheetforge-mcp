@@ -70,6 +70,21 @@ def test_recipe_aggregates_without_model_data_roundtrip(source_book, recipe):
     assert "checks" not in recipe
 
 
+def test_recipe_invariance_probes_do_not_hide_cancellation_error(source_book, recipe):
+    def cancellation(wb):
+        for row, value in enumerate([1e16, 1, -1e16], start=2):
+            wb["Data"].cell(row, 3).value = value
+
+    _edit(source_book, cancellation)
+    recipe["filters"] = []
+    recipe["group_by"] = []
+    preview = run_workbook_recipe(str(source_book), recipe)
+    assert preview["ready_to_commit"]
+    assert preview["verification"]["passed"]
+    assert preview["rows_sample"] == [[1]]
+    assert _commit(source_book, recipe, preview)["persisted"]
+
+
 @pytest.mark.parametrize(
     "update",
     [

@@ -34,6 +34,30 @@ from excel_mcp.server import (
 )
 
 
+@pytest.mark.parametrize("text", ["1E+308", "1E-308", "1.234567890123456789012345678901", "-0.00"])
+def test_numeric_token_normalization_is_context_independent(text):
+    from decimal import Decimal, localcontext
+    from excel_mcp.data import _normalize_decimal_string
+
+    value = Decimal(text)
+    with localcontext() as context:
+        context.prec = 3
+        normalized = _normalize_decimal_string(value)
+    assert Decimal(normalized) == value
+
+
+def test_reading_large_finite_number_keeps_dataset_tokens(tmp_path):
+    path = tmp_path / "large-finite.xlsx"
+    wb = Workbook()
+    wb.active.append(["Amount"])
+    wb.active.append([1e308])
+    wb.save(path)
+    wb.close()
+    result = read_as_table(str(path), "Sheet")
+    assert result["rows"] == [[1e308]]
+    assert result["content_token"].startswith("sf_content_v1_")
+
+
 def _load_tool_payload(raw: str) -> dict:
     payload = json.loads(raw)
     assert payload["ok"] is True

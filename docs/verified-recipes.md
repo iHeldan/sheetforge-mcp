@@ -121,6 +121,10 @@ decimal accounting or a guarantee of precision beyond Excel's number model.
 These probes exercise field binding and order sensitivity. They are not automatic
 Excel calculation, a proof of the business definition, or a substitute for choosing
 the right metric (for example, a weighted rate instead of an average of rates).
+They are also not an independent arithmetic oracle: two input orders can share
+the same error. Floating-point sums and averages use compensated summation, and
+the acceptance workflow separately checks them against a Decimal calculation.
+Overflow is rejected rather than returning an infinite result.
 
 `source.bindings` identifies the actual header cells. `source_sha256` identifies
 the exact input workbook. `verification.lineage_sample` identifies groups, their
@@ -161,3 +165,19 @@ also apply. Counts include JSON escaping so non-ASCII text cannot bypass the wir
 budget. Exceeding a bound fails before replacement; no partial result is committed.
 The implementation loads the bounded workbook with openpyxl; these table limits
 do not imply streaming or a memory bound for unrelated content in a very large file.
+
+## Reproducible workflow validation
+
+`tests/test_recipe_workflows.py` drives the real stdio MCP protocol with a
+synthetic sales workbook and checks the complete saved report against an
+independent Decimal oracle. It runs the same recipe at 1,000 source rows, after
+growth to 1,200 rows with reordered columns, and after shrinking to one region.
+It verifies source values/formulas, totals, snapshot bytes, unrelated report
+cells, header styling and chart references/layout remain intact.
+
+The scripted client uses 10 tool calls across those three runs, including initial
+orientation and a complete output readback after each commit. The test enforces
+the per-response 50,000-character limit and a combined 100,000-character bound.
+It does not read the full source through MCP. These are reproducible synthetic
+workflow checks, not a production benchmark, customer acceptance, or proof that
+an unassisted model will always choose the right recipe.

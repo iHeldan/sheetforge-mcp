@@ -12,7 +12,7 @@ import re
 from pathlib import Path, PurePosixPath
 
 FORBIDDEN_DIRECTORY_NAMES = {".git", ".notes", ".venv", "__pycache__"}
-FORBIDDEN_FILE_NAMES = {"context.md"}
+FORBIDDEN_FILE_NAMES = {"context.md", ".ds_store"}
 FORBIDDEN_SUFFIXES = {".key", ".log", ".mcpb", ".pem", ".tape"}
 ALLOWED_SDIST_TOP_LEVEL = {
     ".gitignore",
@@ -53,6 +53,7 @@ def _assert_safe_relative_path(relative_path: PurePosixPath, *, artifact: Path) 
         filename in FORBIDDEN_FILE_NAMES
         or filename.startswith("local_")
         or filename.startswith(".env")
+        or filename.startswith("._")
         or ".log." in filename
         or relative_path.suffix.casefold() in FORBIDDEN_SUFFIXES
     ):
