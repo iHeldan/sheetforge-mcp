@@ -693,6 +693,28 @@ def test_identical_bytes_in_distinct_files_are_supported(books, recipe):
     assert result["metrics"][0]["delta"] == "0"
 
 
+def test_fingerprint_binds_scoped_components_and_identity_counts(
+    books, recipe, monkeypatch
+):
+    before = books("before.xlsx", [[1, "North", 10]])
+    after = books("after.xlsx", [[1, "North", 20]])
+    first = _call(before, after, recipe)
+    original = explanations._present
+
+    def changed_presentation(**kwargs):
+        result = original(**kwargs)
+        item = result["metrics"][0]["components"]
+        item["added"], item["updated"] = item["updated"], item["added"]
+        counts = result["changes"]["counts"]
+        counts["added"], counts["updated"] = counts["updated"], counts["added"]
+        return result
+
+    monkeypatch.setattr(explanations, "_present", changed_presentation)
+    changed = _call(before, after, recipe)
+    assert first["result_sha256"] == changed["result_sha256"]
+    assert first["explanation_token"] != changed["explanation_token"]
+
+
 @pytest.mark.parametrize("special", ["directory", "fifo"])
 def test_non_regular_sources_are_rejected_before_open(
     books, recipe, monkeypatch, tmp_path, special

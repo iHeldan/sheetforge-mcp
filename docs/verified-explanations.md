@@ -148,6 +148,8 @@ know whether the caller changed the intended historical definition.
 `result_sha256` binds the complete independent and recipe result vectors, not just
 the displayed samples. `explanation_token` fingerprints those results, source
 digests, normalized recipe, key fields, scope, numeric policy and engine versions.
+It also binds scoped metric components and identity/group counts, not the
+presentation-only samples.
 It excludes sample size. The source/recipe pins do not pin implementation versions
 across server upgrades. It is not authentication,
 a commit credential or an exactly-once receipt. The service stores no session.

@@ -755,6 +755,11 @@ def explain_recipe_delta(
         "recipe_sha256": recipe_sha,
         "key_fields": keys,
         "scope": result["scope"],
+        "scoped_metrics": result["metrics"],
+        "identity_counts": result["changes"]["counts"],
+        "group_counts": {
+            name: result["groups"][name] for name in ("compared_count", "changed_count")
+        },
     }
     result.update(
         {
