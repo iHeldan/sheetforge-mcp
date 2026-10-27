@@ -5,15 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Context, Decimal, localcontext
 from fractions import Fraction
+import hashlib
+import json
+from pathlib import Path
+import re
 from typing import Any
 
-from . import changeset, query, recipes
-from .exceptions import PreconditionFailedError, ValidationError
+from . import changeset, query, recipes, workbook
+from .exceptions import PreconditionFailedError, ResponseTooLargeError, ValidationError
 
 CATEGORIES = ("added", "removed", "updated", "unchanged")
 ZERO = Fraction(0)
 MAX_METRICS = 8
 MAX_RESULT_CELLS = 10_000
+MAX_RESPONSE_CHARS = 40_000
 REL_TOL = Fraction(str(recipes.NUMERIC_REL_TOL))
 ABS_TOL = Fraction(str(recipes.NUMERIC_ABS_TOL))
 
@@ -69,6 +74,7 @@ def _number(value: Any) -> Fraction:
         return ZERO
     if recipes._kind(value) != "number":
         raise ValidationError("sum metrics require numeric or null source values")
+    recipes._scalar(value, location="Numeric value")
     return Fraction(str(value))
 
 
@@ -241,19 +247,26 @@ def _reconcile(
             "Recipe group or filter coverage disagrees with the independent evaluator",
             code="independent_reconciliation_failed",
         )
-    exact = [
-        item["op"] == "count"
-        or all(
-            record.values[item["field"]] is None
-            or type(record.values[item["field"]]) is int
-            for record in records.values()
-        )
-        for item in recipe["metrics"]
+    floating = {
+        (record.group, index)
+        for record in records.values()
+        if record.included
+        for index, item in enumerate(recipe["metrics"])
+        if item["op"] == "sum" and type(record.values[item["field"]]) is float
+    }
+    size = len(recipe["metrics"])
+    comparisons = [
+        (observed[key], oracle[key], [(key, i) not in floating for i in range(size)])
+        for key in oracle
     ]
-    for actual, expected in [
-        *((observed[key], oracle[key]) for key in oracle),
-        (_totals(observed, len(exact)), _totals(oracle, len(exact))),
-    ]:
+    comparisons.append(
+        (
+            _totals(observed, size),
+            _totals(oracle, size),
+            [not any(index == i for _, index in floating) for i in range(size)],
+        )
+    )
+    for actual, expected, exact in comparisons:
         for index, (a, b) in enumerate(zip(actual, expected)):
             if not _near(a, b, exact=exact[index]):
                 raise PreconditionFailedError(
@@ -278,6 +291,9 @@ def _reconcile(
             ),
         )
     return observed, {
+        "numeric_match": "exact"
+        if all(a == b for a, b, _ in comparisons)
+        else "within_declared_tolerance",
         "checks": verification["checks"],
         "invariance_probes": verification["invariance_probes"],
     }
@@ -340,3 +356,434 @@ def _breakdown(
         for index, change in enumerate(_delta(old, new, size, group)):
             totals[category][index] += change
     return {"counts": counts, "totals": totals}
+
+
+def _metric_report(
+    item: dict,
+    index: int,
+    observed_before: list,
+    observed_after: list,
+    exact_before: list,
+    exact_after: list,
+    breakdown: dict,
+) -> dict:
+    components = {
+        category: breakdown["totals"][category][index] for category in CATEGORIES[:3]
+    }
+    contribution_delta = sum(components.values(), ZERO)
+    exact_delta = exact_after[index] - exact_before[index]
+    if (
+        contribution_delta != exact_delta
+        or breakdown["totals"]["unchanged"][index] != ZERO
+    ):
+        raise PreconditionFailedError(
+            "Identity contributions do not reconcile",
+            code="independent_reconciliation_failed",
+        )
+    delta = observed_after[index] - observed_before[index]
+    adjustment = delta - exact_delta
+    return {
+        "name": item["as"],
+        "op": item["op"],
+        "before": _text(observed_before[index]),
+        "after": _text(observed_after[index]),
+        "delta": _text(delta),
+        "independent_before": _text(exact_before[index]),
+        "independent_after": _text(exact_after[index]),
+        "components": {name: _text(value) for name, value in components.items()},
+        "contribution_delta": _text(contribution_delta),
+        "numeric_adjustment": _text(adjustment),
+        "residual": _text(delta - contribution_delta - adjustment),
+    }
+
+
+def _present(
+    *,
+    before: dict,
+    after: dict,
+    fields: list[str],
+    keys: list[str],
+    recipe: dict,
+    before_exact: dict,
+    after_exact: dict,
+    before_actual: dict,
+    after_actual: dict,
+    metric: str | None,
+    group: dict | None,
+    sample_limit: int,
+) -> dict:
+    aliases = [item["as"] for item in recipe["metrics"]]
+    if metric is not None and metric not in aliases:
+        raise ValidationError("metric must be an exact recipe metric alias")
+    indexes = (
+        [aliases.index(metric)] if metric is not None else list(range(len(aliases)))
+    )
+    groups = dict.fromkeys([*before_exact, *after_exact])
+    selected = None
+    if group is not None:
+        recipes._object(
+            group,
+            allowed=set(recipe["group_by"]),
+            required=set(recipe["group_by"]),
+            location="group",
+        )
+        selected = tuple(
+            _identity(recipes._scalar(group[field], location="group"))
+            for field in recipe["group_by"]
+        )
+        if selected not in groups:
+            raise ValidationError(
+                "Selected group is absent from both recomputed results"
+            )
+    size = len(aliases)
+    zeros = [ZERO] * size
+
+    def scoped(data):
+        return (
+            data.get(selected, zeros) if selected is not None else _totals(data, size)
+        )
+
+    breakdown = _breakdown(before, after, fields, size, selected)
+    scoped_values = [
+        scoped(data)
+        for data in (before_actual, after_actual, before_exact, after_exact)
+    ]
+    metrics = [
+        _metric_report(
+            recipe["metrics"][index],
+            index,
+            *scoped_values,
+            breakdown,
+        )
+        for index in indexes
+    ]
+    display = {(): {}}
+    for record in [*before.values(), *after.values()]:
+        display.setdefault(
+            record.group, {field: record.values[field] for field in recipe["group_by"]}
+        )
+    changed_groups = [
+        key
+        for key in groups
+        if (selected is None or key == selected)
+        and (
+            key not in before_exact
+            or key not in after_exact
+            or any(
+                before_exact.get(key, zeros)[i] != after_exact.get(key, zeros)[i]
+                or before_actual.get(key, zeros)[i] != after_actual.get(key, zeros)[i]
+                for i in indexes
+            )
+        )
+    ]
+    changed_groups.sort(
+        key=lambda key: (
+            -max(
+                abs(after_exact.get(key, zeros)[i] - before_exact.get(key, zeros)[i])
+                for i in indexes
+            ),
+            repr(key),
+        )
+    )
+    group_sample = [
+        {
+            "group": changeset._bound_response_value(display[key]),
+            "existed_before": key in before_exact,
+            "exists_after": key in after_exact,
+            "metrics": {
+                aliases[i]: {
+                    "before": _text(before_actual.get(key, zeros)[i]),
+                    "after": _text(after_actual.get(key, zeros)[i]),
+                    "delta": _text(
+                        after_actual.get(key, zeros)[i]
+                        - before_actual.get(key, zeros)[i]
+                    ),
+                    "contribution_delta": _text(
+                        after_exact.get(key, zeros)[i] - before_exact.get(key, zeros)[i]
+                    ),
+                }
+                for i in indexes
+            },
+        }
+        for key in changed_groups[:sample_limit]
+    ]
+    pairs = [
+        pair
+        for pair in _pairs(before, after, fields)
+        if pair[0] != "unchanged"
+        and (
+            selected is None
+            or any(
+                record and record.included and record.group == selected
+                for record in pair[1:3]
+            )
+        )
+    ]
+    ranked = [(pair, _delta(pair[1], pair[2], size, selected)) for pair in pairs]
+    ranked.sort(key=lambda item: -max(abs(item[1][i]) for i in indexes))
+    samples = []
+    for (category, old, new, changed), deltas in ranked[:sample_limit]:
+        record = new if new else old
+        changes = {
+            field: {"before": old.values[field], "after": new.values[field]}
+            for field in changed
+        }
+        samples.append(
+            {
+                "key": changeset._bound_response_value(
+                    {field: record.values[field] for field in keys}
+                ),
+                "category": category,
+                "before_row": old.row if old else None,
+                "after_row": new.row if new else None,
+                "before_included": bool(old and old.included),
+                "after_included": bool(new and new.included),
+                "before_group": changeset._bound_response_value(display[old.group])
+                if old
+                else None,
+                "after_group": changeset._bound_response_value(display[new.group])
+                if new
+                else None,
+                "fields_changed": changeset._bound_response_value(changes),
+                "contribution_delta": {aliases[i]: _text(deltas[i]) for i in indexes},
+            }
+        )
+    return {
+        "scope": {"metric_names": [aliases[i] for i in indexes], "group": group},
+        "metrics": metrics,
+        "changes": {
+            "counts": breakdown["counts"],
+            "sample": samples,
+            "truncated": len(pairs) > sample_limit,
+            "omitted_contribution_delta": {
+                aliases[i]: _text(
+                    sum(
+                        (deltas[i] for _, deltas in ranked[sample_limit:]),
+                        ZERO,
+                    )
+                )
+                for i in indexes
+            },
+        },
+        "groups": {
+            "compared_count": len(groups) if selected is None else 1,
+            "changed_count": len(changed_groups),
+            "sample": group_sample,
+            "truncated": len(changed_groups) > sample_limit,
+            "omitted_recipe_delta": {
+                aliases[i]: _text(
+                    sum(
+                        (
+                            after_actual.get(key, zeros)[i]
+                            - before_actual.get(key, zeros)[i]
+                            for key in changed_groups[sample_limit:]
+                        ),
+                        ZERO,
+                    )
+                )
+                for i in indexes
+            },
+            "omitted_contribution_delta": {
+                aliases[i]: _text(
+                    sum(
+                        (
+                            after_exact.get(key, zeros)[i]
+                            - before_exact.get(key, zeros)[i]
+                            for key in changed_groups[sample_limit:]
+                        ),
+                        ZERO,
+                    )
+                )
+                for i in indexes
+            },
+        },
+    }
+
+
+def _digest(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[0-9a-fA-F]{64}", value.strip()) is None
+    ):
+        raise ValidationError(f"{name} must be a 64-character SHA-256 hex digest")
+    return value.strip().lower()
+
+
+def _assert_response_budget(payload: dict) -> None:
+    size = len(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    )
+    if size > MAX_RESPONSE_CHARS:
+        raise ResponseTooLargeError(
+            "Explanation exceeds its response budget",
+            estimated_size=size,
+            limit=MAX_RESPONSE_CHARS,
+            hints=["reduce sample_limit", "select one metric and/or one group"],
+        )
+
+
+def explain_recipe_delta(
+    before_filepath: str,
+    after_filepath: str,
+    recipe: dict,
+    key_fields: list[str],
+    metric: str | None = None,
+    group: dict | None = None,
+    sample_limit: int = 5,
+    expected_before_sha256: str | None = None,
+    expected_after_sha256: str | None = None,
+    expected_recipe_sha256: str | None = None,
+) -> dict:
+    """Explain recomputed recipe changes; never read or write saved output cells."""
+    if type(sample_limit) is not int or not 1 <= sample_limit <= 10:
+        raise ValidationError("sample_limit must be an integer from 1 to 10")
+    if metric is not None and not isinstance(metric, str):
+        raise ValidationError("metric must be an exact recipe metric alias")
+    normalized, keys, fields = _contract(recipe, key_fields)
+    if group is not None:
+        recipes._object(
+            group,
+            allowed=set(normalized["group_by"]),
+            required=set(normalized["group_by"]),
+            location="group",
+        )
+        group = changeset._json_copy(group, location="group")
+    recipe_sha = hashlib.sha256(
+        changeset._canonical_json(normalized).encode("utf-8")
+    ).hexdigest()
+    expected_recipe = _digest(expected_recipe_sha256, "expected_recipe_sha256")
+    if expected_recipe is not None and expected_recipe != recipe_sha:
+        raise PreconditionFailedError(
+            "Recipe definition changed; use the intended recipe",
+            code="recipe_definition_mismatch",
+        )
+    paths = [
+        workbook._canonical_workbook_path(path, must_exist=True)
+        for path in (before_filepath, after_filepath)
+    ]
+    if any(path.suffix.lower() != ".xlsx" for path in paths):
+        raise ValidationError("Both source files must end with .xlsx")
+    if paths[0].samefile(paths[1]):
+        raise ValidationError(
+            "Source versions must be two distinct files, not aliases of the same file"
+        )
+    expected = [
+        _digest(expected_before_sha256, "expected_before_sha256"),
+        _digest(expected_after_sha256, "expected_after_sha256"),
+    ]
+    sources, digests = [], []
+    loading_recipe = {
+        **normalized,
+        "checks": [*normalized["checks"], {"type": "unique_key", "fields": keys}],
+    }
+    with recipes._recipe_workspace() as temp:
+        for index, path in enumerate(paths):
+            baseline, candidate = (
+                Path(temp) / f"source-{index}.xlsx",
+                Path(temp) / f"unused-{index}.xlsx",
+            )
+            with workbook._exclusive_workbook_lock(path):
+                digest = changeset._stage_workbook(path, baseline, candidate)
+            if expected[index] is not None and expected[index] != digest:
+                raise PreconditionFailedError(
+                    "Source version changed; inspect fresh snapshots",
+                    code="stale_workbook",
+                    details={"source": "before" if index == 0 else "after"},
+                    suggested_next_tool="explain_recipe_delta",
+                )
+            with workbook.safe_workbook(str(baseline)) as wb:
+                sources.append(recipes._load_table(wb, loading_recipe))
+            digests.append(digest)
+    _compatible(*sources, fields)
+    records = [_index(source, normalized, keys, fields) for source in sources]
+    oracles = [_groups(items, normalized) for items in records]
+    executions = [
+        _reconcile(source, indexed, oracle, normalized)
+        for source, indexed, oracle in zip(sources, records, oracles)
+    ]
+    observed = [item[0] for item in executions]
+    result = _present(
+        before=records[0],
+        after=records[1],
+        fields=fields,
+        keys=keys,
+        recipe=normalized,
+        before_exact=oracles[0],
+        after_exact=oracles[1],
+        before_actual=observed[0],
+        after_actual=observed[1],
+        metric=metric,
+        group=group,
+        sample_limit=sample_limit,
+    )
+    identity = {
+        "version": 1,
+        "before_sha256": digests[0],
+        "after_sha256": digests[1],
+        "recipe_sha256": recipe_sha,
+        "key_fields": keys,
+        "scope": result["scope"],
+    }
+    result.update(
+        {
+            "message": "Recipe delta explained and independently reconciled",
+            "explanation_version": 1,
+            "status": "verified",
+            "recipe_sha256": recipe_sha,
+            "explanation_token": "explanation_v1_"
+            + hashlib.sha256(
+                changeset._canonical_json(identity).encode("utf-8")
+            ).hexdigest(),
+            "key_fields": keys,
+            "numeric_encoding": "exact_decimal_strings",
+            "sources": {
+                name: {
+                    **{
+                        key: source[key]
+                        for key in (
+                            "sheet_name",
+                            "table_name",
+                            "range_ref",
+                            "bindings",
+                            "totals_rows_excluded",
+                        )
+                    },
+                    "sha256": digest,
+                    "row_count": len(source["rows"]),
+                    "matched_row_count": sum(
+                        record.included for record in indexed.values()
+                    ),
+                }
+                for name, source, digest, indexed in zip(
+                    ("before", "after"), sources, digests, records
+                )
+            },
+            "verification": {
+                "passed": True,
+                "coverage": "complete_bounded_sources_and_results",
+                "basis": "same_recipe_recomputed_on_both_sources",
+                "saved_outputs_checked": False,
+                "business_causes_inferred": False,
+                "snapshots": "independently_captured_not_cross_file_atomic",
+                "arithmetic": "exact_rational_on_loaded_decimal_representations",
+                "numeric_match": "exact"
+                if all(item[1]["numeric_match"] == "exact" for item in executions)
+                else "within_declared_tolerance",
+                "recipe_numeric_tolerance": {
+                    "relative": str(recipes.NUMERIC_REL_TOL),
+                    "absolute": str(recipes.NUMERIC_ABS_TOL),
+                    "integer_only_and_count": "exact",
+                },
+                "group_metric_checks": sum(len(oracle) for oracle in oracles)
+                * len(normalized["metrics"]),
+                "global_metric_checks": 2 * len(normalized["metrics"]),
+                "recipe_checks": {
+                    name: item[1] for name, item in zip(("before", "after"), executions)
+                },
+            },
+        }
+    )
+    _assert_response_budget(result)
+    return result
