@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-10-27
+
 ### Added
 
 - Added `run_workbook_recipe` for versioned JSON recipes that filter and aggregate one native Excel table directly into a reserved output range in the same workbook, without returning intermediate data through the model. Preview and commit use exact source/recipe preconditions and the existing verified ChangeSet snapshot/rollback path.
 - Added recipe checks for unique source keys, output row bounds, and sum reconciliation, plus full bounded column/row-order invariance probes, explicit header bindings, and sampled source-row lineage. Added a reusable JSON example and contract/limitations guide.
+- Added a reproducible stdio report workflow with an independent Decimal oracle, replay after source growth/reordered columns, and complete output clearing after shrink.
 
 ### Fixed
 

@@ -56,6 +56,15 @@ def test_tracked_bundle_matches_package_version():
     verifier.verify_repository_bundle(root)
 
 
+def test_tracked_bundle_contains_current_public_files():
+    root = Path(__file__).resolve().parents[1]
+    version = _package_version(root)
+    verifier = _load_release_verifier()
+    with zipfile.ZipFile(root / f"sheetforge-mcp-{version}.mcpb") as bundle:
+        for member in verifier.ALLOWED_MCPB_MEMBERS:
+            assert bundle.read(str(member)) == (root / str(member)).read_bytes()
+
+
 def test_sdist_uses_public_allowlist_and_private_artifact_excludes():
     root = Path(__file__).resolve().parents[1]
     pyproject = (root / "pyproject.toml").read_text()
@@ -90,6 +99,12 @@ def test_every_distribution_build_workflow_runs_shared_artifact_verifier():
         assert (
             "python scripts/verify_release_artifacts.py dist" in workflow.read_text()
         ), f"{workflow.name} builds distributions without the shared artifact verifier"
+
+
+def test_ci_uses_the_audited_dependency_lock():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/ci.yml").read_text()
+    assert "uv sync --locked --extra dev" in workflow
 
 
 def test_github_actions_use_node24_compatible_setup_versions():

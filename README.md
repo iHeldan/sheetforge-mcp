@@ -10,9 +10,9 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.10.0`
+Published package release: `0.11.0`
 Repository docs track the current main-branch tool surface, which currently exposes `79` MCP tools.
-Verified Recipes is currently available in development source and has not yet been published on PyPI.
+Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 
 ## Why SheetForge
 

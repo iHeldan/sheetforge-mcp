@@ -1,6 +1,6 @@
 # Verified Recipes v1
 
-Status: development source, not yet included in the published 0.10.0 package.
+Available since SheetForge MCP `0.11.0`.
 
 A recipe is a versioned JSON document describing how to filter and aggregate one
 native Excel table and materialize its result in a reserved worksheet rectangle.
