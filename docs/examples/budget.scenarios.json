@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "recipe": {
+    "version": 1,
+    "source": {"table_name": "Budget"},
+    "group_by": ["Unit"],
+    "metrics": [
+      {"op": "sum", "field": "Budget", "as": "Total"},
+      {"op": "count", "as": "Projects"}
+    ],
+    "output": {"sheet_name": "UnusedReport", "range_ref": "A1:C20"}
+  },
+  "key_fields": ["Id"],
+  "guards": [
+    {"metric": "Total", "scope": "overall", "max": 100000},
+    {"metric": "Total", "scope": "each_group", "min": 10000}
+  ],
+  "scenarios": [
+    {
+      "id": "A",
+      "updates": [{"key": {"Id": 1}, "values": {"Budget": 18000}}]
+    },
+    {
+      "id": "B",
+      "updates": [
+        {"key": {"Id": 1}, "values": {"Budget": 20000}},
+        {"key": {"Id": 3}, "values": {"Budget": 25000}}
+      ]
+    },
+    {
+      "id": "C",
+      "updates": [
+        {"key": {"Id": 4}, "values": {"Budget": 9500}},
+        {"key": {"Id": 2}, "values": {"Budget": 43500}}
+      ]
+    }
+  ]
+}

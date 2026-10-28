@@ -129,6 +129,10 @@ _OPERATION_SPECS: dict[str, tuple[set[str], set[str]]] = {
 }
 
 _ASSERTION_SPECS: dict[str, tuple[set[str], set[str]]] = {
+    "table_scenario_matches": (
+        {"type", "recipe", "key_fields", "guards", "expected_result_sha256"},
+        {"type", "recipe", "key_fields", "guards", "expected_result_sha256"},
+    ),
     "sheet_exists": (
         {"type", "sheet_name", "sheet_type"},
         {"type", "sheet_name"},
@@ -463,7 +467,11 @@ def _normalize_assertions(assertions: Any) -> list[dict[str, Any]]:
             _validate_non_empty_string(
                 assertion["sheet_name"], location=f"{location}.sheet_name"
             )
-        if assertion_type == "sheet_exists":
+        if assertion_type == "table_scenario_matches":
+            from .scenarios import normalize_outcome_assertion
+
+            assertion = normalize_outcome_assertion(assertion)
+        elif assertion_type == "sheet_exists":
             sheet_type = assertion.get("sheet_type", "any")
             if sheet_type not in {"any", "worksheet", "chartsheet"}:
                 raise ValidationError(
@@ -1255,7 +1263,13 @@ def _evaluate_assertions(
         results: list[dict[str, Any]] = []
         for index, assertion in enumerate(assertions, start=1):
             assertion_type = assertion["type"]
-            if assertion_type == "sheet_exists":
+            if assertion_type == "table_scenario_matches":
+                from .scenarios import assert_outcome
+
+                passed, details = assert_outcome(
+                    baseline_wb, candidate_wb, assertion, sample_limit
+                )
+            elif assertion_type == "sheet_exists":
                 passed, details = _assert_sheet_exists(candidate_wb, assertion)
             elif assertion_type == "cell_equals":
                 passed, details = _assert_cell_equals(candidate_wb, assertion)

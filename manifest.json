@@ -36,6 +36,7 @@
     {"name": "run_workbook_recipe", "description": "Preview or commit a reusable native-table aggregation recipe with checks and source-row samples"},
     {"name": "explain_recipe_delta", "description": "Explain recomputed recipe changes by source identity with independent reconciliation and bounded evidence"},
     {"name": "apply_table_patch", "description": "Rebase keyed literal table edits with explicit read dependencies and verified preview/commit"},
+    {"name": "evaluate_workbook_scenarios", "description": "Compare keyed alternatives with exact metric bounds and commit a selected verified outcome"},
     {"name": "diff_workbooks", "description": "Compare two workbooks and report structural plus sampled cell changes"},
     {"name": "create_workbook_snapshot", "description": "Create a verified, non-overwriting workbook snapshot for before/after validation"},
     {"name": "analyze_range_impact", "description": "Inspect workbook structures that overlap a worksheet range before mutation"},

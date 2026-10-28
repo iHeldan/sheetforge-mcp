@@ -33,6 +33,7 @@ from excel_mcp.changeset import apply_workbook_changeset as apply_workbook_chang
 from excel_mcp.recipes import run_workbook_recipe as run_workbook_recipe_impl
 from excel_mcp.explanations import explain_recipe_delta as explain_recipe_delta_impl
 from excel_mcp.rebase import apply_table_patch as apply_table_patch_impl
+from excel_mcp.scenarios import evaluate_workbook_scenarios as evaluate_workbook_scenarios_impl
 from excel_mcp.chart import (
     create_chart_from_series as create_chart_from_series_impl,
     create_chart_in_sheet as create_chart_impl,
@@ -270,6 +271,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         "run_workbook_recipe",
         "explain_recipe_delta",
         "apply_table_patch",
+        "evaluate_workbook_scenarios",
         "diff_workbooks",
         "inspect_named_range",
         "inspect_data_validation_rules",
@@ -286,6 +288,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             "run_workbook_recipe",
             "explain_recipe_delta",
             "apply_table_patch",
+            "evaluate_workbook_scenarios",
             "diff_workbooks",
         }:
             hints.append("set sample_limit to return a smaller audit sample")
@@ -1800,6 +1803,44 @@ def apply_workbook_changeset(
                 else None
             ),
             sample_limit=sample_limit,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(title="Evaluate Workbook Scenarios", destructiveHint=True),
+)
+def evaluate_workbook_scenarios(
+    filepath: str,
+    scenario_set: Dict[str, Any],
+    mode: str = "compare",
+    selected_scenario: Optional[str] = None,
+    expected_workbook_sha256: Optional[str] = None,
+    scenario_token: Optional[str] = None,
+    sample_limit: int = 3,
+) -> str:
+    """Compare explicit alternatives read-only, or commit one exact verified outcome.
+
+    scenario_set requires version=1, a Recipe v1 (only sum/count; output is never
+    written), key_fields, guards=[{metric, scope: overall|each_group, min?, max?}],
+    and scenarios=[{id, updates: [{key: {...}, values: {...}}]}]. Bounds are inclusive
+    exact comparisons. Each-group checks include all baseline/candidate groups;
+    missing baseline groups and empty coverage fail. No optimization or forecasting.
+    One native table, existing keys/literal updates only, no formulas/key changes.
+    Commit requires the identical set, selected_scenario id, scenario_token and
+    expected_workbook_sha256 from comparison; source drift requires a new comparison.
+    Full metric checks run again on the saved workbook under ChangeSet rollback.
+    Limits: 5 alternatives, 8 sum/count metrics, 20 guards, 50000 source cells,
+    1000 targets/49 column spans per alternative, 256KB JSON, sample_limit 1-5.
+    """
+    return _run_tool(
+        "evaluate_workbook_scenarios",
+        lambda: evaluate_workbook_scenarios_impl(
+            get_excel_path(filepath), scenario_set, mode=mode,
+            selected_scenario=selected_scenario,
+            expected_workbook_sha256=expected_workbook_sha256,
+            scenario_token=scenario_token, sample_limit=sample_limit,
         ),
     )
 

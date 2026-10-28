@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `evaluate_workbook_scenarios` (Verified Scenarios v1): compare up to five explicit keyed alternatives from one frozen native-table source, independently reconcile sum/count metrics, and enforce exact overall/per-group bounds without modifying the source.
+- Added full-input-bound selected-scenario commits and `table_scenario_matches` ChangeSet assertions. Recompute guards and complete referenced-input/results after reopening the saved workbook, with rollback on drift. Missing groups cannot bypass minimums; changed source bytes require a fresh comparison. Includes a synthetic stdio workflow and reusable budget example; no optimization, formula evaluation or forecasting.
 - Added `apply_table_patch` (Verified Rebase v1): compare a pinned retained base, current native table and explicit keyed updates; follow row/column reordering while checking complete declared row-local read dependencies.
 - Return bounded conflict evidence and whole-batch blocking for changed premises, competing writes and missing rows. Fresh preview/commit binds base/current bytes and the full patch to existing ChangeSet snapshots, stale-write protection and rollback. No implicit dependency inference, force merge or partial commit.
 

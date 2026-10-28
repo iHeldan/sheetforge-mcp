@@ -203,6 +203,8 @@ Returns matches under `data.matches`:
 
   Assertion cell/range references are normalized to canonical A1 form, so absolute references such as `$A$1:$B$3` compare correctly with workbook metadata. Value assertions distinguish booleans from numbers (`true` is not equal to `1`) while treating equivalent integer and floating-point numeric values as equal.
 
+  Development source also supports `table_scenario_matches` with `recipe`, `key_fields`, `guards`, and `expected_result_sha256`: independently recompute baseline/candidate table metrics, check all guards, and match the complete referenced-input/result digest before and after replacement. See [Verified Scenarios](docs/verified-scenarios.md). This assertion verifies outcomes; direct ChangeSets retain their existing mutation allowlist.
+
   A typical two-step call keeps `operations`, `assertions`, snapshot options, and target path identical between preview and commit:
 
   ```json
@@ -256,6 +258,13 @@ Returns matches under `data.matches`:
 
 - `diff_workbooks(before_filepath: str, after_filepath: str, sample_limit: int = 25, include_cell_changes: bool = True) -> str`
   Compares two workbook files and reports sheet/property changes, named-range changes, table/chart changes, validation and conditional-format changes, plus sampled cell-value diffs when `include_cell_changes=True`.
+- `evaluate_workbook_scenarios(filepath: str, scenario_set: Dict[str, Any], mode: str = "compare", selected_scenario: Optional[str] = None, expected_workbook_sha256: Optional[str] = None, scenario_token: Optional[str] = None, sample_limit: int = 3) -> str`
+  Compare explicit alternatives from one stable source capture without modifying the original. Requires `{version: 1, recipe, key_fields, guards, scenarios}`. The Recipe v1 supports only sum/count here; output settings are fingerprinted but never written/inspected. Guards use `{metric, scope: "overall" | "each_group", min?, max?}` with inclusive exact numeric bounds. Each-group covers the union of baseline/candidate groups; missing baseline groups and empty coverage fail. Scenarios are `{id, updates: [{key: {...}, values: {...}}]}` over existing unique keys and literal values, not formulas or key changes.
+
+  Results include complete metric/count evidence, observed guard extrema, bounded failure/write samples, and per-alternative `passes_guards`, `ready_to_commit`, `result_sha256`, and `scenario_token`. No automatic ranking/selection. Commit requires the identical full set, selected ID, token and `expected_workbook_sha256`; changes to unpatched rows require a new comparison too. Selected commits use verified snapshots and exact target/outcome assertions, recomputed after reopening under rollback. Already-satisfied alternatives remain read-only but must still pass guards; tokens are not authorization or exactly-once receipts.
+
+  Limits: five alternatives, eight sum/count metrics, twenty guards, 50000 source cells/64 columns, 1000 target cells/49 column spans per alternative, 256000-byte scenario set (128000-byte compiled patch), `sample_limit` 1-5. Complete bounded checks, not sampled verification. This validates declared calculations and constraints, not business meaning or forecasts. [Full contract and example](docs/verified-scenarios.md). Development source only; not in published `0.12.0`.
+
 - `apply_table_patch(base_filepath: str, filepath: str, patch: Dict[str, Any], expected_base_sha256: str, mode: str = "preview", expected_workbook_sha256: Optional[str] = None, rebase_token: Optional[str] = None, sample_limit: int = 5) -> str`
   Verified Rebase v1 compares a pinned retained base, the current native Excel table, and keyed literal updates. Requires patch `{version: 1, source: {table_name, optional sheet_name}, key_fields: [...], read_fields: [...], updates: [{key: {...}, values: {...}}]}`. All key fields are required per update; read_fields is explicit, possibly empty, and cannot overlap write fields. Exact header names and the same complete header set are required; row/column reordering is allowed. All keys are checked for blank/duplicate identities, not sampled.
 

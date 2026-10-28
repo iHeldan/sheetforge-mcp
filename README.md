@@ -11,13 +11,14 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
 Published package release: `0.12.0`
-Repository docs track the current main-branch tool surface, which currently exposes `81` MCP tools.
+Repository docs track the current main-branch tool surface, which currently exposes `82` MCP tools.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.
-Verified Rebase is currently development source only, not in the published `0.12.0` package (80 tools).
+Verified Rebase and Verified Scenarios are currently development source only, not in the published `0.12.0` package (80 tools).
 
 ## Why SheetForge
 
+- outcome-checked alternatives via `evaluate_workbook_scenarios`: compare explicit keyed changes against exact overall/group metric bounds, then commit one selected outcome with post-save recomputation and rollback (unreleased)
 - intent-preserving table edits via `apply_table_patch`: rebind keyed updates against a pinned base, reject changed premises and conflicting writes, and commit a fresh verified preview while keeping unrelated current values (unreleased)
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
 - verified multi-step edits via `apply_workbook_changeset`: preview the complete candidate, value/table/layout assertions, structural diff, and sampled cell changes, then commit that exact plan only if the source workbook still matches
@@ -147,7 +148,7 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 81 MCP tools across these groups:
+The server currently registers 82 MCP tools across these groups:
 
 - workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `apply_workbook_changeset`, `run_workbook_recipe`, `explain_recipe_delta`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
 - data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, `cross_workbook_lookup`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `append_excel_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
@@ -156,6 +157,12 @@ The server currently registers 81 MCP tools across these groups:
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `inspect_formula`, `validate_excel_range`, `get_data_validation_info`, `inspect_data_validation_rules`, `remove_data_validation_rules`, `inspect_conditional_format_rules`, `remove_conditional_format_rules`
 - analysis and structure: `create_table`, `list_charts`, `find_free_canvas`, `create_chart`, `create_chart_from_series`, `create_pivot_table`
 - guarded table patches: `apply_table_patch` (unreleased)
+- guarded alternatives: `evaluate_workbook_scenarios` (unreleased)
+
+For comparing proposed edits before choosing one, see the
+[Verified Scenarios guide](docs/verified-scenarios.md) and
+[budget example](docs/examples/budget.scenarios.json). Scenarios verify explicit
+sum/count bounds, not forecasts or the business correctness of a decision.
 
 For native-table edits prepared against an earlier snapshot, see `apply_table_patch`
 and the [Verified Rebase guide](docs/verified-rebase.md). This is separate from
