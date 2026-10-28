@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "source": {"table_name": "Products"},
+  "key_fields": ["SKU"],
+  "read_fields": ["Name", "Features"],
+  "updates": [
+    {
+      "key": {"SKU": "SKU-123"},
+      "values": {"Description": "Updated product copy"}
+    }
+  ]
+}

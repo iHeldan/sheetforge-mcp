@@ -32,6 +32,7 @@ from excel_mcp.calculations import inspect_formula as inspect_formula_impl
 from excel_mcp.changeset import apply_workbook_changeset as apply_workbook_changeset_impl
 from excel_mcp.recipes import run_workbook_recipe as run_workbook_recipe_impl
 from excel_mcp.explanations import explain_recipe_delta as explain_recipe_delta_impl
+from excel_mcp.rebase import apply_table_patch as apply_table_patch_impl
 from excel_mcp.chart import (
     create_chart_from_series as create_chart_from_series_impl,
     create_chart_in_sheet as create_chart_impl,
@@ -268,6 +269,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
         "apply_workbook_changeset",
         "run_workbook_recipe",
         "explain_recipe_delta",
+        "apply_table_patch",
         "diff_workbooks",
         "inspect_named_range",
         "inspect_data_validation_rules",
@@ -283,6 +285,7 @@ def _response_size_hints(operation: str, payload: Dict[str, Any]) -> List[str]:
             "apply_workbook_changeset",
             "run_workbook_recipe",
             "explain_recipe_delta",
+            "apply_table_patch",
             "diff_workbooks",
         }:
             hints.append("set sample_limit to return a smaller audit sample")
@@ -1797,6 +1800,45 @@ def apply_workbook_changeset(
                 else None
             ),
             sample_limit=sample_limit,
+        ),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
+    annotations=ToolAnnotations(title="Apply Table Patch", destructiveHint=True),
+)
+def apply_table_patch(
+    base_filepath: str,
+    filepath: str,
+    patch: Dict[str, Any],
+    expected_base_sha256: str,
+    mode: str = "preview",
+    expected_workbook_sha256: Optional[str] = None,
+    rebase_token: Optional[str] = None,
+    sample_limit: int = 5,
+) -> str:
+    """Preview/commit a three-way keyed patch against a pinned retained base.
+
+    patch requires version=1, source={table_name, optional sheet_name}, nonempty
+    key_fields, explicit read_fields (use [] only for no extra dependencies), and
+    updates=[{key: {all key fields}, values: {literal field updates}}]. Write fields
+    must not be keys/read_fields. Checks complete unique keys and row-local read
+    dependencies; does not infer undeclared or cross-row dependencies. Existing
+    rows only, same exact headers with reordering allowed, no formula evaluation.
+    Conflicts/missing rows/changed premises block the entire batch. Commit requires
+    the identical patch/base and rebase_token/expected_workbook_sha256 from a fresh
+    preview. Reuses ChangeSet snapshots, exact-file checks and rollback. Limits:
+    1000 target cells, 50 contiguous column spans, 50000 table cells/64 columns per
+    source; sample_limit 1-10 bounds examples only. Tokens are not authentication.
+    """
+    return _run_tool(
+        "apply_table_patch",
+        lambda: apply_table_patch_impl(
+            get_excel_path(base_filepath), get_excel_path(filepath), patch,
+            expected_base_sha256=expected_base_sha256, mode=mode,
+            expected_workbook_sha256=expected_workbook_sha256,
+            rebase_token=rebase_token, sample_limit=sample_limit,
         ),
     )
 

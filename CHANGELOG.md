@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- Added `apply_table_patch` (Verified Rebase v1): compare a pinned retained base, current native table and explicit keyed updates; follow row/column reordering while checking complete declared row-local read dependencies.
+- Return bounded conflict evidence and whole-batch blocking for changed premises, competing writes and missing rows. Fresh preview/commit binds base/current bytes and the full patch to existing ChangeSet snapshots, stale-write protection and rollback. No implicit dependency inference, force merge or partial commit.
+
 ## 0.12.0 - 2026-10-27
 
 ### Added
