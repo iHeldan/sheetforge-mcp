@@ -1,6 +1,6 @@
 # Verified Rebase v1
 
-Status: development source, not included in the published `0.12.0` package.
+Available since SheetForge MCP `0.13.0`.
 
 `apply_table_patch` rebinds explicit keyed updates against a current native Excel
 table without replacing it with an old copy. It compares a retained base snapshot,

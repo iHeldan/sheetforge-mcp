@@ -1,6 +1,6 @@
 # Verified Scenarios v1
 
-Status: development source only, not in the published `0.12.0` package.
+Available since SheetForge MCP `0.13.0`.
 
 `evaluate_workbook_scenarios` compares explicit keyed alternatives against one
 captured native Excel table. It recomputes a shared sum/count recipe, checks exact

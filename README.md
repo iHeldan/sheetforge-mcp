@@ -10,16 +10,16 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.12.0`
+Published package release: `0.13.0`
 Repository docs track the current main-branch tool surface, which currently exposes `82` MCP tools.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.
-Verified Rebase and Verified Scenarios are currently development source only, not in the published `0.12.0` package (80 tools).
+Verified Rebase and Verified Scenarios v1 are included in `0.13.0`: intent-preserving keyed edits and outcome-checked alternatives with verified commits.
 
 ## Why SheetForge
 
-- outcome-checked alternatives via `evaluate_workbook_scenarios`: compare explicit keyed changes against exact overall/group metric bounds, then commit one selected outcome with post-save recomputation and rollback (unreleased)
-- intent-preserving table edits via `apply_table_patch`: rebind keyed updates against a pinned base, reject changed premises and conflicting writes, and commit a fresh verified preview while keeping unrelated current values (unreleased)
+- outcome-checked alternatives via `evaluate_workbook_scenarios`: compare explicit keyed changes against exact overall/group metric bounds, then commit one selected outcome with post-save recomputation and rollback
+- intent-preserving table edits via `apply_table_patch`: rebind keyed updates against a pinned base, reject changed premises and conflicting writes, and commit a fresh verified preview while keeping unrelated current values
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
 - verified multi-step edits via `apply_workbook_changeset`: preview the complete candidate, value/table/layout assertions, structural diff, and sampled cell changes, then commit that exact plan only if the source workbook still matches
 - reusable report recipes via `run_workbook_recipe`: filter and aggregate a native table, check the result, and write it through a verified ChangeSet without passing intermediate rows through the model
@@ -156,8 +156,8 @@ The server currently registers 82 MCP tools across these groups:
 - formatting and layout: `format_range`, `format_ranges`, `read_range_formatting`, `freeze_panes`, `set_autofilter`, `set_print_area`, `set_print_titles`, `set_column_widths`, `autofit_columns`, `set_row_heights`, `merge_cells`, `unmerge_cells`, `get_merged_cells`
 - formulas and validation: `apply_formula`, `validate_formula_syntax`, `inspect_formula`, `validate_excel_range`, `get_data_validation_info`, `inspect_data_validation_rules`, `remove_data_validation_rules`, `inspect_conditional_format_rules`, `remove_conditional_format_rules`
 - analysis and structure: `create_table`, `list_charts`, `find_free_canvas`, `create_chart`, `create_chart_from_series`, `create_pivot_table`
-- guarded table patches: `apply_table_patch` (unreleased)
-- guarded alternatives: `evaluate_workbook_scenarios` (unreleased)
+- guarded table patches: `apply_table_patch`
+- guarded alternatives: `evaluate_workbook_scenarios`
 
 For comparing proposed edits before choosing one, see the
 [Verified Scenarios guide](docs/verified-scenarios.md) and

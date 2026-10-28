@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-10-28
+
 ### Added
 
 - Added `evaluate_workbook_scenarios` (Verified Scenarios v1): compare up to five explicit keyed alternatives from one frozen native-table source, independently reconcile sum/count metrics, and enforce exact overall/per-group bounds without modifying the source.
