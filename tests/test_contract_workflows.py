@@ -59,6 +59,13 @@ def exercise_contract_workflow(tmp_path, *, installed=False):
                     )
                     assert tool.outputSchema is None and tool.annotations.readOnlyHint
                     assert set(tool.inputSchema["required"]) == {"filepath", "contract"}
+                    assert tool.inputSchema["properties"]["sample_limit"]["enum"] == [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                    ]
                     runner = next(
                         t for t in inventory if t.name == "run_workbook_recipe"
                     )
@@ -84,6 +91,33 @@ def exercise_contract_workflow(tmp_path, *, installed=False):
                     assert (
                         path.read_bytes() == before and path.stat().st_mtime_ns == mtime
                     )
+                    assert inspection["data"]["recipe_input_fields"] == [
+                        "id",
+                        "net",
+                        "currency",
+                        "status",
+                    ]
+                    invalid_limit = await session.call_tool(
+                        "inspect_workbook_contract",
+                        {
+                            "filepath": str(path),
+                            "contract": contract,
+                            "sample_limit": 10,
+                        },
+                    )
+                    assert invalid_limit.isError and path.read_bytes() == before
+                    wrong = copy.deepcopy(recipe)
+                    wrong["metrics"][0]["field"] = "NetSales"
+                    recovery = await call(
+                        "run_workbook_recipe",
+                        {"recipe": wrong, "workbook_contract": contract},
+                    )
+                    assert recovery["error"]["code"] == "contract_recipe_fields_invalid"
+                    assert (
+                        recovery["error"]["details"]["examples"][0]["replace_with"]
+                        == "net"
+                    )
+                    assert path.read_bytes() == before
                     invalid = await call(
                         "inspect_workbook_contract",
                         {"contract": {**contract, "force": True}},

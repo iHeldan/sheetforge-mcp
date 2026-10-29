@@ -16,7 +16,15 @@ class DataError(ExcelMCPError):
 
 class ValidationError(ExcelMCPError):
     """Raised when validation fails."""
-    pass
+
+    def __init__(self, *args, code=None, details=None, suggested_next_tool=None):
+        super().__init__(*args)
+        if code is not None:
+            self.code = code
+        if details:
+            self.details = details
+        if suggested_next_tool is not None:
+            self.suggested_next_tool = suggested_next_tool
 
 class FormattingError(ExcelMCPError):
     """Raised when formatting operations fail."""

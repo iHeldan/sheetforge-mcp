@@ -4,6 +4,10 @@ Available since SheetForge MCP `0.11.0`.
 
 Unreleased on main: optional `workbook_contract` enforces explicit logical bindings
 and full bounded source checks in preview/commit. See [Workbook Contracts](workbook-contracts.md).
+Use inspection's `recipe_input_fields` (logical binding keys), not physical Excel
+headers. Contract field errors provide bounded request-location corrections;
+apply only exact input-reference fixes, preserve the approved contract and request
+a fresh preview. See [field guidance and safe recovery](workbook-contracts.md#field-guidance-and-safe-recovery).
 Without that argument, the existing exact-physical-header contract below is unchanged.
 
 A recipe is a versioned JSON document describing how to filter and aggregate one

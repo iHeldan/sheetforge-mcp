@@ -1892,7 +1892,7 @@ def apply_table_patch(
 def inspect_workbook_contract(
     filepath: str,
     contract: Dict[str, Any],
-    sample_limit: int = 3,
+    sample_limit: Literal[1, 2, 3, 4, 5] = 3,
 ) -> str:
     """Read-only full bounded native-table contract check; never infer business meaning.
 
@@ -1908,6 +1908,15 @@ def inspect_workbook_contract(
     50000 table cells/64 columns; sample_limit 1-5 affects row examples only.
     Pass the same contract as workbook_contract to run_workbook_recipe to enforce
     it in preview/commit; this inspection alone does not guard other tools.
+    Recovery: omit sample_limit for default 3 (never use Recipe's 10 here).
+    recipe_input_fields lists the exact logical names to use in Recipe inputs;
+    bindings values are physical headers for inspection, not Recipe field names.
+    For {name: "net", headers: ["NetSales"]}, use metrics.field="net", not
+    "NetSales". For {name: "currency", headers: ["Currency"]}, use
+    group_by=["currency"]. Metric as="Revenue" is an output label, not remapped.
+    Follow next_action: unresolved/violated requires an owner decision, not a
+    changed contract or filtered-out violation. Reuse the supplied filepath;
+    do not construct an absolute path by prefixing the client working directory.
     """
     return _run_tool(
         "inspect_workbook_contract",
@@ -1938,7 +1947,15 @@ def run_workbook_recipe(
     count metrics omit field. Other metrics: sum, avg, min, max, count_non_null,
     count_distinct. Only literal finite JSON cells in referenced fields are supported.
     Optional workbook_contract enforces Contract v1: source selectors must match,
-    recipe input fields become logical names, and contract filters are mandatory
+    ALL Recipe input references must use contract fields[].name, NEVER physical
+    fields[].headers. Copy names from inspection.recipe_input_fields (binding keys).
+    Example: net bound to NetSales -> metrics=[{op:"sum",field:"net",as:"Revenue"}];
+    currency bound to Currency -> group_by=["currency"]. The as label stays Revenue.
+    This also applies to filters.field, unique_key.fields and sum_matches.source_field.
+    Contract field errors return bounded details.examples with Recipe JSON-pointer
+    paths and exact replace_with names where known: fix the Recipe references only,
+    keep workbook_contract unchanged, then make a NEW preview before commit.
+    Contract filters are mandatory
     AND predicates. All contract rows are checked before filtering and again on
     the saved workbook. Repeat the identical contract on commit; changed contracts
     invalidate recipe tokens. Declared meanings are not verified business truth.

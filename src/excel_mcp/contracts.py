@@ -15,6 +15,7 @@ CONTRACT_ENGINE_VERSION = 1
 MAX_CONTRACT_BYTES = 32_000
 MAX_CONTRACT_FIELDS = 32
 MAX_CONTRACT_SUMMARY = 12_000
+MAX_RECOVERY_EXAMPLES = 5
 
 
 def _digest(value: Any) -> str:
@@ -206,6 +207,8 @@ def inspect_table_contract(wb: Any, contract: dict, sample_limit: int) -> dict:
         "source": source_info,
         "declared": declared,
         "bindings": bindings,
+        "recipe_input_fields": [field["name"] for field in contract["fields"]],
+        "field_usage": "Recipe input references use logical names (binding keys), not physical Excel headers (binding values). Metric 'as' labels are output names and stay unchanged.",
         "unresolved": unresolved,
         "checked": [],
         "source_row_count": len(metadata["rows"]),
@@ -216,6 +219,11 @@ def inspect_table_contract(wb: Any, contract: dict, sample_limit: int) -> dict:
         "passed": not unresolved,
     }
     if unresolved:
+        report["next_action"] = {
+            "action": "ask_data_owner",
+            "reason": "resolve_missing_or_ambiguous_headers",
+            "instruction": "Do not select an alias, change the approved contract or write a report. Reinspect after an approved source/definition change.",
+        }
         return report
     source = recipes._load_table(wb, _physical_recipe(contract, bindings))
     checked = report["checked"]
@@ -281,6 +289,19 @@ def inspect_table_contract(wb: Any, contract: dict, sample_limit: int) -> dict:
     )
     report["passed"] = all(item["passed"] for item in checked)
     report["status"] = "valid" if report["passed"] else "violated"
+    report["next_action"] = (
+        {
+            "tool": "run_workbook_recipe",
+            "mode": "preview",
+            "instruction": "Use recipe_input_fields in group_by, metrics.field, filters.field and source check fields; pass the identical contract as workbook_contract.",
+        }
+        if report["passed"]
+        else {
+            "action": "ask_data_owner",
+            "reason": "source_rules_failed",
+            "instruction": "Do not weaken the contract or filter away failed source rows. No report write is safe until the source or definition is explicitly approved and reinspected.",
+        }
+    )
     report["binding_sha256"] = _digest(
         {
             "engine": CONTRACT_ENGINE_VERSION,
@@ -294,11 +315,70 @@ def inspect_table_contract(wb: Any, contract: dict, sample_limit: int) -> dict:
     return report
 
 
+def _field_recovery(recipe: dict, bindings: dict, invalid: set[str]) -> dict:
+    references = [
+        (f"/recipe/group_by/{i}", field) for i, field in enumerate(recipe["group_by"])
+    ]
+    references += [
+        (f"/recipe/metrics/{i}/field", item["field"])
+        for i, item in enumerate(recipe["metrics"])
+        if "field" in item
+    ]
+    references += [
+        (f"/recipe/filters/{i}/field", item["field"])
+        for i, item in enumerate(recipe["filters"])
+    ]
+    for i, check in enumerate(recipe["checks"]):
+        if check["type"] == "unique_key":
+            references += [
+                (f"/recipe/checks/{i}/fields/{j}", field)
+                for j, field in enumerate(check["fields"])
+            ]
+        elif check["type"] == "sum_matches":
+            references.append(
+                (f"/recipe/checks/{i}/source_field", check["source_field"])
+            )
+    reverse = {physical: logical for logical, physical in bindings.items()}
+    failures = [(path, field) for path, field in references if field in invalid]
+    examples = []
+    for path, field in failures[:MAX_RECOVERY_EXAMPLES]:
+        example = {"path": path, "provided": field}
+        if field in reverse:
+            example["replace_with"] = reverse[field]
+        else:
+            example["instruction"] = (
+                "Choose an existing logical field only if it matches the intended meaning; no exact physical-header replacement is known."
+            )
+        examples.append(example)
+    return _bounded_report(
+        {
+            "argument": "recipe",
+            "allowed_input_fields": list(bindings),
+            "invalid_reference_count": len(failures),
+            "examples": examples,
+            "examples_truncated": len(failures) > len(examples),
+            "retry_mode": "preview",
+            "instruction": "Correct only these Recipe input references; keep the approved workbook_contract, source selector, filter values/operators and output aliases unchanged, and request a fresh preview. Suggestions are not applied automatically.",
+        }
+    )
+
+
 def compile_contract_recipe(
     wb: Any, recipe: dict, contract: dict, sample_limit: int
 ) -> tuple[dict, dict]:
     if recipe["source"] != contract["source"]:
-        raise ValidationError("Recipe and contract source selectors must be identical")
+        raise ValidationError(
+            "Recipe and contract source selectors must be identical; copy workbook_contract.source to recipe.source without changing the approved contract",
+            code="contract_recipe_source_mismatch",
+            details=_bounded_report(
+                {
+                    "path": "/recipe/source",
+                    "replace_with": contract["source"],
+                    "retry_mode": "preview",
+                }
+            ),
+            suggested_next_tool="run_workbook_recipe",
+        )
     report = inspect_table_contract(wb, contract, sample_limit)
     if not report["passed"]:
         raise PreconditionFailedError(
@@ -308,8 +388,14 @@ def compile_contract_recipe(
             suggested_next_tool="inspect_workbook_contract",
         )
     bindings = report["bindings"]
-    if set(recipes._source_fields(recipe)) - set(bindings):
-        raise ValidationError("Contract recipes must use declared logical fields only")
+    invalid = set(recipes._source_fields(recipe)) - set(bindings)
+    if invalid:
+        raise ValidationError(
+            "Contract recipes must use declared logical fields only; use binding keys, not physical Excel header values. See details.examples for exact Recipe reference corrections",
+            code="contract_recipe_fields_invalid",
+            details=_field_recovery(recipe, bindings, invalid),
+            suggested_next_tool="run_workbook_recipe",
+        )
     output_headers = [*recipe["group_by"], *[m["as"] for m in recipe["metrics"]]]
     if len({name.strip().casefold() for name in output_headers}) != len(output_headers):
         raise ValidationError(
@@ -352,7 +438,16 @@ def inspect_workbook_contract(
     filepath: str, contract: dict, sample_limit: int = 3
 ) -> dict:
     if type(sample_limit) is not int or not 1 <= sample_limit <= 5:
-        raise ValidationError("sample_limit must be an integer from 1 to 5")
+        raise ValidationError(
+            "sample_limit must be an integer from 1 to 5; omit it for the default 3, or retry the same inspection with sample_limit=3. Recipe's 1-10 limit does not apply to inspection",
+            code="contract_sample_limit_invalid",
+            details={
+                "argument": "sample_limit",
+                "allowed": [1, 2, 3, 4, 5],
+                "suggested_arguments": {"sample_limit": 3},
+            },
+            suggested_next_tool="inspect_workbook_contract",
+        )
     normalized = normalize_contract(contract)
     path = workbook._canonical_workbook_path(filepath, must_exist=True)
     if path.suffix.lower() != ".xlsx":

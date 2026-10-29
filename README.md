@@ -19,7 +19,7 @@ Verified Rebase and Verified Scenarios v1 are included in `0.13.0`: intent-prese
 
 ## Why SheetForge
 
-- reusable workbook contracts (unreleased) via `inspect_workbook_contract` and optional Recipe enforcement: separate declared meanings from checked key/type/value rules, resolve only approved exact headers, and block ambiguous bindings before report generation
+- reusable workbook contracts (unreleased) via `inspect_workbook_contract` and optional Recipe enforcement: separate declared meanings from checked key/type/value rules, resolve only approved exact headers, block ambiguous bindings, and guide agents through logical-field errors without weakening the contract
 - outcome-checked alternatives via `evaluate_workbook_scenarios`: compare explicit keyed changes against exact overall/group metric bounds, then commit one selected outcome with post-save recomputation and rollback
 - intent-preserving table edits via `apply_table_patch`: rebind keyed updates against a pinned base, reject changed premises and conflicting writes, and commit a fresh verified preview while keeping unrelated current values
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`

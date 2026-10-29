@@ -18,7 +18,8 @@ fallback exists. Extra source columns are permitted but cannot be referenced by
 a contract-backed Recipe unless declared.
 
 1. Call `inspect_workbook_contract(filepath, contract)`. Inspect `status`,
-   `unresolved`, `checked`, `declared` and `bindings`.
+   `unresolved`, `checked`, `declared`, `bindings` and `next_action`. Only proceed
+   when `passed` is true; copy Recipe field names from `recipe_input_fields`.
 2. Call `run_workbook_recipe(filepath, recipe, workbook_contract=contract)`.
 3. Commit with the identical recipe/contract and preview's `recipe_token` and
    `expected_workbook_sha256`. Source/contract changes require a fresh preview.
@@ -120,3 +121,62 @@ escaped summary is capped at 12K characters; Recipe evidence shares its existing
 8K metadata cap. Over-budget calls fail before mutation, even within other limits.
 Source checks are complete within these bounds, not inferred from samples. As with
 Recipes, openpyxl loads the workbook; table caps do not bound unrelated file content.
+
+## Field guidance and safe recovery
+
+Contract-backed Recipes use **logical names**, even when Excel uses different
+headers. The inspection's `bindings` maps logical names (keys) to physical headers
+(values); `recipe_input_fields` lists the allowed input names explicitly.
+
+| Purpose | Example | Recipe location |
+| --- | --- | --- |
+| Logical input name | `net` bound to Excel `NetSales` | `metrics[].field: "net"` |
+| Logical group name | `currency` bound to Excel `Currency` | `group_by: ["currency"]` |
+| Logical predicate name | `status` bound to Excel `Status` | `filters[].field: "status"` |
+| Logical check input | `id` or `net` | `unique_key.fields` or `sum_matches.source_field` |
+| Output label | `Revenue` | `metrics[].as` and `sum_matches.output_field`, unchanged |
+
+`contract_recipe_fields_invalid` errors include `suggested_next_tool` and bounded
+`details` such as:
+
+```json
+{
+  "allowed_input_fields": ["id", "net", "currency", "status"],
+  "invalid_reference_count": 1,
+  "examples": [{
+    "path": "/recipe/metrics/0/field",
+    "provided": "NetSales",
+    "replace_with": "net"
+  }],
+  "examples_truncated": false,
+  "retry_mode": "preview"
+}
+```
+
+Paths are JSON pointers into the request (`recipe` argument included), not Excel
+cell addresses. At most five examples are returned, with a complete failure count.
+`replace_with` exists only for an exact physical header already bound by the
+validated contract. Unknown names receive no guessed or case-folded replacement.
+A valid logical name always remains logical, even if another field uses that name
+as its physical header. Suggestions are **not applied automatically**.
+
+Correct only the Recipe's input references. Preserve the approved contract, source
+selector, predicate values/operators and output aliases. Request a **fresh preview**,
+then commit the corrected request with its new preview tokens. A
+`contract_recipe_source_mismatch` instead points to `/recipe/source` and the approved
+contract selector; it does not authorize changing the contract's source.
+
+For `unresolved` or `violated`, inspection's `next_action` asks for a data-owner
+decision. Do not choose between ambiguous aliases, weaken a rule, discard a failed
+source row or claim unperformed value checks passed. Resolve the approved source
+or definition first, then inspect again. Source-rule failures take precedence over
+Recipe field correction suggestions.
+
+Inspection `sample_limit` defaults to **3** and accepts only **1-5**. The MCP schema
+lists those values explicitly; invalid MCP arguments are rejected by SDK validation
+(`isError`), before the function runs. Direct Python calls instead raise
+`ValidationError` with code `contract_sample_limit_invalid` and a suggested limit
+of 3. Recipe's separate sample limit accepts 1-10; it does not change inspection's
+limit. Reuse the supplied workbook path rather than deriving it from the client's
+working directory. None of this advisory metadata changes contract/binding hashes
+or Recipe tokens; the existing response budgets still apply before mutation.

@@ -6,6 +6,7 @@
 
 - Workbook Contracts v1: read-only `inspect_workbook_contract`, exact approved header alternatives, logical fields, complete bounded key/type/value checks before filtering, and explicit separation of declared meanings from checked conditions.
 - Optional `workbook_contract` on `run_workbook_recipe`, with mandatory contract filters, logical output headers, full contract-bound preview/commit, and reopened `table_contract_matches` assertions under ChangeSet rollback. No fuzzy binding, coercion, formula evaluation or business-truth inference.
+- Contract field guidance and recovery: inspection lists logical Recipe input names and safe next actions; field errors identify bounded request paths and exact physical-to-logical replacements without changing the approved contract. Inspection sample limits are explicit in the MCP schema. Source failures still require an owner decision and corrected Recipes require a fresh preview.
 
 ### Fixed
 
