@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Shared workbook-path guidance in MCP initialization and all path parameter schemas, including multi-file inputs and snapshot destinations. Structured path-policy errors suggest safe same-tool recovery without guessing a basename, relocating a request, disclosing the server root or weakening confinement. Existing unrooted stdio absolute-path requirements remain unchanged.
+
 ### Added
 
 - Workbook Contracts v1: read-only `inspect_workbook_contract`, exact approved header alternatives, logical fields, complete bounded key/type/value checks before filtering, and explicit separation of declared meanings from checked conditions.

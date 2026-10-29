@@ -180,3 +180,6 @@ of 3. Recipe's separate sample limit accepts 1-10; it does not change inspection
 limit. Reuse the supplied workbook path rather than deriving it from the client's
 working directory. None of this advisory metadata changes contract/binding hashes
 or Recipe tokens; the existing response budgets still apply before mutation.
+For shared path-policy error codes and safe same-tool recovery, see
+[Workbook paths](file-paths.md). A path correction never authorizes changing the
+approved contract or selecting a different workbook without a fresh preview.

@@ -26,6 +26,11 @@ class ValidationError(ExcelMCPError):
         if suggested_next_tool is not None:
             self.suggested_next_tool = suggested_next_tool
 
+
+class WorkbookPathError(ValidationError, ValueError):
+    """Structured path-policy failure, retaining ValueError compatibility."""
+
+
 class FormattingError(ExcelMCPError):
     """Raised when formatting operations fail."""
     pass

@@ -134,10 +134,16 @@ http://127.0.0.1:8017/sse
 
 ## File Path Rules
 
+- Paths refer to the server filesystem, not the client's cwd. Reuse supplied paths; never invent an absolute prefix for a relative name.
 - In `stdio` mode, `filepath` values must be absolute paths.
 - In `streamable-http` and `sse` mode, relative paths are resolved under `EXCEL_FILES_PATH`.
 - In `streamable-http` and `sse` mode, absolute paths are accepted only when they remain inside `EXCEL_FILES_PATH`; parent traversal and symlink escapes are rejected.
 - In `streamable-http` and `sse` mode, the server creates `EXCEL_FILES_PATH` automatically if it does not exist.
+
+Path-policy errors include a stable code and safe next step. Retry the original
+user-supplied root-relative path on a rooted server, or ask for the intended absolute
+path in normal stdio. No automatic basename fallback or relocation occurs. See
+[path guidance and error recovery](docs/file-paths.md).
 
 ## Environment Variables
 

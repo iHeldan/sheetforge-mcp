@@ -4,10 +4,11 @@ import json
 import ipaddress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 # Import exceptions
 from excel_mcp.exceptions import (
@@ -21,6 +22,7 @@ from excel_mcp.exceptions import (
     ChartError,
     ResponseTooLargeError,
     PreconditionFailedError,
+    WorkbookPathError,
 )
 
 # Import from excel_mcp package with consistent _impl suffixes
@@ -141,12 +143,24 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("excel-mcp")
+
+WORKBOOK_PATH_HELP = (
+    "Server-side workbook path. Reuse the supplied path; NEVER prepend client cwd. "
+    "Rooted server: relative paths use EXCEL_FILES_PATH, not cwd. "
+    "Without a root (normal stdio): ask for a supplied absolute path; do not guess."
+)
+WorkbookPath = Annotated[str, Field(description=WORKBOOK_PATH_HELP)]
+
 # Initialize FastMCP server
 mcp = FastMCP(
     "sheetforge-mcp",
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8017")),
-    instructions="SheetForge MCP for manipulating Excel workbooks"
+    instructions=(
+        "SheetForge MCP for manipulating Excel workbooks. " + WORKBOOK_PATH_HELP
+        + " On path errors, follow error.details and retry the corrected path on the "
+        "same tool. Do not try other tools with the rejected path or bypass confinement."
+    ),
 )
 
 HANDLED_TOOL_ERRORS = (
@@ -374,6 +388,8 @@ def _error_response(operation: str, error: Exception) -> str:
         error_payload["details"] = getattr(error, "details")
     if hasattr(error, "suggested_next_tool") and getattr(error, "suggested_next_tool"):
         error_payload["suggested_next_tool"] = getattr(error, "suggested_next_tool")
+    if isinstance(error, WorkbookPathError):
+        error_payload["suggested_next_tool"] = operation
     if isinstance(error, ResponseTooLargeError):
         error_payload["estimated_size"] = error.estimated_size
         error_payload["limit"] = error.limit
@@ -400,23 +416,28 @@ def _run_tool(operation: str, action: Callable[[], Any], *, message: Optional[st
         return _error_response(operation, e)
 
 def get_excel_path(filename: str) -> str:
-    """Get full path to Excel file.
-    
-    Args:
-        filename: Name of Excel file
-        
-    Returns:
-        Full path to Excel file
-    """
+    """Resolve a transport-specific path without searching for a replacement file."""
     if not isinstance(filename, str) or not filename.strip():
-        raise ValueError("filepath must be a non-empty string")
+        raise WorkbookPathError(
+            "filepath must be a non-empty string; ask for the intended workbook path",
+            code="filepath_invalid",
+            details={"action": "ask_for_workbook_path", "automatic_relocation": False},
+        )
 
     requested_path = Path(filename).expanduser()
 
     if EXCEL_FILES_PATH is None:
         if not requested_path.is_absolute():
-            raise ValueError(
-                f"Invalid filepath: {filename}, must be absolute in stdio mode"
+            raise WorkbookPathError(
+                "filepath must be absolute in stdio mode; ask for the workbook's "
+                "absolute path on the server, not a path guessed from client cwd",
+                code="filepath_absolute_required",
+                details={
+                    "path_mode": "absolute",
+                    "action": "ask_for_absolute_workbook_path",
+                    "automatic_relocation": False,
+                    "instruction": "Do not invent an absolute prefix, strip directories or try other tools with the same relative path. Obtain the intended server-side absolute path first.",
+                },
             )
         return str(requested_path)
 
@@ -427,8 +448,18 @@ def get_excel_path(filename: str) -> str:
     try:
         resolved_candidate.relative_to(base_path)
     except ValueError as exc:
-        raise ValueError(
-            f"Workbook path must stay within EXCEL_FILES_PATH: {base_path}"
+        raise WorkbookPathError(
+            "Workbook path must stay within EXCEL_FILES_PATH. If the user supplied "
+            "a root-relative path, reuse it unchanged: do NOT prefix client cwd. "
+            "Do not retry the rejected path on other tools",
+            code="filepath_outside_root",
+            details={
+                "path_mode": "rooted",
+                "relative_to": "EXCEL_FILES_PATH",
+                "action": "reuse_supplied_relative_path_or_ask",
+                "automatic_relocation": False,
+                "instruction": "Retry this same tool with the ORIGINAL user-supplied root-relative path, not a guessed absolute path. Never strip a rejected path to its basename or guess another directory. If the original path escapes the root or the intended path is unclear, ask for an approved server-side path. Do not disable confinement.",
+            },
         ) from exc
 
     return str(resolved_candidate)
@@ -470,7 +501,7 @@ def _configure_file_transport() -> str:
     ),
 )
 def apply_formula(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     cell: str,
     formula: str,
@@ -499,7 +530,7 @@ def apply_formula(
     ),
 )
 def validate_formula_syntax(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     cell: str,
     formula: str,
@@ -536,7 +567,7 @@ def inspect_formula(
     ),
 )
 def format_range(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_cell: str,
     end_cell: Optional[str] = None,
@@ -596,7 +627,7 @@ def format_range(
     ),
 )
 def format_ranges(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     ranges: List[Dict[str, Any]],
     dry_run: bool = False,
@@ -626,7 +657,7 @@ def format_ranges(
     ),
 )
 def read_range_formatting(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     range_ref: str,
     sample_limit: int = 10,
@@ -653,7 +684,7 @@ def read_range_formatting(
     ),
 )
 def read_data_from_excel(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_cell: str = "A1",
     end_cell: Optional[str] = None,
@@ -741,7 +772,7 @@ def read_data_from_excel(
     ),
 )
 def read_excel_as_table(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     header_row: int = 1,
     start_row: Optional[int] = None,
@@ -785,7 +816,7 @@ def read_excel_as_table(
     ),
 )
 def quick_read(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: Optional[str] = None,
     header_row: int = 1,
     start_row: Optional[int] = None,
@@ -828,7 +859,7 @@ def quick_read(
     ),
 )
 def describe_dataset(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: Optional[str] = None,
     table_name: Optional[str] = None,
     header_row: int = 1,
@@ -857,7 +888,7 @@ def describe_dataset(
     ),
 )
 def suggest_read_strategy(
-    filepath: str,
+    filepath: WorkbookPath,
     goal: Optional[str] = None,
     sheet_name: Optional[str] = None,
     table_name: Optional[str] = None,
@@ -886,7 +917,7 @@ def suggest_read_strategy(
     ),
 )
 def query_table(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: Optional[str] = None,
     table_name: Optional[str] = None,
     header_row: int = 1,
@@ -925,7 +956,7 @@ def query_table(
     ),
 )
 def bulk_filter_workbooks(
-    filepaths: List[str],
+    filepaths: List[WorkbookPath],
     sheet_name: Optional[str] = None,
     table_name: Optional[str] = None,
     header_row: int = 1,
@@ -970,7 +1001,7 @@ def bulk_filter_workbooks(
     ),
 )
 def union_tables(
-    filepaths: List[str],
+    filepaths: List[WorkbookPath],
     sheet_name: Optional[str] = None,
     table_name: Optional[str] = None,
     header_row: int = 1,
@@ -1015,8 +1046,8 @@ def union_tables(
     ),
 )
 def cross_workbook_lookup(
-    source_filepath: str,
-    lookup_filepaths: List[str],
+    source_filepath: WorkbookPath,
+    lookup_filepaths: List[WorkbookPath],
     source_key: str,
     source_sheet_name: Optional[str] = None,
     source_table_name: Optional[str] = None,
@@ -1080,7 +1111,7 @@ def cross_workbook_lookup(
     ),
 )
 def aggregate_table(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: Optional[str] = None,
     table_name: Optional[str] = None,
     header_row: int = 1,
@@ -1121,7 +1152,7 @@ def aggregate_table(
     ),
 )
 def bulk_aggregate_workbooks(
-    filepaths: List[str],
+    filepaths: List[WorkbookPath],
     sheet_name: Optional[str] = None,
     table_name: Optional[str] = None,
     header_row: int = 1,
@@ -1166,7 +1197,7 @@ def bulk_aggregate_workbooks(
     ),
 )
 def read_excel_table(
-    filepath: str,
+    filepath: WorkbookPath,
     table_name: str,
     sheet_name: Optional[str] = None,
     start_row: int = 1,
@@ -1209,7 +1240,7 @@ def read_excel_table(
     ),
 )
 def write_data_to_excel(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     data: List[List],
     start_cell: str = "A1",
@@ -1246,7 +1277,7 @@ def write_data_to_excel(
         destructiveHint=True,
     ),
 )
-def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> str:
+def create_workbook(filepath: WorkbookPath, sheet_name: str = "Sheet1") -> str:
     """Create a new Excel workbook with an optional initial worksheet name."""
     def action() -> Any:
         full_path = get_excel_path(filepath)
@@ -1266,7 +1297,7 @@ def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> str:
         destructiveHint=True,
     ),
 )
-def create_worksheet(filepath: str, sheet_name: str) -> str:
+def create_worksheet(filepath: WorkbookPath, sheet_name: str) -> str:
     """Create new worksheet in workbook."""
     def action() -> Any:
         full_path = get_excel_path(filepath)
@@ -1286,7 +1317,7 @@ def create_worksheet(filepath: str, sheet_name: str) -> str:
     ),
 )
 def create_chart(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     chart_type: str,
     target_cell: Optional[str] = None,
@@ -1335,7 +1366,7 @@ def create_chart(
     ),
 )
 def create_chart_from_series(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     chart_type: str,
     target_cell: Optional[str] = None,
@@ -1377,7 +1408,7 @@ def create_chart_from_series(
         readOnlyHint=True,
     ),
 )
-def list_charts(filepath: str, sheet_name: Optional[str] = None) -> str:
+def list_charts(filepath: WorkbookPath, sheet_name: Optional[str] = None) -> str:
     """List embedded charts in a workbook or worksheet."""
     def action() -> Any:
         return {"charts": list_charts_impl(get_excel_path(filepath), sheet_name=sheet_name)}
@@ -1393,7 +1424,7 @@ def list_charts(filepath: str, sheet_name: Optional[str] = None) -> str:
     ),
 )
 def find_free_canvas(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     width: Optional[float] = None,
     height: Optional[float] = None,
@@ -1433,7 +1464,7 @@ def find_free_canvas(
     ),
 )
 def create_pivot_table(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     data_range: str,
     rows: List[str],
@@ -1465,7 +1496,7 @@ def create_pivot_table(
     ),
 )
 def create_table(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     data_range: str,
     table_name: Optional[str] = None,
@@ -1491,7 +1522,7 @@ def create_table(
     ),
 )
 def list_tables(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: Optional[str] = None,
 ) -> str:
     """List native Excel tables for one worksheet or the whole workbook."""
@@ -1511,7 +1542,7 @@ def list_tables(
     ),
 )
 def copy_worksheet(
-    filepath: str,
+    filepath: WorkbookPath,
     source_sheet: str,
     target_sheet: str
 ) -> str:
@@ -1529,7 +1560,7 @@ def copy_worksheet(
     ),
 )
 def delete_worksheet(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str
 ) -> str:
     """Delete worksheet from workbook."""
@@ -1546,7 +1577,7 @@ def delete_worksheet(
     ),
 )
 def rename_worksheet(
-    filepath: str,
+    filepath: WorkbookPath,
     old_name: str,
     new_name: str
 ) -> str:
@@ -1564,7 +1595,7 @@ def rename_worksheet(
     ),
 )
 def get_workbook_metadata(
-    filepath: str,
+    filepath: WorkbookPath,
     include_ranges: bool = False
 ) -> str:
     """Get metadata about workbook including sheets, ranges, etc."""
@@ -1582,7 +1613,7 @@ def get_workbook_metadata(
     ),
 )
 def describe_sheet_layout(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     sample_limit: int = 10,
     free_canvas_rows: int = 8,
@@ -1611,7 +1642,7 @@ def describe_sheet_layout(
     ),
 )
 def analyze_range_impact(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     range_ref: str,
 ) -> str:
@@ -1630,7 +1661,7 @@ def analyze_range_impact(
     ),
 )
 def explain_formula_cell(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     cell: str,
     max_depth: int = 3,
@@ -1655,7 +1686,7 @@ def explain_formula_cell(
     ),
 )
 def detect_circular_dependencies(
-    filepath: str,
+    filepath: WorkbookPath,
     sample_limit: int = 25,
 ) -> str:
     """Detect circular workbook formula dependencies, including self-references."""
@@ -1675,7 +1706,7 @@ def detect_circular_dependencies(
         readOnlyHint=True,
     ),
 )
-def profile_workbook(filepath: str) -> str:
+def profile_workbook(filepath: WorkbookPath) -> str:
     """Return a compact workbook inventory with sheets, tables, charts, and layout state."""
     return _run_tool(
         "profile_workbook",
@@ -1691,7 +1722,7 @@ def profile_workbook(filepath: str) -> str:
     ),
 )
 def audit_workbook(
-    filepath: str,
+    filepath: WorkbookPath,
     header_row: int = 1,
     sample_limit: int = 25,
 ) -> str:
@@ -1714,7 +1745,7 @@ def audit_workbook(
     ),
 )
 def plan_workbook_repairs(
-    filepath: str,
+    filepath: WorkbookPath,
     header_row: int = 1,
     sample_limit: int = 25,
 ) -> str:
@@ -1737,7 +1768,7 @@ def plan_workbook_repairs(
     ),
 )
 def apply_workbook_repairs(
-    filepath: str,
+    filepath: WorkbookPath,
     repair_types: Optional[List[str]] = None,
     sheet_names: Optional[List[str]] = None,
     header_row: int = 1,
@@ -1766,14 +1797,14 @@ def apply_workbook_repairs(
     ),
 )
 def apply_workbook_changeset(
-    filepath: str,
+    filepath: WorkbookPath,
     operations: List[Dict[str, Any]],
     assertions: Optional[List[Dict[str, Any]]] = None,
     mode: Literal["preview", "commit"] = "preview",
     expected_workbook_sha256: Optional[str] = None,
     changeset_token: Optional[str] = None,
     create_snapshot: bool = True,
-    snapshot_filepath: Optional[str] = None,
+    snapshot_filepath: Optional[WorkbookPath] = None,
     sample_limit: int = 25,
 ) -> str:
     """Preview or commit an assertion-backed group of workbook mutations as one transaction.
@@ -1813,7 +1844,7 @@ def apply_workbook_changeset(
     annotations=ToolAnnotations(title="Evaluate Workbook Scenarios", destructiveHint=True),
 )
 def evaluate_workbook_scenarios(
-    filepath: str,
+    filepath: WorkbookPath,
     scenario_set: Dict[str, Any],
     mode: str = "compare",
     selected_scenario: Optional[str] = None,
@@ -1851,8 +1882,8 @@ def evaluate_workbook_scenarios(
     annotations=ToolAnnotations(title="Apply Table Patch", destructiveHint=True),
 )
 def apply_table_patch(
-    base_filepath: str,
-    filepath: str,
+    base_filepath: WorkbookPath,
+    filepath: WorkbookPath,
     patch: Dict[str, Any],
     expected_base_sha256: str,
     mode: str = "preview",
@@ -1890,7 +1921,7 @@ def apply_table_patch(
     annotations=ToolAnnotations(title="Inspect Workbook Contract", readOnlyHint=True),
 )
 def inspect_workbook_contract(
-    filepath: str,
+    filepath: WorkbookPath,
     contract: Dict[str, Any],
     sample_limit: Literal[1, 2, 3, 4, 5] = 3,
 ) -> str:
@@ -1929,7 +1960,7 @@ def inspect_workbook_contract(
     annotations=ToolAnnotations(title="Run Workbook Recipe", destructiveHint=True),
 )
 def run_workbook_recipe(
-    filepath: str,
+    filepath: WorkbookPath,
     recipe: Dict[str, Any],
     mode: Literal["preview", "commit"] = "preview",
     expected_workbook_sha256: Optional[str] = None,
@@ -1982,8 +2013,8 @@ def run_workbook_recipe(
     annotations=ToolAnnotations(title="Explain Recipe Delta", readOnlyHint=True),
 )
 def explain_recipe_delta(
-    before_filepath: str,
-    after_filepath: str,
+    before_filepath: WorkbookPath,
+    after_filepath: WorkbookPath,
     recipe: Dict[str, Any],
     key_fields: List[str],
     metric: Optional[str] = None,
@@ -2031,8 +2062,8 @@ def explain_recipe_delta(
     ),
 )
 def diff_workbooks(
-    before_filepath: str,
-    after_filepath: str,
+    before_filepath: WorkbookPath,
+    after_filepath: WorkbookPath,
     sample_limit: int = 25,
     include_cell_changes: bool = True,
 ) -> str:
@@ -2055,7 +2086,7 @@ def diff_workbooks(
         destructiveHint=True,
     ),
 )
-def create_workbook_snapshot(filepath: str, snapshot_filepath: str) -> str:
+def create_workbook_snapshot(filepath: WorkbookPath, snapshot_filepath: WorkbookPath) -> str:
     """Create a verified workbook snapshot without overwriting an existing file."""
     return _run_tool(
         "create_workbook_snapshot",
@@ -2074,7 +2105,7 @@ def create_workbook_snapshot(filepath: str, snapshot_filepath: str) -> str:
     ),
 )
 def create_named_range(
-    filepath: str,
+    filepath: WorkbookPath,
     name: str,
     range_ref: str,
     sheet_name: Optional[str] = None,
@@ -2107,7 +2138,7 @@ def create_named_range(
     ),
 )
 def inspect_named_range(
-    filepath: str,
+    filepath: WorkbookPath,
     name: str,
     scope_sheet: Optional[str] = None,
 ) -> str:
@@ -2129,7 +2160,7 @@ def inspect_named_range(
         readOnlyHint=True,
     ),
 )
-def list_named_ranges(filepath: str) -> str:
+def list_named_ranges(filepath: WorkbookPath) -> str:
     """List workbook defined names and their destinations."""
     def action() -> Any:
         return {"named_ranges": list_named_ranges_impl(get_excel_path(filepath))}
@@ -2145,7 +2176,7 @@ def list_named_ranges(filepath: str) -> str:
     ),
 )
 def delete_named_range(
-    filepath: str,
+    filepath: WorkbookPath,
     name: str,
     scope_sheet: Optional[str] = None,
     dry_run: bool = False,
@@ -2169,7 +2200,7 @@ def delete_named_range(
     ),
 )
 def merge_cells(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_cell: str,
     end_cell: str,
@@ -2197,7 +2228,7 @@ def merge_cells(
     ),
 )
 def unmerge_cells(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_cell: str,
     end_cell: str,
@@ -2224,7 +2255,7 @@ def unmerge_cells(
         readOnlyHint=True,
     ),
 )
-def get_merged_cells(filepath: str, sheet_name: str) -> str:
+def get_merged_cells(filepath: WorkbookPath, sheet_name: str) -> str:
     """Get merged cells in a worksheet."""
     def action() -> Any:
         return {"sheet_name": sheet_name, "ranges": get_merged_ranges(get_excel_path(filepath), sheet_name)}
@@ -2240,7 +2271,7 @@ def get_merged_cells(filepath: str, sheet_name: str) -> str:
     ),
 )
 def freeze_panes(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     cell: Optional[str] = None,
     dry_run: bool = False,
@@ -2267,7 +2298,7 @@ def freeze_panes(
     ),
 )
 def set_autofilter(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     range_ref: Optional[str] = None,
     dry_run: bool = False,
@@ -2293,7 +2324,7 @@ def set_autofilter(
     ),
 )
 def set_worksheet_visibility(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     visibility: str,
     dry_run: bool = False,
@@ -2319,7 +2350,7 @@ def set_worksheet_visibility(
         readOnlyHint=True,
     ),
 )
-def get_worksheet_protection(filepath: str, sheet_name: str) -> str:
+def get_worksheet_protection(filepath: WorkbookPath, sheet_name: str) -> str:
     """Get worksheet protection status and option flags."""
     return _run_tool(
         "get_worksheet_protection",
@@ -2335,7 +2366,7 @@ def get_worksheet_protection(filepath: str, sheet_name: str) -> str:
     ),
 )
 def set_worksheet_protection(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     enabled: bool = True,
     password: Optional[str] = None,
@@ -2366,7 +2397,7 @@ def set_worksheet_protection(
     ),
 )
 def set_print_area(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     range_ref: Optional[str] = None,
     dry_run: bool = False,
@@ -2393,7 +2424,7 @@ def set_print_area(
     ),
 )
 def set_print_titles(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     rows: Optional[str] = None,
     columns: Optional[str] = None,
@@ -2421,7 +2452,7 @@ def set_print_titles(
     ),
 )
 def set_column_widths(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     widths: Dict[str, float],
     dry_run: bool = False,
@@ -2447,7 +2478,7 @@ def set_column_widths(
     ),
 )
 def autofit_columns(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     columns: Optional[List[str]] = None,
     min_width: float = 8.43,
@@ -2478,7 +2509,7 @@ def autofit_columns(
     ),
 )
 def set_row_heights(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     heights: Dict[str, float],
     dry_run: bool = False,
@@ -2504,7 +2535,7 @@ def set_row_heights(
     ),
 )
 def copy_range(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     source_start: str,
     source_end: str,
@@ -2536,7 +2567,7 @@ def copy_range(
     ),
 )
 def delete_range(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_cell: str,
     end_cell: str,
@@ -2566,7 +2597,7 @@ def delete_range(
     ),
 )
 def validate_excel_range(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_cell: str,
     end_cell: Optional[str] = None
@@ -2590,7 +2621,7 @@ def validate_excel_range(
     ),
 )
 def get_data_validation_info(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str
 ) -> str:
     """
@@ -2649,7 +2680,7 @@ def get_data_validation_info(
     ),
 )
 def inspect_data_validation_rules(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     broken_only: bool = False,
 ) -> str:
@@ -2672,7 +2703,7 @@ def inspect_data_validation_rules(
     ),
 )
 def remove_data_validation_rules(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     rule_indexes: Optional[List[int]] = None,
     broken_only: bool = False,
@@ -2699,7 +2730,7 @@ def remove_data_validation_rules(
     ),
 )
 def inspect_conditional_format_rules(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     broken_only: bool = False,
 ) -> str:
@@ -2722,7 +2753,7 @@ def inspect_conditional_format_rules(
     ),
 )
 def remove_conditional_format_rules(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     rule_indexes: Optional[List[int]] = None,
     broken_only: bool = False,
@@ -2749,7 +2780,7 @@ def remove_conditional_format_rules(
     ),
 )
 def insert_rows(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_row: int,
     count: int = 1,
@@ -2769,7 +2800,7 @@ def insert_rows(
     ),
 )
 def insert_columns(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_col: int,
     count: int = 1,
@@ -2789,7 +2820,7 @@ def insert_columns(
     ),
 )
 def delete_sheet_rows(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_row: int,
     count: int = 1,
@@ -2809,7 +2840,7 @@ def delete_sheet_rows(
     ),
 )
 def delete_sheet_columns(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     start_col: int,
     count: int = 1,
@@ -2829,7 +2860,7 @@ def delete_sheet_columns(
     ),
 )
 def search_in_sheet(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     query: Any,
     exact: bool = True,
@@ -2858,7 +2889,7 @@ def search_in_sheet(
         readOnlyHint=True,
     ),
 )
-def list_all_sheets(filepath: str) -> str:
+def list_all_sheets(filepath: WorkbookPath) -> str:
     """
     List all sheets in a workbook with row/column counts.
     Quick overview before reading data.
@@ -2879,7 +2910,7 @@ def list_all_sheets(filepath: str) -> str:
     ),
 )
 def append_table_rows(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     rows: List[Dict[str, Any]],
     header_row: int = 1,
@@ -2912,7 +2943,7 @@ def append_table_rows(
     ),
 )
 def append_excel_table_rows(
-    filepath: str,
+    filepath: WorkbookPath,
     table_name: str,
     rows: List[Dict[str, Any]],
     sheet_name: Optional[str] = None,
@@ -2945,7 +2976,7 @@ def append_excel_table_rows(
     ),
 )
 def upsert_excel_table_rows(
-    filepath: str,
+    filepath: WorkbookPath,
     table_name: str,
     key_column: str,
     rows: List[Dict[str, Any]],
@@ -2980,7 +3011,7 @@ def upsert_excel_table_rows(
     ),
 )
 def update_rows_by_key(
-    filepath: str,
+    filepath: WorkbookPath,
     sheet_name: str,
     key_column: str,
     updates: List[Dict[str, Any]],

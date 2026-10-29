@@ -4,6 +4,7 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 
 ## Conventions
 
+- Workbook paths refer to the server filesystem, never the client's cwd. Reuse the supplied path unchanged; do not invent an absolute prefix.
 - In `stdio` mode, `filepath` must be an absolute path.
 - In `streamable-http` and `sse` mode, relative `filepath` values resolve under `EXCEL_FILES_PATH`.
 - HTTP/SSE paths, including absolute paths, must remain inside `EXCEL_FILES_PATH`; traversal and symlink escapes are rejected.
@@ -12,6 +13,7 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 - Workbook mutations are serialized per canonical workbook path on the same host with a bounded wait and persisted via verified atomic replace. If post-save verification and automatic rollback both fail, the recovery backup is retained and identified in the error.
 - `apply_workbook_changeset` adds exact-file optimistic concurrency for a bounded multi-operation plan. Its token is an integrity fingerprint, not an authentication credential or distributed cloud lock.
 - Every tool returns a JSON envelope with `ok`, `operation`, `message`, and `data`.
+- All workbook-path schema fields, including list items and optional snapshot paths, carry shared guidance. Path-policy errors return `WorkbookPathError` with codes `filepath_invalid`, `filepath_absolute_required` or `filepath_outside_root`, recovery `details` and `suggested_next_tool` naming the same failed tool. No automatic relocation, basename fallback or root-directory disclosure. See [path rules and recovery](docs/file-paths.md); malformed argument types may instead fail SDK validation.
 
 ## Structured Output Shapes
 
