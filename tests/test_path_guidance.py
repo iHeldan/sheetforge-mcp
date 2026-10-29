@@ -36,6 +36,38 @@ def test_every_tool_workbook_path_has_guidance():
     assert count == 88
 
 
+def test_compact_schema_guidance_keeps_standalone_path_rules():
+    guide = server.WORKBOOK_PATH_HELP
+    for rule in (
+        "Reuse supplied server path",
+        "NEVER prepend client cwd",
+        "Rooted: relative OK",
+        "unrooted stdio: absolute",
+        "ask if missing",
+    ):
+        assert rule in guide
+    assert len(guide) <= 128
+
+
+def test_initialization_keeps_full_policy_and_safe_recovery():
+    instructions = server.mcp._mcp_server.instructions
+    assert instructions.count(server.WORKBOOK_PATH_POLICY) == 1
+    assert "relative paths use EXCEL_FILES_PATH, not cwd" in instructions
+    assert (
+        "Without a root (normal stdio): ask for a supplied absolute path"
+        in instructions
+    )
+    assert "do not guess" in instructions
+    assert "same tool" in instructions and "bypass confinement" in instructions
+
+
+def test_complete_input_schema_payload_has_a_size_budget():
+    schemas = {
+        name: tool.parameters for name, tool in server.mcp._tool_manager._tools.items()
+    }
+    assert len(json.dumps(schemas, separators=(",", ":"))) <= 61_000
+
+
 @pytest.mark.parametrize("filename", [None, False, 42, "", "  "])
 def test_invalid_paths_have_structured_compatible_errors(monkeypatch, filename):
     monkeypatch.setattr(server, "EXCEL_FILES_PATH", None)

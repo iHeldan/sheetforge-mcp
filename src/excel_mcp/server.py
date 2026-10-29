@@ -144,10 +144,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("excel-mcp")
 
-WORKBOOK_PATH_HELP = (
+WORKBOOK_PATH_POLICY = (
     "Server-side workbook path. Reuse the supplied path; NEVER prepend client cwd. "
     "Rooted server: relative paths use EXCEL_FILES_PATH, not cwd. "
     "Without a root (normal stdio): ask for a supplied absolute path; do not guess."
+)
+WORKBOOK_PATH_HELP = (
+    "Reuse supplied server path; NEVER prepend client cwd. "
+    "Rooted: relative OK; unrooted stdio: absolute, ask if missing."
 )
 WorkbookPath = Annotated[str, Field(description=WORKBOOK_PATH_HELP)]
 
@@ -157,7 +161,7 @@ mcp = FastMCP(
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8017")),
     instructions=(
-        "SheetForge MCP for manipulating Excel workbooks. " + WORKBOOK_PATH_HELP
+        "SheetForge MCP for manipulating Excel workbooks. " + WORKBOOK_PATH_POLICY
         + " On path errors, follow error.details and retry the corrected path on the "
         "same tool. Do not try other tools with the rejected path or bypass confinement."
     ),

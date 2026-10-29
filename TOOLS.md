@@ -14,6 +14,7 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 - `apply_workbook_changeset` adds exact-file optimistic concurrency for a bounded multi-operation plan. Its token is an integrity fingerprint, not an authentication credential or distributed cloud lock.
 - Every tool returns a JSON envelope with `ok`, `operation`, `message`, and `data`.
 - All workbook-path schema fields, including list items and optional snapshot paths, carry shared guidance. Path-policy errors return `WorkbookPathError` with codes `filepath_invalid`, `filepath_absolute_required` or `filepath_outside_root`, recovery `details` and `suggested_next_tool` naming the same failed tool. No automatic relocation, basename fallback or root-directory disclosure. See [path rules and recovery](docs/file-paths.md); malformed argument types may instead fail SDK validation.
+- Path fields use a compact, self-contained hint; the full transport-dependent policy appears once in server initialization. No path validation or error-recovery rule is removed to reduce repeated schema text.
 
 ## Structured Output Shapes
 

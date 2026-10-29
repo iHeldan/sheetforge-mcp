@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reduced repeated workbook-path schema guidance while preserving its standalone rules, the full initialization policy, and unchanged path validation/recovery. Regression tests bound the schema payload and retain traversal, symlink, same-tool retry and no-relocation checks.
+
 - Shared workbook-path guidance in MCP initialization and all path parameter schemas, including multi-file inputs and snapshot destinations. Structured path-policy errors suggest safe same-tool recovery without guessing a basename, relocating a request, disclosing the server root or weakening confinement. Existing unrooted stdio absolute-path requirements remain unchanged.
 
 ### Added

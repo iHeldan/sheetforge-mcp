@@ -3,7 +3,11 @@
 Paths refer to the **server's filesystem**, not the MCP client's working directory.
 Every workbook-path parameter advertises the same rule in its MCP schema, including
 source/destination paths, optional snapshot paths and multi-workbook list items.
-Server initialization also supplies this guidance.
+The short field hint remains self-contained: reuse the supplied server path, never
+prefix client cwd, allow relative paths on rooted servers, and require an absolute
+path (ask if missing) in unrooted stdio. Server initialization supplies the full
+policy once, rather than repeating it in every field. Structured error recovery and
+all path guards remain unchanged; shortening advisory text is not a new permission.
 
 ## Choose a path
 
