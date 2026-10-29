@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "name": "net-sales",
+  "source": {"table_name": "Sales"},
+  "row_grain": "One row per order",
+  "key_fields": ["id"],
+  "fields": [
+    {"name": "id", "headers": ["Id", "OrderId"], "type": "integer"},
+    {"name": "net", "headers": ["Net", "NetSales"], "type": "number", "min": 0, "meaning": "Net amount excluding tax"},
+    {"name": "currency", "headers": ["Currency"], "type": "string", "allowed_values": ["EUR"]},
+    {"name": "status", "headers": ["Status"], "type": "string", "allowed_values": ["paid", "cancelled"]}
+  ],
+  "filters": [{"field": "status", "op": "eq", "value": "paid", "case_sensitive": true}]
+}

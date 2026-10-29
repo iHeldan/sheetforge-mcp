@@ -11,13 +11,15 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
 Published package release: `0.13.0`
-Repository docs track the current main-branch tool surface, which currently exposes `82` MCP tools.
+Repository docs track the current main-branch tool surface, which currently exposes `83` MCP tools.
+Workbook Contracts v1 is implemented on main but not yet published: explicit bindings and full bounded data checks can guard Recipe preview/commit. Published `0.13.0` exposes 82 tools.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.
 Verified Rebase and Verified Scenarios v1 are included in `0.13.0`: intent-preserving keyed edits and outcome-checked alternatives with verified commits.
 
 ## Why SheetForge
 
+- reusable workbook contracts (unreleased) via `inspect_workbook_contract` and optional Recipe enforcement: separate declared meanings from checked key/type/value rules, resolve only approved exact headers, and block ambiguous bindings before report generation
 - outcome-checked alternatives via `evaluate_workbook_scenarios`: compare explicit keyed changes against exact overall/group metric bounds, then commit one selected outcome with post-save recomputation and rollback
 - intent-preserving table edits via `apply_table_patch`: rebind keyed updates against a pinned base, reject changed premises and conflicting writes, and commit a fresh verified preview while keeping unrelated current values
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
@@ -148,7 +150,7 @@ http://127.0.0.1:8017/sse
 
 ## Tooling Overview
 
-The server currently registers 82 MCP tools across these groups:
+The server currently registers 83 MCP tools across these groups:
 
 - workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `apply_workbook_changeset`, `run_workbook_recipe`, `explain_recipe_delta`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`
 - data access: `suggest_read_strategy`, `describe_dataset`, `query_table`, `aggregate_table`, `bulk_aggregate_workbooks`, `bulk_filter_workbooks`, `union_tables`, `cross_workbook_lookup`, `quick_read`, `read_excel_table`, `read_data_from_excel`, `read_excel_as_table`, `search_in_sheet`, `write_data_to_excel`, `append_table_rows`, `append_excel_table_rows`, `upsert_excel_table_rows`, `update_rows_by_key`
@@ -158,6 +160,13 @@ The server currently registers 82 MCP tools across these groups:
 - analysis and structure: `create_table`, `list_charts`, `find_free_canvas`, `create_chart`, `create_chart_from_series`, `create_pivot_table`
 - guarded table patches: `apply_table_patch`
 - guarded alternatives: `evaluate_workbook_scenarios`
+- workbook contracts (unreleased): `inspect_workbook_contract` and `run_workbook_recipe(..., workbook_contract=...)`
+
+For explicit reusable field definitions and mandatory source checks before report
+generation, see the [Workbook Contracts guide](docs/workbook-contracts.md) and
+[net-sales contract](docs/examples/net-sales.contract.json). Declared business
+meanings are not machine-verified facts. V1 integrates Recipes only; it does not
+silently enforce contracts on other tools.
 
 For comparing proposed edits before choosing one, see the
 [Verified Scenarios guide](docs/verified-scenarios.md) and

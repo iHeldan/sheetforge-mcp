@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Workbook Contracts v1: read-only `inspect_workbook_contract`, exact approved header alternatives, logical fields, complete bounded key/type/value checks before filtering, and explicit separation of declared meanings from checked conditions.
+- Optional `workbook_contract` on `run_workbook_recipe`, with mandatory contract filters, logical output headers, full contract-bound preview/commit, and reopened `table_contract_matches` assertions under ChangeSet rollback. No fuzzy binding, coercion, formula evaluation or business-truth inference.
+
+### Fixed
+
+- Reject non-regular workbook baseline inputs before reading, including FIFO substitution during opening, instead of potentially blocking a shared ChangeSet capture.
+
 ## 0.13.0 - 2026-10-28
 
 ### Added

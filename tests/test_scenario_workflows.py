@@ -70,7 +70,7 @@ def test_stdio_scenario_selection_and_global_guard_drift(tmp_path):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     inventory = await session.list_tools()
-                    assert len(inventory.tools) == 82
+                    assert len(inventory.tools) == 83
                     tool = next(
                         t
                         for t in inventory.tools

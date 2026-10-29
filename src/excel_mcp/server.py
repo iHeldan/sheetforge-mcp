@@ -31,6 +31,7 @@ from excel_mcp.validation import (
 from excel_mcp.calculations import inspect_formula as inspect_formula_impl
 from excel_mcp.changeset import apply_workbook_changeset as apply_workbook_changeset_impl
 from excel_mcp.recipes import run_workbook_recipe as run_workbook_recipe_impl
+from excel_mcp.contracts import inspect_workbook_contract as inspect_workbook_contract_impl
 from excel_mcp.explanations import explain_recipe_delta as explain_recipe_delta_impl
 from excel_mcp.rebase import apply_table_patch as apply_table_patch_impl
 from excel_mcp.scenarios import evaluate_workbook_scenarios as evaluate_workbook_scenarios_impl
@@ -1886,6 +1887,36 @@ def apply_table_patch(
 
 @mcp.tool(
     structured_output=False,
+    annotations=ToolAnnotations(title="Inspect Workbook Contract", readOnlyHint=True),
+)
+def inspect_workbook_contract(
+    filepath: str,
+    contract: Dict[str, Any],
+    sample_limit: int = 3,
+) -> str:
+    """Read-only full bounded native-table contract check; never infer business meaning.
+
+    Contract v1 requires version=1, name, source={table_name, optional sheet_name},
+    row_grain (a declaration), key_fields (logical names), and fields=[{name,
+    headers: [approved exact alternatives], type: string|number|integer|boolean,
+    nullable?: false, meaning?, allowed_values?, min?, max?}]. Optional min_rows
+    defaults to 1; filters use logical field names and Recipe predicates. Missing
+    or multiple matching headers are unresolved, never automatically selected.
+    Checks all source rows BEFORE filtering, excluding native totals. Declared
+    meanings are not verified facts. No coercion, formulas, dates, joins or code.
+    Limits: 32KB JSON, 32 fields, 8 aliases/field, 8 key fields, 20 filters,
+    50000 table cells/64 columns; sample_limit 1-5 affects row examples only.
+    Pass the same contract as workbook_contract to run_workbook_recipe to enforce
+    it in preview/commit; this inspection alone does not guard other tools.
+    """
+    return _run_tool(
+        "inspect_workbook_contract",
+        lambda: inspect_workbook_contract_impl(get_excel_path(filepath), contract, sample_limit),
+    )
+
+
+@mcp.tool(
+    structured_output=False,
     annotations=ToolAnnotations(title="Run Workbook Recipe", destructiveHint=True),
 )
 def run_workbook_recipe(
@@ -1895,6 +1926,7 @@ def run_workbook_recipe(
     expected_workbook_sha256: Optional[str] = None,
     recipe_token: Optional[str] = None,
     sample_limit: int = 5,
+    workbook_contract: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Preview or commit a reusable JSON recipe without echoing intermediate rows.
 
@@ -1905,6 +1937,11 @@ def run_workbook_recipe(
     (fields), row_count (min/max), and sum_matches (source_field/output_field).
     count metrics omit field. Other metrics: sum, avg, min, max, count_non_null,
     count_distinct. Only literal finite JSON cells in referenced fields are supported.
+    Optional workbook_contract enforces Contract v1: source selectors must match,
+    recipe input fields become logical names, and contract filters are mandatory
+    AND predicates. All contract rows are checked before filtering and again on
+    the saved workbook. Repeat the identical contract on commit; changed contracts
+    invalidate recipe tokens. Declared meanings are not verified business truth.
 
     Output is one reserved rectangle in the same workbook, fully replaced including
     blank padding. Occupied output requires allow_overwrite=true; table/merge overlap
@@ -1918,6 +1955,7 @@ def run_workbook_recipe(
             get_excel_path(filepath), recipe=recipe, mode=mode,
             expected_workbook_sha256=expected_workbook_sha256,
             recipe_token=recipe_token, sample_limit=sample_limit,
+            workbook_contract=workbook_contract,
         ),
     )
 

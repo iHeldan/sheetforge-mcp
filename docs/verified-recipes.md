@@ -2,6 +2,10 @@
 
 Available since SheetForge MCP `0.11.0`.
 
+Unreleased on main: optional `workbook_contract` enforces explicit logical bindings
+and full bounded source checks in preview/commit. See [Workbook Contracts](workbook-contracts.md).
+Without that argument, the existing exact-physical-header contract below is unchanged.
+
 A recipe is a versioned JSON document describing how to filter and aggregate one
 native Excel table and materialize its result in a reserved worksheet rectangle.
 SheetForge passes intermediate values directly into a verified ChangeSet. The

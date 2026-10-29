@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import tempfile
 from typing import Any, Callable
 
@@ -129,6 +130,10 @@ _OPERATION_SPECS: dict[str, tuple[set[str], set[str]]] = {
 }
 
 _ASSERTION_SPECS: dict[str, tuple[set[str], set[str]]] = {
+    "table_contract_matches": (
+        {"type", "contract", "expected_binding_sha256"},
+        {"type", "contract", "expected_binding_sha256"},
+    ),
     "table_scenario_matches": (
         {"type", "recipe", "key_fields", "guards", "expected_result_sha256"},
         {"type", "recipe", "key_fields", "guards", "expected_result_sha256"},
@@ -467,7 +472,11 @@ def _normalize_assertions(assertions: Any) -> list[dict[str, Any]]:
             _validate_non_empty_string(
                 assertion["sheet_name"], location=f"{location}.sheet_name"
             )
-        if assertion_type == "table_scenario_matches":
+        if assertion_type == "table_contract_matches":
+            from .contracts import normalize_contract_assertion
+
+            assertion = normalize_contract_assertion(assertion)
+        elif assertion_type == "table_scenario_matches":
             from .scenarios import normalize_outcome_assertion
 
             assertion = normalize_outcome_assertion(assertion)
@@ -604,8 +613,18 @@ def _new_temp_workbook(parent: Path, *, source: Path, label: str) -> Path:
 
 def _stage_workbook(source: Path, baseline: Path, candidate: Path) -> str:
     source_stat_before = source.stat()
+    if not stat.S_ISREG(source_stat_before.st_mode):
+        raise ValidationError("Workbook source must be a regular file")
     digest = hashlib.sha256()
-    with source.open("rb") as source_handle, baseline.open("wb") as baseline_handle:
+    # A path can be exchanged after stat; nonblocking open also rejects a FIFO
+    # substituted in that window without waiting for an external writer.
+    descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    with os.fdopen(descriptor, "rb") as source_handle, baseline.open("wb") as baseline_handle:
+        opened_stat = os.fstat(source_handle.fileno())
+        if not stat.S_ISREG(opened_stat.st_mode):
+            raise ValidationError("Workbook source must be a regular file")
+        if workbook_module._file_identity(opened_stat) != workbook_module._file_identity(source_stat_before):
+            raise PreconditionFailedError("Workbook source changed while opening", code="stale_workbook")
         while chunk := source_handle.read(1024 * 1024):
             baseline_handle.write(chunk)
             digest.update(chunk)
@@ -1263,7 +1282,11 @@ def _evaluate_assertions(
         results: list[dict[str, Any]] = []
         for index, assertion in enumerate(assertions, start=1):
             assertion_type = assertion["type"]
-            if assertion_type == "table_scenario_matches":
+            if assertion_type == "table_contract_matches":
+                from .contracts import assert_contract
+
+                passed, details = assert_contract(candidate_wb, assertion, sample_limit)
+            elif assertion_type == "table_scenario_matches":
                 from .scenarios import assert_outcome
 
                 passed, details = assert_outcome(

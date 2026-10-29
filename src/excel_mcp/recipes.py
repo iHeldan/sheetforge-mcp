@@ -400,7 +400,9 @@ def _sum_values(rows: list, index: int) -> int | float:
     try:
         return math.fsum(values)
     except (OverflowError, ValueError) as exc:
-        raise ValidationError("sum_matches exceeds the supported finite numeric range") from exc
+        raise ValidationError(
+            "sum_matches exceeds the supported finite numeric range"
+        ) from exc
 
 
 def _verify_recipe(source: dict, recipe: dict, result: dict, sample_limit: int) -> dict:
@@ -626,6 +628,7 @@ def run_workbook_recipe(
     expected_workbook_sha256: str | None = None,
     recipe_token: str | None = None,
     sample_limit: int = 5,
+    workbook_contract: dict | None = None,
 ) -> dict:
     """Compile a native-table recipe from a stable snapshot and use ChangeSet persistence."""
     if not isinstance(mode, str) or mode not in {"preview", "commit"}:
@@ -645,6 +648,12 @@ def run_workbook_recipe(
     if mode == "commit" and recipe_token is None:
         raise ValidationError("recipe_token is required in commit mode")
     normalized = _normalize_recipe(recipe)
+    requested = normalized
+    contract = None
+    if workbook_contract is not None:
+        from .contracts import normalize_contract
+
+        contract = normalize_contract(workbook_contract)
     path = workbook._canonical_workbook_path(filepath, must_exist=True)
     if path.suffix.lower() != ".xlsx":
         raise ValidationError("filepath must end with .xlsx")
@@ -659,9 +668,40 @@ def run_workbook_recipe(
                 suggested_next_tool="run_workbook_recipe",
             )
         with safe_workbook(str(baseline)) as wb:
+            contract_report = None
+            if contract is not None:
+                from .contracts import compile_contract_recipe
+
+                normalized, contract_report = compile_contract_recipe(
+                    wb, normalized, contract, min(sample_limit, 5)
+                )
             source = _load_table(wb, normalized)
             result = _aggregate(source, normalized)
-            operations, assertions = _compile_output(wb, normalized, source, result)
+            output_result = result
+            if contract is not None:
+                output_result = {
+                    **result,
+                    "headers": [
+                        *requested["group_by"],
+                        *[m["as"] for m in requested["metrics"]],
+                    ],
+                }
+            operations, assertions = _compile_output(
+                wb, normalized, source, output_result
+            )
+            if contract_report is not None:
+                assertions = changeset._normalize_assertions(
+                    [
+                        *assertions,
+                        {
+                            "type": "table_contract_matches",
+                            "contract": contract,
+                            "expected_binding_sha256": contract_report[
+                                "binding_sha256"
+                            ],
+                        },
+                    ]
+                )
         verification = _verify_recipe(source, normalized, result, sample_limit)
         plan = changeset._plan_payload(
             source=path,
@@ -677,6 +717,13 @@ def run_workbook_recipe(
             "recipe": normalized,
             "changeset_token": changeset_token,
         }
+        if contract is not None:
+            from .contracts import CONTRACT_ENGINE_VERSION
+
+            token_input.update(
+                workbook_contract=contract,
+                contract_engine_version=CONTRACT_ENGINE_VERSION,
+            )
         token = (
             "recipe_v1_"
             + hashlib.sha256(
@@ -709,12 +756,16 @@ def run_workbook_recipe(
                 "matched_row_count": result["matched_rows"],
                 "output_row_count": len(result["rows"]),
                 "output": normalized["output"],
-                "headers": result["headers"],
+                "headers": output_result["headers"],
                 "rows_sample": result["rows"][:sample_limit],
                 "truncated": len(result["rows"]) > sample_limit,
                 "verification": verification,
             }
         )
+        if contract_report is not None:
+            summary["workbook_contract"] = changeset._bound_response_value(
+                contract_report
+            )
         _assert_summary_budget(summary)
         if not verification["passed"]:
             if mode == "commit":

@@ -58,7 +58,7 @@ def test_stdio_rebases_120_updates_preserving_second_editor(tmp_path):
                     tool = next(
                         t for t in inventory.tools if t.name == "apply_table_patch"
                     )
-                    assert len(inventory.tools) == 82
+                    assert len(inventory.tools) == 83
                     assert (
                         tool.outputSchema is None and tool.annotations.destructiveHint
                     )

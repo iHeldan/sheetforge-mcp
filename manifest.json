@@ -34,6 +34,7 @@
     {"name": "apply_workbook_repairs", "description": "Dry-run or apply safe workbook repairs with before/after diff output"},
     {"name": "apply_workbook_changeset", "description": "Preview or atomically commit an assertion-backed group of workbook mutations"},
     {"name": "run_workbook_recipe", "description": "Preview or commit a reusable native-table aggregation recipe with checks and source-row samples"},
+    {"name": "inspect_workbook_contract", "description": "Check explicit native-table bindings, keys and value rules while separating declarations from verified conditions"},
     {"name": "explain_recipe_delta", "description": "Explain recomputed recipe changes by source identity with independent reconciliation and bounded evidence"},
     {"name": "apply_table_patch", "description": "Rebase keyed literal table edits with explicit read dependencies and verified preview/commit"},
     {"name": "evaluate_workbook_scenarios", "description": "Compare keyed alternatives with exact metric bounds and commit a selected verified outcome"},
