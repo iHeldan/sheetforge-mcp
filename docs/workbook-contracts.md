@@ -1,6 +1,6 @@
 # Workbook Contracts v1
 
-Implemented on main, not yet published. Published 0.13.0 does not include this API.
+Available since SheetForge MCP `0.14.0`.
 
 A contract is client-owned JSON declaring one native table's logical fields,
 approved physical headers, grain and enforceable data rules. It is passed as an

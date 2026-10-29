@@ -2,7 +2,7 @@
 
 Available since SheetForge MCP `0.11.0`.
 
-Unreleased on main: optional `workbook_contract` enforces explicit logical bindings
+Since `0.14.0`, optional `workbook_contract` enforces explicit logical bindings
 and full bounded source checks in preview/commit. See [Workbook Contracts](workbook-contracts.md).
 Use inspection's `recipe_input_fields` (logical binding keys), not physical Excel
 headers. Contract field errors provide bounded request-location corrections;
