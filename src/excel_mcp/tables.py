@@ -15,7 +15,7 @@ from .data import (
     augment_tabular_payload,
 )
 from .exceptions import DataError, PreconditionFailedError
-from .workbook import require_worksheet, safe_workbook
+from .workbook import _sheet_type, require_worksheet, safe_workbook, worksheet_not_found_error
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +193,7 @@ def _find_table(
     sheet_name: Optional[str] = None,
 ) -> tuple[str, Any, Table]:
     if sheet_name is not None and sheet_name not in wb.sheetnames:
-        raise DataError(f"Sheet '{sheet_name}' not found.")
+        raise worksheet_not_found_error(wb, sheet_name, error_cls=DataError)
 
     sheet_names = [sheet_name] if sheet_name is not None else list(wb.sheetnames)
     for current_sheet_name in sheet_names:
@@ -204,9 +204,25 @@ def _find_table(
             if table.displayName == table_name:
                 return current_sheet_name, ws, table
 
+    message = f"Table '{str(table_name)[:128]}' not found"
     if sheet_name is not None:
-        raise DataError(f"Table '{table_name}' not found in sheet '{sheet_name}'.")
-    raise DataError(f"Table '{table_name}' not found.")
+        message += f" in sheet '{str(sheet_name)[:128]}'"
+    error = DataError(message + ". Worksheet tabs and native tables have separate names.")
+    named_sheet = wb[table_name] if table_name in wb.sheetnames else None
+    sheet_type = _sheet_type(named_sheet) if named_sheet is not None else None
+    safe_scope = sheet_name if sheet_name is None or len(sheet_name) <= 256 else None
+    error.code = f"table_name_is_{sheet_type}" if sheet_type else "table_not_found"
+    error.details = {
+        "argument": "table_name",
+        "sheet_type": sheet_type,
+        "scope_sheet": safe_scope,
+        "scope_omitted": safe_scope != sheet_name,
+        "automatic_selection": False,
+        "suggested_arguments": {"sheet_name": safe_scope},
+        "instruction": "Call list_tables on the SAME filepath to verify exact native table names and their worksheet tabs. A worksheet name is not a table name; do not substitute the whole sheet or choose its first table. Broader inventory does not authorize dropping an approved source-sheet constraint. Preserve the approved source and filters; ask the owner if the intended table is unclear.",
+    }
+    error.suggested_next_tool = "list_tables"
+    raise error
 
 def create_excel_table(
     filepath: str,
@@ -265,6 +281,8 @@ def create_excel_table(
             "range": data_range
         }
 
+    except DataError:
+        raise
     except Exception as e:
         logger.error(f"Failed to create table: {e}")
         raise DataError(str(e))
@@ -278,7 +296,7 @@ def list_excel_tables(
     try:
         with safe_workbook(filepath) as wb:
             if sheet_name is not None and sheet_name not in wb.sheetnames:
-                raise DataError(f"Sheet '{sheet_name}' not found.")
+                raise worksheet_not_found_error(wb, sheet_name, error_cls=DataError)
 
             sheet_names = [sheet_name] if sheet_name is not None else list(wb.sheetnames)
             tables: list[dict[str, Any]] = []

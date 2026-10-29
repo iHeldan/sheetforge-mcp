@@ -1905,6 +1905,54 @@ def _sort_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def worksheet_not_found_error(
+    wb: Any,
+    sheet_name: str,
+    *,
+    error_cls: type[Exception] = WorkbookError,
+) -> Exception:
+    """Describe an exact namespace collision, never redirect to a different source."""
+    import json
+
+    matches = []
+    match_count = 0
+    for ws in wb.worksheets:
+        for table in getattr(ws, "tables", {}).values():
+            if table.displayName != sheet_name:
+                continue
+            match_count += 1
+            candidate = {
+                "table_name": table.displayName,
+                "sheet_name": ws.title,
+                "range_ref": table.ref,
+            }
+            if any(not isinstance(value, str) or len(value) > 256 for value in candidate.values()):
+                continue
+            if len(matches) < 3 and len(json.dumps([*matches, candidate])) <= 3_000:
+                matches.append(candidate)
+
+    label = str(sheet_name)
+    if len(label) > 128:
+        label = label[:128] + "..."
+    message = f"Sheet '{label}' not found"
+    if match_count:
+        message += "; this exact name belongs to a native table, not a worksheet tab"
+    message += ". Use list_tables without sheet_name to check table identities."
+    error = error_cls(message)
+    error.code = "sheet_name_is_table" if match_count else "worksheet_not_found"
+    error.details = {
+        "argument": "sheet_name",
+        "table_match_count": match_count,
+        "table_matches": matches,
+        "matches_truncated": match_count > len(matches),
+        "automatic_selection": False,
+        "suggested_arguments": {"sheet_name": None},
+        "instruction": "Call list_tables on the SAME filepath without a sheet_name filter. Worksheet tabs and native tables have separate names; an absent tab does not prove an absent table. If the approved source is the matched native table, use read_excel_table with its exact table_name (not a whole-sheet replacement). Do not invent a source or copy worksheet coordinates into table-relative offsets. Ask the owner if the intended identity remains unclear.",
+    }
+    error.suggested_next_tool = "list_tables"
+    return error
+
+
 def require_worksheet(
     wb: Any,
     sheet_name: str,
@@ -1913,7 +1961,7 @@ def require_worksheet(
     operation: str = "worksheet operations",
 ) -> Worksheet:
     if sheet_name not in wb.sheetnames:
-        raise error_cls(f"Sheet '{sheet_name}' not found")
+        raise worksheet_not_found_error(wb, sheet_name, error_cls=error_cls)
 
     ws = wb[sheet_name]
     if not isinstance(ws, Worksheet):
@@ -2961,7 +3009,9 @@ def get_workbook_info(filepath: str, include_ranges: bool = False) -> dict[str, 
                 "filename": path.name,
                 "sheets": wb.sheetnames,
                 "size": path.stat().st_size,
-                "modified": path.stat().st_mtime
+                "modified": path.stat().st_mtime,
+                "table_inventory_included": False,
+                "table_inventory_tool": "list_tables",
             }
 
             if include_ranges:

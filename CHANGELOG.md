@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Clearer worksheet-versus-native-table source selection: targeted tool guidance, explicit table-inventory absence in workbook metadata, and bounded exact-name recovery diagnostics on worksheet/table lookup failures. Original exception classes, explicit source scopes and existing successful lookup behavior are preserved; no fuzzy matching, first-table fallback or automatic source switch.
+
 - Reduced repeated workbook-path schema guidance while preserving its standalone rules, the full initialization policy, and unchanged path validation/recovery. Regression tests bound the schema payload and retain traversal, symlink, same-tool retry and no-relocation checks.
 
 - Shared workbook-path guidance in MCP initialization and all path parameter schemas, including multi-file inputs and snapshot destinations. Structured path-policy errors suggest safe same-tool recovery without guessing a basename, relocating a request, disclosing the server root or weakening confinement. Existing unrooted stdio absolute-path requirements remain unchanged.

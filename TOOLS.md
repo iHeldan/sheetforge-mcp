@@ -15,6 +15,7 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 - Every tool returns a JSON envelope with `ok`, `operation`, `message`, and `data`.
 - All workbook-path schema fields, including list items and optional snapshot paths, carry shared guidance. Path-policy errors return `WorkbookPathError` with codes `filepath_invalid`, `filepath_absolute_required` or `filepath_outside_root`, recovery `details` and `suggested_next_tool` naming the same failed tool. No automatic relocation, basename fallback or root-directory disclosure. See [path rules and recovery](docs/file-paths.md); malformed argument types may instead fail SDK validation.
 - Path fields use a compact, self-contained hint; the full transport-dependent policy appears once in server initialization. No path validation or error-recovery rule is removed to reduce repeated schema text.
+- Worksheet tabs and native tables have separate names. `read_excel_as_table(sheet_name=...)` reads a worksheet view; `read_excel_table(table_name=...)` reads a native table. `get_workbook_metadata.sheets` is not a table inventory. Use `list_tables` without a sheet filter to map names before declaring an approved table absent. [Source identity and recovery](docs/source-selection.md) documents bounded exact-match errors, never automatic source changes.
 
 ## Structured Output Shapes
 
@@ -177,6 +178,7 @@ Returns matches under `data.matches`:
 - `create_worksheet(filepath: str, sheet_name: str) -> str`
   Adds a worksheet to an existing workbook.
 - `get_workbook_metadata(filepath: str, include_ranges: bool = False) -> str`
+  `sheets` lists tabs only. `table_inventory_included: false` and `table_inventory_tool: "list_tables"` explicitly distinguish the missing inventory from missing tables.
   Returns workbook metadata under the shared JSON envelope.
 - `profile_workbook(filepath: str) -> str`
   Returns a workbook inventory with per-sheet summaries for visibility, freeze panes, autofilters, protection, tables, charts, print settings, and lightweight workbook-level counts. Grid-anchored worksheet charts include anchor, dimensions, and `occupied_range` for layout-aware follow-up steps.

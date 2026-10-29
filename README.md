@@ -156,6 +156,11 @@ path in normal stdio. No automatic basename fallback or relocation occurs. See
 
 ## Tooling Overview
 
+Worksheet tabs and native Excel tables have separate names. For a named source,
+use `list_tables` to verify its containing tab, then `read_excel_table`; a missing
+name in the worksheet list does not prove the table is absent. See
+[source selection and error recovery](docs/source-selection.md).
+
 The server currently registers 83 MCP tools across these groups:
 
 - workbook overview: `create_workbook`, `create_worksheet`, `create_workbook_snapshot`, `get_workbook_metadata`, `profile_workbook`, `describe_sheet_layout`, `audit_workbook`, `plan_workbook_repairs`, `apply_workbook_repairs`, `apply_workbook_changeset`, `run_workbook_recipe`, `explain_recipe_delta`, `diff_workbooks`, `analyze_range_impact`, `explain_formula_cell`, `detect_circular_dependencies`, `create_named_range`, `inspect_named_range`, `list_named_ranges`, `delete_named_range`, `list_all_sheets`, `list_tables`

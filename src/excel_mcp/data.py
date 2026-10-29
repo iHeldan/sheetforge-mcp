@@ -15,7 +15,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter, range_bo
 from .exceptions import DataError, PreconditionFailedError
 from .cell_utils import parse_cell_range
 from .cell_validation import get_data_validation_for_cell
-from .workbook import first_worksheet, require_worksheet, safe_workbook
+from .workbook import first_worksheet, require_worksheet, safe_workbook, worksheet_not_found_error
 
 logger = logging.getLogger(__name__)
 ROW_MODES = {"arrays", "objects"}
@@ -1204,7 +1204,7 @@ def _describe_worksheet_dataset(
             resolved_sheet_name, ws = first_worksheet(wb, error_cls=DataError)
         else:
             if sheet_name not in wb.sheetnames:
-                raise DataError(f"Sheet '{sheet_name}' not found")
+                raise worksheet_not_found_error(wb, sheet_name, error_cls=DataError)
             resolved_sheet_name = sheet_name
             ws = wb[resolved_sheet_name]
 

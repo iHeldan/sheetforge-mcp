@@ -704,7 +704,7 @@ def read_data_from_excel(
     
     Args:
         filepath: Path to Excel file
-        sheet_name: Name of worksheet
+        sheet_name: Worksheet tab name, NOT a native table name; list_tables maps tables to tabs
         start_cell: Starting cell (default A1)
         end_cell: Ending cell (optional, auto-expands if not provided)
         max_rows: Optional maximum number of rows to return from the starting row
@@ -791,6 +791,8 @@ def read_excel_as_table(
 ) -> str:
     """
     Read Excel data as a compact table with headers and rows or record objects.
+    sheet_name is a worksheet TAB, not a native table. For an approved named
+    table use read_excel_table(table_name=...); list_tables maps tables to tabs.
     Much more context-efficient than read_data_from_excel for structured data,
     with optional inferred schema hints for downstream steps.
     """
@@ -836,6 +838,8 @@ def quick_read(
 
     Can return either array rows or object-shaped records, plus optional schema
     hints inferred from the returned rows.
+    sheet_name is a worksheet tab, NOT a native table name. For named tables use
+    read_excel_table(table_name=...); list_tables verifies the containing worksheet.
     """
     return _run_tool(
         "quick_read",
@@ -1213,8 +1217,10 @@ def read_excel_table(
     row_mode: str = "arrays",
     infer_schema: bool = False,
 ) -> str:
-    """Read a native Excel table by its table name.
+    """Read a native Excel table by its table name, not by a worksheet tab name.
 
+    Use the exact table_name from list_tables. Omit sheet_name when unknown;
+    if supplied, it must be the table's containing worksheet tab, not the table name.
     Supports compact table payloads, object-shaped record output, and optional
     inferred schema hints.
     """
@@ -1529,7 +1535,11 @@ def list_tables(
     filepath: WorkbookPath,
     sheet_name: Optional[str] = None,
 ) -> str:
-    """List native Excel tables for one worksheet or the whole workbook."""
+    """Map native table names to worksheet tabs and ranges; these names are distinct.
+
+    Omit sheet_name to search the whole workbook, especially after a missing-tab
+    error. Table and worksheet names may differ; neither name implies the other.
+    """
     def action() -> Any:
         return {
             "sheet_name": sheet_name,
@@ -1602,7 +1612,11 @@ def get_workbook_metadata(
     filepath: WorkbookPath,
     include_ranges: bool = False
 ) -> str:
-    """Get metadata about workbook including sheets, ranges, etc."""
+    """Get workbook metadata; sheets lists TABS, not native table names.
+
+    Table inventory is not included. A missing table name in sheets does NOT mean
+    the table is absent. Use list_tables without sheet_name to verify named sources.
+    """
     return _run_tool(
         "get_workbook_metadata",
         lambda: get_workbook_info(get_excel_path(filepath), include_ranges=include_ranges),
