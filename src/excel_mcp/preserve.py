@@ -35,6 +35,7 @@ PRESERVE_VERSION = 1
 MAX_PACKAGE_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_BYTES = MAX_PACKAGE_BYTES + 4 * 1024 * 1024
 MAX_SHEET_BYTES = 16 * 1024 * 1024
+MAX_GRID_ELEMENTS = 250_000
 MAX_EDITS = 1_000
 _REL_KINDS = {
     _OFFICE_REL + "/" + name
@@ -98,6 +99,10 @@ _CONSTANT_CHARS = re.compile(r"[0-9eE.+*/() \t\r\n-]{1,256}", re.ASCII)
 _ROW = (_SHEET_NS + "worksheet", _SHEET_NS + "sheetData", _SHEET_NS + "row")
 _CELL = (*_ROW, _SHEET_NS + "c")
 _FORMULA = (*_CELL, _SHEET_NS + "f")
+_VALUE = _SHEET_NS + "v"
+_INLINE = _SHEET_NS + "is"
+_TEXT = _SHEET_NS + "t"
+_XML_SPACE = "http://www.w3.org/XML/1998/namespace}space"
 _MAIN_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
 )
@@ -216,7 +221,7 @@ def _package_profile(archive: _Archive):
         name = entry.filename.rstrip("/")
         if (
             not name
-            or name in seen
+            or name.casefold() in seen
             or any(p in {"", ".", ".."} for p in name.split("/"))
             or any(ch in name for ch in "\\%?#:")
             or any(ord(ch) < 32 for ch in name)
@@ -226,7 +231,7 @@ def _package_profile(archive: _Archive):
             or (entry.is_dir() and entry.file_size)
         ):
             _unsupported("unsupported_zip_member")
-        seen.add(name)
+        seen.add(name.casefold())
 
     inventory = _inventory(archive, strict_types=True)
     if (
@@ -383,7 +388,7 @@ def _tag_end(xml, start):
     _unsupported("unsupported_xml_span")
 
 
-def _patch_sheet(xml: bytes, edits):
+def _patch_sheet(xml: bytes, edits, *, grid_budget: int):
     """Locate exact cell spans with a namespace-aware parser; never serialize the tree."""
     if b"\0" in xml:
         _unsupported("unsupported_sheet_encoding")
@@ -398,10 +403,14 @@ def _patch_sheet(xml: bytes, edits):
     dimension = row_spans = None
     row_start = current_row = previous_col = 0
     target = cell_start = style = None
+    target_kind = None
+    target_children = set()
+    grid_elements = inserted = 0
     formula_text = []
     formula_length = formula_count = 0
 
     def insert_at(index, col, edit):
+        nonlocal inserted
         if dimension is None:
             _unsupported("insertion_outside_sheet_dimension")
         c1, r1, c2, r2 = dimension
@@ -411,10 +420,11 @@ def _patch_sheet(xml: bytes, edits):
             _unsupported("insertion_outside_row_span")
         if edit.changed:
             patches.append((index, index, edit.xml()))
+            inserted += 1
 
     def start(tag, attrs):
         nonlocal dimension, row_start, current_row, previous_col, pending, row_spans
-        nonlocal target, cell_start, style, formula_length
+        nonlocal target, cell_start, style, formula_length, grid_elements, target_kind
         if len(tags) >= 128:
             _unsupported("xml_depth_limit")
         tags.append(tag)
@@ -434,6 +444,9 @@ def _patch_sheet(xml: bytes, edits):
             if not all(dimension):
                 _unsupported("unsupported_sheet_dimension")
         if tuple(tags[:2]) == _ROW[:2] and depth in {3, 4}:
+            grid_elements += 1
+            if grid_elements > grid_budget:
+                _unsupported("grid_limit")
             if tuple(tags) == _ROW:
                 row = attrs.get("r", "")
                 if (
@@ -470,9 +483,11 @@ def _patch_sheet(xml: bytes, edits):
                 if pending and pending[0][0] == col:
                     target = pending.popleft()[1]
                     style = attrs.get("s")
+                    target_kind = attrs.get("t", "n")
+                    target_children.clear()
                     if (
                         set(attrs) - {"r", "s", "t"}
-                        or attrs.get("t", "n") not in {"n", "b", "inlineStr"}
+                        or target_kind not in {"n", "b", "inlineStr"}
                         or (
                             style is not None and not re.fullmatch(r"[0-9]{1,9}", style)
                         )
@@ -492,19 +507,28 @@ def _patch_sheet(xml: bytes, edits):
             and tuple(tags[:4]) == _CELL
             and tag
             not in {
-                _SHEET_NS + "v",
-                _SHEET_NS + "is",
+                _VALUE,
+                _INLINE,
                 _FORMULA[-1],
             }
         ):
             _unsupported("unsupported_cell_layout")
         if target is not None and tuple(tags[:4]) == _CELL and depth > 4:
-            if tuple(tags[4:]) not in {
-                (_SHEET_NS + "v",),
-                (_SHEET_NS + "is",),
-                (_SHEET_NS + "is", _SHEET_NS + "t"),
-            }:
+            suffix = tuple(tags[4:])
+            if target_kind == "inlineStr":
+                valid = (suffix == (_INLINE,) and not attrs) or (
+                    suffix == (_INLINE, _TEXT)
+                    and (
+                        not attrs
+                        or attrs == {_XML_SPACE: "preserve"}
+                        or attrs == {_XML_SPACE: "default"}
+                    )
+                )
+            else:
+                valid = suffix == (_VALUE,) and not attrs
+            if not valid or suffix in target_children:
                 _unsupported("unsupported_target_cell_encoding")
+            target_children.add(suffix)
 
     def characters(text):
         nonlocal formula_length
@@ -513,6 +537,13 @@ def _patch_sheet(xml: bytes, edits):
             if formula_length > 256:
                 _unsupported("unsupported_formula")
             formula_text.append(text)
+        elif (
+            target is not None
+            and len(tags) in {4, 5}
+            and tags[-1] in {_CELL[-1], _INLINE}
+            and text.strip()
+        ):
+            _unsupported("unsupported_target_cell_encoding")
 
     def end(_tag):
         nonlocal target, formula_count
@@ -560,7 +591,7 @@ def _patch_sheet(xml: bytes, edits):
     if per_row:
         _unsupported("target_row_missing")
     if not patches:
-        return xml, formula_count
+        return xml, formula_count, grid_elements, inserted
     chunks, previous = [], 0
     for start_at, end_at, replacement in patches:
         if not previous <= start_at <= end_at <= len(xml):
@@ -568,7 +599,7 @@ def _patch_sheet(xml: bytes, edits):
         chunks.extend((xml[previous:start_at], replacement))
         previous = end_at
     chunks.append(xml[previous:])
-    return b"".join(chunks), formula_count
+    return b"".join(chunks), formula_count, grid_elements, inserted
 
 
 def build_preserving_candidate(baseline: Path, candidate: Path, operations):
@@ -581,9 +612,13 @@ def build_preserving_candidate(baseline: Path, candidate: Path, operations):
             inventory = _package_profile(scan)
             originals = {}
             formula_count = 0
+            grid_remaining = MAX_GRID_ELEMENTS
             for part in inventory.sheets.values():
                 original = b"".join(scan.chunks(part, limit=MAX_SHEET_BYTES))
-                _, formulas = _patch_sheet(original, {})
+                _, formulas, grid_elements, _ = _patch_sheet(
+                    original, {}, grid_budget=grid_remaining
+                )
+                grid_remaining -= grid_elements
                 originals[part] = original
                 formula_count += formulas
             book = load_workbook(baseline, rich_text=True)
@@ -595,12 +630,23 @@ def build_preserving_candidate(baseline: Path, candidate: Path, operations):
                 book.close()
 
             patched = {}
+            candidate_bytes = sum(info.file_size for info in source.infolist())
             for name, targets in edits.items():
                 part = inventory.sheets[name]
                 original = originals[part]
-                updated, _ = _patch_sheet(original, targets)
+                updated, _, _, inserted = _patch_sheet(
+                    original, targets, grid_budget=MAX_GRID_ELEMENTS
+                )
+                grid_remaining -= inserted
+                if grid_remaining < 0:
+                    _unsupported("grid_limit")
+                if len(updated) > MAX_SHEET_BYTES:
+                    _unsupported("candidate_package_limit")
+                candidate_bytes += len(updated) - len(original)
                 if updated != original:
                     patched[part] = updated
+            if candidate_bytes > MAX_PACKAGE_BYTES:
+                _unsupported("candidate_package_limit")
 
             expected = {}
             original_parts = _Archive(source)
@@ -623,6 +669,8 @@ def build_preserving_candidate(baseline: Path, candidate: Path, operations):
                     if saved is not None:
                         saved.writestr(copy(entry), content)
 
+        if candidate.stat().st_size > MAX_SOURCE_BYTES:
+            _unsupported("candidate_package_limit")
         with ZipFile(candidate) as saved:
             if saved.namelist() != list(expected):
                 _unsupported("candidate_package_mismatch")

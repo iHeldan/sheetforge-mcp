@@ -10,9 +10,9 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.14.1`
+Published package release: `0.15.0`
 Repository docs track the current main-branch tool surface, which currently exposes `83` MCP tools.
-Version `0.14.1` adds [targeted XLSX fidelity checks](docs/xlsx-fidelity.md) for direct and ChangeSet-backed writes. Previously accepted writes can now be blocked if they would lose protected workbook content.
+Version `0.15.0` adds [opt-in preserving XLSX saves](docs/xlsx-fidelity.md#preserving-save-mode) for literal cell edits in a restricted workbook profile. [Targeted XLSX fidelity checks](docs/xlsx-fidelity.md) still guard direct and ChangeSet-backed writes.
 Workbook Contracts v1 is included in `0.14.0`: explicit bindings and full bounded data checks can guard Recipe preview/commit, with logical-field, file-path and worksheet-versus-table recovery guidance.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.
@@ -282,7 +282,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 ## Recommended Agent Workflows
 
 1. Unfamiliar workbook -> verified multi-step mutation
-   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, and run `analyze_range_impact`. Put supported report-building edits and explicit postconditions into `apply_workbook_changeset(mode="preview")`. Review `package_fidelity`; only if `ready_to_commit=true` should you repeat the same plan with `mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from the preview. See [XLSX fidelity checks](docs/xlsx-fidelity.md) and the [unreleased preserving save mode](docs/xlsx-fidelity.md#preserving-save-mode-unreleased) for restricted literal cell edits.
+   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, and run `analyze_range_impact`. Put supported report-building edits and explicit postconditions into `apply_workbook_changeset(mode="preview")`. Review `package_fidelity`; only if `ready_to_commit=true` should you repeat the same plan with `mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from the preview. See [XLSX fidelity checks](docs/xlsx-fidelity.md) and the [preserving save mode](docs/xlsx-fidelity.md#preserving-save-mode) for restricted literal cell edits.
 2. Workbook repair loop
    Use `audit_workbook` to find high-signal issues, `plan_workbook_repairs` to turn them into an action queue, `apply_workbook_repairs(..., dry_run=True)` to preview the safe subset, then rerun `audit_workbook` after applying repairs to confirm the workbook is back to a low-risk state.
 3. Multi-workbook reporting

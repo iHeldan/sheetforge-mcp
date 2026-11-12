@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "sheetforge-mcp",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "Local-first Excel MCP server for AI agents and automation workflows with structured reads, workbook introspection, and safer .xlsx mutation",
   "author": {
     "name": "SheetForge",
@@ -32,7 +32,7 @@
     {"name": "audit_workbook", "description": "Audit workbook structure for high-signal issues that affect agent workflows"},
     {"name": "plan_workbook_repairs", "description": "Turn workbook audit findings into prioritized next steps for SheetForge workflows"},
     {"name": "apply_workbook_repairs", "description": "Dry-run or apply safe workbook repairs with before/after diff output"},
-    {"name": "apply_workbook_changeset", "description": "Preview or atomically commit an assertion-backed group of workbook mutations"},
+    {"name": "apply_workbook_changeset", "description": "Preview or atomically commit verified workbook edits, with an opt-in preserving mode for literal cell values"},
     {"name": "run_workbook_recipe", "description": "Preview or commit a reusable native-table aggregation recipe with checks and source-row samples"},
     {"name": "inspect_workbook_contract", "description": "Check explicit native-table bindings, keys and value rules while separating declarations from verified conditions"},
     {"name": "explain_recipe_delta", "description": "Explain recomputed recipe changes by source identity with independent reconciliation and bounded evidence"},

@@ -68,7 +68,9 @@ worksheet (an active chart sheet is rejected).
 For the role of the optional calculation-chain part, see
 [Working with the calculation chain](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-calculation-chain).
 
-## Preserving Save Mode (Unreleased)
+## Preserving Save Mode
+
+Available since SheetForge MCP `0.15.0`.
 
 `apply_workbook_changeset` can use `save_mode="preserve"` to patch only the
 target cells in worksheet XML. It checks the ZIP member list and SHA-256 of
@@ -92,8 +94,10 @@ The first version is intentionally narrow:
 - Only a restricted, unsigned `.xlsx` package with ordinary worksheets. Tables,
   charts, pivots, sheet protection, merges, validations, defined names, external
   relationships, and unknown package features are outside this profile.
-- At most 1,000 target cells, 68 MiB on disk, 64 MiB uncompressed, and 16 MiB
-  per worksheet XML part. Metadata and package-inspection limits still apply.
+- At most 1,000 target cells, 250,000 row and cell elements combined, 68 MiB on
+  disk, 64 MiB uncompressed, and 16 MiB per worksheet XML part. These limits
+  apply to the input and proposed output. Metadata and package-inspection
+  limits still apply.
 
 Example preview arguments:
 

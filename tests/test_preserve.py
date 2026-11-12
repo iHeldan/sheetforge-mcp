@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 import re
 from xml.etree import ElementTree as ET
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -37,7 +37,7 @@ def _members(path):
 
 
 def _write_members(path, members):
-    with ZipFile(path, "w") as archive:
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
         for name, value in members.items():
             archive.writestr(name, value)
 
@@ -377,3 +377,72 @@ def test_rollback_restores_exact_original_package(tmp_path, monkeypatch):
         _commit(path, preview, create_snapshot=False)
     assert failed_after_replace
     assert path.read_bytes() == frozen and list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize(
+    "limit", ["MAX_PACKAGE_BYTES", "MAX_SHEET_BYTES", "MAX_SOURCE_BYTES"]
+)
+def test_candidate_growth_respects_profile_limits(tmp_path, monkeypatch, limit):
+    path = _book(tmp_path / "bounded.xlsx")
+    preview = _call(path)
+    before = path.read_bytes()
+    parts = _members(path)
+    limits = {
+        "MAX_PACKAGE_BYTES": sum(map(len, parts.values())),
+        "MAX_SHEET_BYTES": len(parts[INPUT_PART]),
+        "MAX_SOURCE_BYTES": len(before),
+    }
+    monkeypatch.setattr(preserve, limit, limits[limit])
+    with pytest.raises(PreconditionFailedError) as error:
+        _commit(path, preview)
+    assert error.value.details["reason"] == "candidate_package_limit"
+    assert path.read_bytes() == before and list(tmp_path.iterdir()) == [path]
+
+
+def test_workbook_wide_grid_limit_covers_baseline_and_insertions(tmp_path, monkeypatch):
+    path = _book(tmp_path / "grid-limit.xlsx")
+    before = path.read_bytes()
+    original = _members(path)
+    grid_count = sum(
+        elem.tag in {f"{{{NS}}}row", f"{{{NS}}}c"}
+        for name in (INPUT_PART, FORMULA_PART)
+        for elem in ET.fromstring(original[name]).iter()
+    )
+    for limit in (grid_count - 1, grid_count):
+        monkeypatch.setattr(preserve, "MAX_GRID_ELEMENTS", limit)
+        with pytest.raises(PreconditionFailedError) as error:
+            _call(path)
+        assert error.value.details["reason"] == "grid_limit"
+    assert path.read_bytes() == before
+
+
+def test_rejects_case_aliased_package_parts(tmp_path):
+    path = _book(tmp_path / "aliased.xlsx")
+    with ZipFile(path, "a") as archive:
+        archive.writestr("customXml/ITEM1.xml", b"<second/>")
+    before = path.read_bytes()
+    with pytest.raises(PreconditionFailedError) as error:
+        _call(path)
+    assert error.value.details["reason"] == "unsupported_zip_member"
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "new_cell_body",
+    [b"<v>6</v><v>7</v>", b'<v xml:space="preserve">6</v>', b"metadata<v>6</v>"],
+)
+def test_rejects_noncanonical_target_payload(tmp_path, new_cell_body):
+    path = _book(tmp_path / "ambiguous-cell.xlsx")
+    parts = _members(path)
+    cell = b'<c r="A2" t="n">'
+    assert cell + b"<v>6</v>" in parts[INPUT_PART]
+    parts[INPUT_PART] = parts[INPUT_PART].replace(
+        cell + b"<v>6</v>", cell + new_cell_body
+    )
+    _write_members(path, parts)
+    before = path.read_bytes()
+    ops = [{"tool": "write_data_to_excel", "args": {"start_cell": "A2", "data": [[8]]}}]
+    with pytest.raises(PreconditionFailedError) as error:
+        _call(path, ops)
+    assert error.value.details["reason"] == "unsupported_target_cell_encoding"
+    assert path.read_bytes() == before
