@@ -7,9 +7,19 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 from openpyxl.worksheet.table import Table
 
-from excel_mcp import changeset, package_fidelity, rebase, recipes, scenarios, server
+from excel_mcp import (
+    changeset,
+    data,
+    package_fidelity,
+    rebase,
+    recipes,
+    scenarios,
+    server,
+)
 from excel_mcp.exceptions import PreconditionFailedError
 
 _MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -148,6 +158,234 @@ def _compare(before, after):
 
 def _issues(result):
     return {item["code"]: item for item in result["issues"]}
+
+
+def test_direct_write_previews_and_blocks_same_loss_as_changeset(tmp_path):
+    path = _book(
+        tmp_path / "direct.xlsx", custom=True, chain=True, caches={"A1": ("n", "54")}
+    )
+    frozen, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    args = {"filepath": str(path), **_EDIT[0]["args"]}
+    direct = json.loads(
+        server.write_data_to_excel(**args, dry_run=True, include_changes=False)
+    )
+    staged = changeset.apply_workbook_changeset(str(path), _EDIT)
+    assert direct["ok"] and direct["dry_run"] and not direct["data"]["ready_to_commit"]
+    report = direct["data"]["package_fidelity"]
+    assert report == staged["package_fidelity"]
+    assert report["status"] == "blocked"
+
+    denied = json.loads(server.write_data_to_excel(**args, include_changes=False))
+    assert not denied["ok"]
+    assert denied["error"]["code"] == "write_package_fidelity_failed"
+    assert denied["error"]["details"]["package_fidelity"] == report
+    assert path.read_bytes() == frozen and path.stat().st_mtime_ns == mtime
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_direct_write_may_replace_a_formula_in_its_target_cell(tmp_path):
+    path = _book(tmp_path / "direct.xlsx", chain=True, caches={"A1": ("n", "54")})
+    preview = data.write_data(str(path), "Formulas", [[99]], "A1", dry_run=True)
+    assert preview["ready_to_commit"]
+    report = preview["package_fidelity"]
+    assert set(_issues(report)) == {"calculation_chain_removed"}
+    assert (
+        data.write_data(str(path), "Formulas", [[99]], "A1")["package_fidelity"]
+        == report
+    )
+    wb = load_workbook(path, data_only=True)
+    try:
+        assert wb["Formulas"]["A1"].value == 99
+    finally:
+        wb.close()
+
+
+def test_direct_write_blocks_when_inspection_cannot_finish(tmp_path, monkeypatch):
+    path = _book(tmp_path / "direct.xlsx")
+    frozen = path.read_bytes()
+    monkeypatch.setattr(package_fidelity, "MAX_MEMBERS", 1)
+    preview = data.write_data(str(path), "Data", [["new"]], "E1", dry_run=True)
+    assert preview["package_fidelity"]["status"] == "unverified"
+    assert not preview["ready_to_commit"]
+    with pytest.raises(PreconditionFailedError) as rejected:
+        data.write_data(str(path), "Data", [["new"]], "E1")
+    assert rejected.value.code == "write_package_fidelity_failed"
+    assert path.read_bytes() == frozen and list(tmp_path.iterdir()) == [path]
+
+
+def test_direct_write_refuses_source_drift_after_inspection(tmp_path, monkeypatch):
+    path = _book(tmp_path / "direct.xlsx")
+    original_copy = shutil.copy2
+
+    def intervening_save(source, target, **kwargs):
+        copied = original_copy(source, target, **kwargs)
+        with ZipFile(source, "a") as archive:
+            archive.comment = b"saved by another editor"
+        return copied
+
+    monkeypatch.setattr(shutil, "copy2", intervening_save)
+    with pytest.raises(PreconditionFailedError) as rejected:
+        data.write_data(str(path), "Data", [["new"]], "E1")
+    assert rejected.value.code == "stale_workbook"
+    with ZipFile(path) as archive:
+        assert archive.comment == b"saved by another editor"
+    wb = load_workbook(path)
+    try:
+        assert wb["Data"]["E1"].value is None
+    finally:
+        wb.close()
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_direct_write_refuses_candidate_drift_after_inspection(tmp_path, monkeypatch):
+    path = _book(tmp_path / "direct.xlsx")
+    frozen = path.read_bytes()
+    inspect = data.inspect_package_fidelity
+
+    def changed_candidate(baseline, candidate, **kwargs):
+        report = inspect(baseline, candidate, **kwargs)
+        assert report["status"] == "passed"
+        with ZipFile(candidate, "a") as archive:
+            archive.comment = b"changed after inspection"
+        return report
+
+    monkeypatch.setattr(data, "inspect_package_fidelity", changed_candidate)
+    with pytest.raises(PreconditionFailedError) as rejected:
+        data.write_data(str(path), "Data", [["new"]], "E1")
+    assert rejected.value.code == "write_candidate_changed"
+    assert path.read_bytes() == frozen and list(tmp_path.iterdir()) == [path]
+
+
+def _rich_book(path, storage):
+    wb = Workbook()
+    wb.active.title = "First"
+    active = wb.create_sheet("Selected")
+    active["A1"] = CellRichText(
+        TextBlock(InlineFont(b=True), "bold"),
+        " and ",
+        TextBlock(InlineFont(i=True), "italic"),
+    )
+    wb.active = active
+    wb.save(path)
+    wb.close()
+    if storage == "inline":
+        return
+
+    def to_shared(parts):
+        strings = ET.Element(f"{{{_MAIN}}}sst", count="1", uniqueCount="1")
+
+        def edit_cell(root):
+            cell = root.find(f".//{{{_MAIN}}}c[@r='A1']")
+            inline = cell.find(f"{{{_MAIN}}}is")
+            cell.remove(inline)
+            cell.set("t", "s")
+            ET.SubElement(cell, f"{{{_MAIN}}}v").text = "0"
+            inline.tag = f"{{{_MAIN}}}si"
+            strings.append(inline)
+
+        _xml(parts, _FORMULA_SHEET, edit_cell)
+        parts["xl/sharedStrings.xml"] = ET.tostring(strings)
+        _xml(
+            parts,
+            _WORKBOOK_RELS,
+            lambda root: _add_link(root, 111, "sharedStrings", "sharedStrings.xml"),
+        )
+        _xml(
+            parts,
+            "[Content_Types].xml",
+            lambda root: ET.SubElement(
+                root,
+                f"{{{_TYPE}}}Override",
+                PartName="/xl/sharedStrings.xml",
+                ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml",
+            ),
+        )
+
+    _rewrite(path, to_shared)
+
+
+@pytest.mark.parametrize("storage", ["inline", "shared"])
+@pytest.mark.parametrize("route", ["changeset", "direct"])
+def test_writes_preserve_rich_text_and_changeset_uses_active_sheet(
+    tmp_path, storage, route
+):
+    path = tmp_path / "rich.xlsx"
+    _rich_book(path, storage)
+    frozen = path.read_bytes()
+    wb = load_workbook(path, rich_text=True)
+    try:
+        original = wb["Selected"]["A1"].value
+        assert isinstance(original, CellRichText)
+    finally:
+        wb.close()
+    if route == "changeset":
+        ops = [
+            {"tool": "create_worksheet", "args": {"sheet_name": "Report"}},
+            {
+                "tool": "write_data_to_excel",
+                "args": {"start_cell": "C1", "data": [["new"]]},
+            },
+            {
+                "tool": "format_range",
+                "args": {"sheet_name": "Selected", "start_cell": "C1", "bold": True},
+            },
+        ]
+        preview = changeset.apply_workbook_changeset(str(path), ops)
+        assert preview["ready_to_commit"] and path.read_bytes() == frozen
+        assert _commit(path, preview, ops)["persisted"]
+    else:
+        preview = data.write_data(str(path), "Selected", [["new"]], "C1", dry_run=True)
+        assert preview["ready_to_commit"] and path.read_bytes() == frozen
+        data.write_data(str(path), "Selected", [["new"]], "C1")
+
+    wb = load_workbook(path, rich_text=True)
+    try:
+        assert wb["First"]["C1"].value is None and wb["Selected"]["C1"].value == "new"
+        actual = wb["Selected"]["A1"].value
+        assert isinstance(actual, CellRichText) and actual == original
+    finally:
+        wb.close()
+
+
+def test_same_visible_text_does_not_flatten_target_rich_text(tmp_path):
+    path = tmp_path / "rich.xlsx"
+    _rich_book(path, "inline")
+    unchanged = data.write_data(str(path), "Selected", [["bold and italic"]], "A1")
+    assert unchanged["changed_cells"] == 0
+    wb = load_workbook(path, rich_text=True)
+    try:
+        assert isinstance(wb["Selected"]["A1"].value, CellRichText)
+    finally:
+        wb.close()
+    args = dict(
+        filepath=str(path),
+        sheet_name="Selected",
+        data=[["replacement"]],
+        include_changes=True,
+    )
+    replaced = json.loads(server.write_data_to_excel(**args))
+    assert replaced["ok"]
+    assert replaced["changes"][0]["old_value"] == "bold and italic"
+
+
+def test_changeset_checks_only_the_final_candidate(tmp_path):
+    path = _book(tmp_path / "final.xlsx", caches={"A1": ("n", "54")})
+    ops = [
+        *_EDIT,
+        {
+            "tool": "write_data_to_excel",
+            "args": {
+                "sheet_name": "Formulas",
+                "start_cell": "A1",
+                "data": [[99]],
+            },
+        },
+    ]
+    preview = changeset.apply_workbook_changeset(str(path), ops)
+    assert (
+        preview["ready_to_commit"] and preview["package_fidelity"]["status"] == "passed"
+    )
+    assert _commit(path, preview, ops)["persisted"]
 
 
 def test_changeset_mcp_identifies_silent_content_loss_and_refuses_commit(tmp_path):

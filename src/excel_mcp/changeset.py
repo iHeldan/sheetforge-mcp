@@ -29,7 +29,7 @@ from .chart import (
     _extract_title_text,
     create_chart_in_sheet,
 )
-from .data import write_data
+from .data import _write_data
 from .exceptions import (
     PreconditionFailedError,
     ResponseTooLargeError,
@@ -841,13 +841,17 @@ def _dispatch_operation(candidate: Path, operation: dict[str, Any]) -> dict[str,
     filepath = str(candidate)
     if tool == "create_chart":
         args.setdefault("data_range", None)
+    elif tool == "write_data_to_excel":
+        args.setdefault("sheet_name", None)
 
     dispatch: dict[str, Callable[[], dict[str, Any]]] = {
         "create_worksheet": lambda: create_sheet(filepath, **args),
-        "write_data_to_excel": lambda: write_data(
+        # Only the final candidate is checked against the baseline, not intermediate saves.
+        "write_data_to_excel": lambda: _write_data(
             filepath,
             dry_run=False,
             include_changes=True,
+            check_package=False,
             **args,
         ),
         "format_range": lambda: format_range(
@@ -906,6 +910,7 @@ def _dispatch_operation(candidate: Path, operation: dict[str, Any]) -> dict[str,
     return result
 
 
+@workbook_module._preserve_rich_text_in_staging()
 def _apply_operations(
     candidate: Path,
     operations: list[dict[str, Any]],

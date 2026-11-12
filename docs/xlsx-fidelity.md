@@ -1,8 +1,8 @@
-# ChangeSet XLSX Fidelity Checks
+# XLSX Fidelity Checks
 
 An XLSX file is a ZIP package. A workbook can reopen successfully and satisfy
-cell assertions even when a writer discarded package content. ChangeSet checks
-the staged save against the original package separately from its workbook diff.
+cell assertions even when a writer discarded package content. Guarded writes
+check the staged save against the original package separately from cell changes.
 
 ## What to check in preview
 
@@ -27,17 +27,29 @@ may intentionally replace a formula or its old result; writing the same formula
 does not waive its check.
 
 Commit recomputes the check. If it fails, the original remains unchanged and
-no snapshot is created by that attempt. The error code is
-`changeset_package_fidelity_failed`, with the report in
-`error.details.package_fidelity`. Commit also checks the candidate's bytes
-again before replacing the original, so a candidate that changed after
-inspection cannot be committed.
+no snapshot is created by that attempt. Read the report in
+`error.details.package_fidelity`: the error code is
+`changeset_package_fidelity_failed` for ChangeSet or
+`write_package_fidelity_failed` for `write_data_to_excel`. Both paths reject
+observed candidate drift before replacement.
+
+For `write_data_to_excel`, `dry_run=true` saves and checks an isolated
+candidate without changing the source. Read `data.ready_to_commit` and
+`data.package_fidelity`; a preview is not a lock or an exact-file pin between
+calls. Use ChangeSet if the commit must match a specific previewed SHA-256.
+Within ChangeSet, an omitted `sheet_name` on a cell write selects the active
+worksheet (an active chart sheet is rejected).
 
 ## Scope and recovery
 
-- The guard runs in `apply_workbook_changeset` and in writes routed through it,
-  including Verified Recipes, Rebase and Scenarios. It is not a guard on
-  standalone mutation tools or on the public `diff_workbooks` tool.
+- The guard runs in `write_data_to_excel`, `apply_workbook_changeset` and
+  ChangeSet-backed writes (Verified Recipes, Rebase and Scenarios). It does not
+  run in other standalone mutation tools or in `diff_workbooks`.
+- Direct cell writes and all ChangeSet staging saves load with openpyxl's
+  [rich-text preservation](https://openpyxl.readthedocs.io/en/3.1/rich_text.html).
+  Ordinary text writes that repeat the same non-formula text leave existing
+  inline formatting intact; replacing a cell with new text can replace its
+  formatting runs. Read APIs and cell-value assertions still use plain text.
 - This does not preserve or recalculate formulas, validate the correctness of
   cached values, or guarantee complete Excel round-trip fidelity. It does not
   establish whether unclassified changes such as comment or drawing member
@@ -48,7 +60,7 @@ inspection cannot be committed.
   five entries and may be smaller based on the requested sample limit.
 - If a workbook is blocked, keep the original and use Excel or another writer
   that preserves the needed features. A snapshot, a repeated commit, or
-  switching to a standalone mutation does not resolve the fidelity problem.
+  switching to a different mutation tool does not resolve the fidelity problem.
 
 For the role of the optional calculation-chain part, see
 [Working with the calculation chain](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-calculation-chain).

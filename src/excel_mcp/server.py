@@ -1258,15 +1258,11 @@ def write_data_to_excel(
     include_changes: Optional[bool] = None,
 ) -> str:
     """
-    Write data to Excel worksheet.
-    Excel formula will write to cell without any verification.
+    Write rows to a worksheet, starting at start_cell. Formulas are not evaluated.
 
-    PARAMETERS:  
-    filepath: Path to Excel file
-    sheet_name: Name of worksheet to write to
-    data: List of lists containing data to write to the worksheet, sublists are assumed to be rows
-    start_cell: Cell to start writing to, default is "A1"
-  
+    dry_run serializes an isolated candidate and reports package_fidelity and
+    ready_to_commit without saving. Writes recheck protected XLSX content before
+    replacing the source. This is not a guarantee of full XLSX fidelity.
     """
     return _run_tool(
         "write_data_to_excel",

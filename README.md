@@ -23,7 +23,7 @@ Verified Rebase and Verified Scenarios v1 are included in `0.13.0`: intent-prese
 - outcome-checked alternatives via `evaluate_workbook_scenarios`: compare explicit keyed changes against exact overall/group metric bounds, then commit one selected outcome with post-save recomputation and rollback
 - intent-preserving table edits via `apply_table_patch`: rebind keyed updates against a pinned base, reject changed premises and conflicting writes, and commit a fresh verified preview while keeping unrelated current values
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
-- verified multi-step edits via `apply_workbook_changeset`: preview the candidate, value/table/layout assertions, structural diff, sampled cell changes, and targeted XLSX fidelity checks before committing against the same source bytes
+- safer cell and multi-step edits: `write_data_to_excel` checks a staged save for targeted XLSX losses; `apply_workbook_changeset` adds value/table/layout assertions, a structural diff, and commit against the exact previewed source bytes
 - reusable report recipes via `run_workbook_recipe`: filter and aggregate a native table, check the result, and write it through a verified ChangeSet without passing intermediate rows through the model
 - explainable report changes via `explain_recipe_delta`: recompute the same recipe on two source versions, compare by unique keys, and reconcile added/removed/updated contributions without modifying either workbook
 - safer workbook creation and baselines: `create_workbook` refuses to overwrite an existing `.xlsx`, while `create_workbook_snapshot` creates a verified non-overwriting copy for before/after validation

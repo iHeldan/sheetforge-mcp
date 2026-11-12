@@ -9,12 +9,14 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
+from openpyxl.cell.rich_text import CellRichText
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 
 from .exceptions import DataError, PreconditionFailedError
 from .cell_utils import parse_cell_range
 from .cell_validation import get_data_validation_for_cell
+from .package_fidelity import inspect_package_fidelity
 from .workbook import first_worksheet, require_worksheet, safe_workbook, worksheet_not_found_error
 
 logger = logging.getLogger(__name__)
@@ -1754,15 +1756,48 @@ def write_data(
     dry_run: bool = False,
     include_changes: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Write data to Excel sheet with workbook handling
+    """Write cells or preview the same guarded save without replacing the source."""
+    return _write_data(
+        filepath, sheet_name, data, start_cell, dry_run=dry_run,
+        include_changes=include_changes, check_package=True,
+    )
 
-    Headers are handled intelligently based on context.
-    """
+
+def _write_data(
+    filepath: str,
+    sheet_name: Optional[str],
+    data: Optional[List[List]],
+    start_cell: str = "A1",
+    *,
+    dry_run: bool = False,
+    include_changes: Optional[bool] = None,
+    check_package: bool,
+) -> Dict[str, Any]:
+    changes: List[Dict[str, Any]] = []
+    package_report: Dict[str, Any] = {}
+
+    def check_candidate(baseline: Path, candidate: Path) -> None:
+        package_report.update(inspect_package_fidelity(
+            baseline, candidate,
+            changed_cells={(change["sheet_name"], change["cell"]) for change in changes},
+            sample_limit=5,
+        ))
+        if not dry_run and package_report["status"] != "passed":
+            raise PreconditionFailedError(
+                "Write could not preserve or verify protected XLSX content; "
+                "the original workbook was not modified",
+                code="write_package_fidelity_failed",
+                details={"package_fidelity": package_report},
+            )
+
     try:
         if not data:
             raise DataError("No data provided to write")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(
+            filepath, save=not dry_run,
+            candidate_check=check_candidate if check_package else None,
+        ) as wb:
             # If no sheet specified, use active sheet
             if not sheet_name:
                 active_sheet = wb.active
@@ -1806,12 +1841,13 @@ def write_data(
             else:
                 target_range = start_cell
 
-            changes: List[Dict[str, Any]] = []
             for i, row in enumerate(data):
                 for j, val in enumerate(row):
                     row_idx = start_row + i
                     col_idx = start_col + j
                     old_value = None if existing_ws is None else existing_ws.cell(row=row_idx, column=col_idx).value
+                    if isinstance(old_value, CellRichText):
+                        old_value = str(old_value)
                     if old_value != val or isinstance(old_value, bool) != isinstance(val, bool):
                         changes.append(
                             _build_cell_change(
@@ -1828,7 +1864,7 @@ def write_data(
                     ws = wb.create_sheet(sheet_name)
                 else:
                     ws = existing_ws
-                if not dry_run:
+                if not dry_run or check_package:
                     _write_data_to_worksheet(ws, data, start_cell)
 
         result = {
@@ -1842,7 +1878,15 @@ def write_data(
         }
         if _should_include_changes(dry_run, include_changes):
             result["changes"] = changes
+        if check_package:
+            result["package_fidelity"] = package_report
+            if dry_run:
+                result["ready_to_commit"] = package_report["status"] == "passed"
+                if not result["ready_to_commit"]:
+                    result["message"] = "Write preview requires attention before saving"
         return result
+    except PreconditionFailedError:
+        raise
     except DataError as e:
         logger.error(str(e))
         raise
@@ -1871,7 +1915,13 @@ def _write_data_to_worksheet(
         # Write data
         for i, row in enumerate(data):
             for j, val in enumerate(row):
-                worksheet.cell(row=start_row + i, column=start_col + j).value = val
+                cell = worksheet.cell(row=start_row + i, column=start_col + j)
+                if (
+                    isinstance(cell.value, CellRichText) and isinstance(val, str)
+                    and not val.startswith("=") and str(cell.value) == val
+                ):
+                    continue
+                cell.value = val
     except DataError as e:
         logger.error(str(e))
         raise

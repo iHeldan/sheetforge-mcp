@@ -5,6 +5,7 @@
 ### Fixed
 
 - ChangeSet preview reports targeted XLSX round-trip losses, and commit refuses to replace the source if custom XML, its relationships, or stored results of untouched formula cells would be lost or changed. Calculation-chain removal is reported separately. Verified Recipes, Rebase, and Scenarios inherit the guard for writes.
+- Direct cell writes now apply the same targeted XLSX check to dry runs and saves. Direct writes and ChangeSet staging retain supported in-cell rich text, and ChangeSet cell writes without `sheet_name` use the active worksheet instead of failing.
 
 ## 0.14.0 - 2026-10-29
 

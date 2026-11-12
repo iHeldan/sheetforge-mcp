@@ -10,8 +10,9 @@ import time
 import weakref
 from collections import Counter, OrderedDict, deque
 from contextlib import contextmanager, nullcontext, suppress
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     import fcntl
@@ -30,7 +31,7 @@ from openpyxl.utils.cell import quote_sheetname
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .exceptions import WorkbookError
+from .exceptions import PreconditionFailedError, WorkbookError
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ _WORKBOOK_LOCK_POLL_SECONDS = 0.05
 _WORKBOOK_LOCKS_GUARD = threading.Lock()
 _WORKBOOK_LOCKS: weakref.WeakValueDictionary[str, Any] = weakref.WeakValueDictionary()
 _ACTIVE_WORKBOOK_LOCKS = threading.local()
+_STAGED_RICH_TEXT = ContextVar("staged_rich_text", default=False)
 
 AUDIT_SAMPLE_ROWS = 25
 AUDIT_LARGE_DATASET_THRESHOLD = 1000
@@ -2637,28 +2639,89 @@ def _exclusive_workbook_lock(
 
 
 @contextmanager
-def safe_workbook(filepath: str, save: bool = False, read_only: bool = False):
+def _preserve_rich_text_in_staging():
+    token = _STAGED_RICH_TEXT.set(True)
+    try:
+        yield
+    finally:
+        _STAGED_RICH_TEXT.reset(token)
+
+
+def _guarded_source_stamp(path: Path) -> tuple[int, ...]:
+    try:
+        info = path.lstat()
+        if stat.S_ISREG(info.st_mode):
+            return (*_file_identity(info), info.st_ctime_ns)
+    except OSError:
+        pass
+    raise PreconditionFailedError(
+        "Guarded workbook source is no longer a readable regular file",
+        code="stale_workbook",
+    )
+
+
+@contextmanager
+def safe_workbook(
+    filepath: str,
+    save: bool = False,
+    read_only: bool = False,
+    *,
+    candidate_check: Callable[[Path, Path], None] | None = None,
+):
     """Context manager that ensures workbook is always closed.
 
     Args:
         filepath: Path to Excel file.
         save: If True, save the workbook before closing.
         read_only: If True, open in read-only mode.
+        candidate_check: Inspect an isolated serialized candidate before saving,
+            or simulate and inspect the save when save=False.
     """
     resolved_path = _canonical_workbook_path(filepath, must_exist=True)
+    guarded = candidate_check is not None
+    if guarded and read_only:
+        raise ValueError("Candidate checks require an editable in-memory workbook")
     lock_context = (
         _exclusive_workbook_lock(resolved_path)
-        if save and not read_only
+        if guarded or (save and not read_only)
         else nullcontext()
     )
     with lock_context:
-        wb = load_workbook(resolved_path, read_only=read_only)
+        stamp = _guarded_source_stamp(resolved_path) if guarded else None
+
+        def verify_source() -> None:
+            if _guarded_source_stamp(resolved_path) != stamp:
+                raise PreconditionFailedError(
+                    "Workbook changed during the guarded write; no changes were written",
+                    code="stale_workbook",
+                )
+
+        def verify_candidate(candidate: Path) -> None:
+            verify_source()
+            candidate_check(resolved_path, candidate)
+            verify_source()
+
+        wb = load_workbook(
+            resolved_path, read_only=read_only,
+            rich_text=guarded or (save and _STAGED_RICH_TEXT.get()),
+        )
         try:
             yield wb
         except Exception:
             raise
         else:
-            if save and not read_only:
+            if guarded and save:
+                _persist_workbook_atomically(
+                    wb, str(resolved_path),
+                    validate_candidate=verify_candidate, verify_source=verify_source,
+                )
+            elif guarded:
+                with tempfile.TemporaryDirectory(prefix="sheetforge-write-preview-") as folder:
+                    candidate = Path(folder) / "candidate.xlsx"
+                    wb.save(candidate)
+                    _verify_saved_workbook(str(candidate))
+                    verify_candidate(candidate)
+            elif save and not read_only:
                 _persist_workbook_atomically(wb, str(resolved_path))
         finally:
             wb.close()
@@ -2701,7 +2764,13 @@ def _remove_save_artifact_best_effort(path: Path, *, label: str) -> None:
         logger.warning("Unable to remove %s '%s': %s", label, path, exc)
 
 
-def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
+def _persist_workbook_atomically(
+    wb: Workbook,
+    filepath: str,
+    *,
+    validate_candidate: Callable[[Path], None] | None = None,
+    verify_source: Callable[[], None] | None = None,
+) -> None:
     """Persist workbook changes via temp file + atomic replace + reopen verify."""
     destination = Path(filepath)
     if destination.is_symlink():
@@ -2725,6 +2794,10 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
                 os.chmod(temp_path, destination.stat().st_mode)
         _fsync_file(temp_path)
         _verify_saved_workbook(str(temp_path))
+        candidate_stamp = None
+        if validate_candidate is not None:
+            candidate_stamp = _guarded_source_stamp(temp_path)
+            validate_candidate(temp_path)
 
         if destination.exists():
             backup_fd, backup_name = tempfile.mkstemp(
@@ -2737,6 +2810,13 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
             shutil.copy2(destination, backup_path)
             _fsync_file(backup_path)
 
+        if candidate_stamp is not None and _guarded_source_stamp(temp_path) != candidate_stamp:
+            raise PreconditionFailedError(
+                "Workbook candidate changed after inspection; no changes were written",
+                code="write_candidate_changed",
+            )
+        if verify_source is not None:
+            verify_source()
         os.replace(temp_path, destination)
         _fsync_directory(destination.parent)
         try:
@@ -2758,6 +2838,8 @@ def _persist_workbook_atomically(wb: Workbook, filepath: str) -> None:
                     destination.unlink()
                 _fsync_directory(destination.parent)
             raise verification_error
+    except PreconditionFailedError:
+        raise
     except Exception as exc:
         raise WorkbookError(f"Failed to save workbook atomically: {exc!s}") from exc
     finally:
