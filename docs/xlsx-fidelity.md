@@ -47,7 +47,7 @@ worksheet (an active chart sheet is rejected).
 - The guard runs in `write_data_to_excel`, `apply_workbook_changeset` and
   ChangeSet-backed writes (Verified Recipes, Rebase and Scenarios). It does not
   run in other standalone mutation tools or in `diff_workbooks`.
-- Direct cell writes and all ChangeSet staging saves load with openpyxl's
+- Direct cell writes and standard ChangeSet staging saves load with openpyxl's
   [rich-text preservation](https://openpyxl.readthedocs.io/en/3.1/rich_text.html).
   Ordinary text writes that repeat the same non-formula text leave existing
   inline formatting intact; replacing a cell with new text can replace its
@@ -60,9 +60,63 @@ worksheet (an active chart sheet is rejected).
   256 MiB of scanned uncompressed content, 4 MiB per metadata XML part, and
   250,000 stored formula results per worksheet. Issue samples are capped at
   five entries and may be smaller based on the requested sample limit.
-- If a workbook is blocked, keep the original and use Excel or another writer
-  that preserves the needed features. A snapshot, a repeated commit, or
-  switching to a different mutation tool does not resolve the fidelity problem.
+- If a workbook is blocked, keep the original. For supported literal edits,
+  try a fresh preview with the preserving mode below when available. Otherwise,
+  use Excel or another writer that preserves the needed features. A snapshot or
+  repeated commit does not resolve the fidelity problem.
 
 For the role of the optional calculation-chain part, see
 [Working with the calculation chain](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-calculation-chain).
+
+## Preserving Save Mode (Unreleased)
+
+`apply_workbook_changeset` can use `save_mode="preserve"` to patch only the
+target cells in worksheet XML. It checks the ZIP member list and SHA-256 of
+every uncompressed member against the intended result, then reopens the
+candidate and checks the written values. Unedited worksheet XML, recognized
+custom XML and its relationships, and supported formula caches retain their
+original bytes. The ZIP may be recompressed. This is not an assertion that
+preserved custom XML has no business-level dependency on the edited values.
+
+The first version is intentionally narrow:
+
+- Only `write_data_to_excel` operations with plain nonempty strings, booleans,
+  finite Excel-safe numbers (at most 15 significant digits), or `null` to clear
+  a cell. No formulas, error values, dates, rich or shared-string targets, or
+  overlapping edits. An unrecorded cell can be filled only on an existing row
+  with a cell body, inside the declared worksheet dimension and any row spans.
+- Every existing formula must be verifiably independent of the edit. This
+  version accepts only numeric constant arithmetic such as `=6*9`; any cell
+  reference, function, or unsupported formula encoding blocks the whole plan.
+  SheetForge does not recalculate or validate the correctness of stored results.
+- Only a restricted, unsigned `.xlsx` package with ordinary worksheets. Tables,
+  charts, pivots, sheet protection, merges, validations, defined names, external
+  relationships, and unknown package features are outside this profile.
+- At most 1,000 target cells, 68 MiB on disk, 64 MiB uncompressed, and 16 MiB
+  per worksheet XML part. Metadata and package-inspection limits still apply.
+
+Example preview arguments:
+
+```json
+{
+  "filepath": "/path/to/workbook.xlsx",
+  "mode": "preview",
+  "save_mode": "preserve",
+  "operations": [
+    {"tool": "write_data_to_excel", "args": {"sheet_name": "Inputs", "start_cell": "B2", "data": [[120]]}}
+  ],
+  "assertions": [{"type": "cell_equals", "sheet_name": "Inputs", "cell": "B2", "expected": 120}]
+}
+```
+
+Review `preservation` for the changed-part count and sample, unchanged-part
+count, and number of verified constant formulas. Commit only if
+`ready_to_commit=true`: repeat the same plan and `save_mode` with
+`mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from preview.
+The standard fidelity check, exact-file stale-write check, snapshot, and
+verified rollback still apply. This mode does not change direct writes or
+ChangeSet-backed recipes, rebase, or scenarios.
+
+On `changeset_preserve_unsupported`, inspect `error.details.reason`. The
+original workbook is unchanged. Do not retry in `standard` just to bypass the
+rejection; use a compatible edit or a writer that supports the workbook.

@@ -1820,6 +1820,7 @@ def apply_workbook_changeset(
     create_snapshot: bool = True,
     snapshot_filepath: Optional[WorkbookPath] = None,
     sample_limit: int = 25,
+    save_mode: Literal["standard", "preserve"] = "standard",
 ) -> str:
     """Preview or commit an assertion-backed group of workbook mutations as one transaction.
 
@@ -1834,6 +1835,9 @@ def apply_workbook_changeset(
     changeset_token from that preview. Snapshot creation defaults to enabled.
     Inspect package_fidelity: custom XML or untouched formula-cache loss blocks
     commit. The check is targeted, not a guarantee of full Excel round-trip fidelity.
+    save_mode="preserve" patches only literal cell writes in a restricted XLSX.
+    Unsupported workbook features or formulas block the save; no standard fallback.
+    Use the same save_mode in preview and commit.
     """
     return _run_tool(
         "apply_workbook_changeset",
@@ -1851,6 +1855,7 @@ def apply_workbook_changeset(
                 else None
             ),
             sample_limit=sample_limit,
+            save_mode=save_mode,
         ),
     )
 

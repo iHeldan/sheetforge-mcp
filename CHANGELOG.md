@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- `apply_workbook_changeset(save_mode="preserve")` can patch literal cell values in a restricted XLSX profile without rewriting unrelated package parts. Preview and commit verify the preserved bytes; unsupported edits are rejected without falling back to the standard writer.
+
 ## 0.14.1 - 2026-11-12
 
 ### Fixed

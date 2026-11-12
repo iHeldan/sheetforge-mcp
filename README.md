@@ -282,7 +282,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 ## Recommended Agent Workflows
 
 1. Unfamiliar workbook -> verified multi-step mutation
-   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, and run `analyze_range_impact`. Put supported report-building edits and explicit postconditions into `apply_workbook_changeset(mode="preview")`. Review `package_fidelity`; only if `ready_to_commit=true` should you repeat the same plan with `mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from the preview. See [XLSX fidelity checks](docs/xlsx-fidelity.md) for what is protected and what is not.
+   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, and run `analyze_range_impact`. Put supported report-building edits and explicit postconditions into `apply_workbook_changeset(mode="preview")`. Review `package_fidelity`; only if `ready_to_commit=true` should you repeat the same plan with `mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from the preview. See [XLSX fidelity checks](docs/xlsx-fidelity.md) and the [unreleased preserving save mode](docs/xlsx-fidelity.md#preserving-save-mode-unreleased) for restricted literal cell edits.
 2. Workbook repair loop
    Use `audit_workbook` to find high-signal issues, `plan_workbook_repairs` to turn them into an action queue, `apply_workbook_repairs(..., dry_run=True)` to preview the safe subset, then rerun `audit_workbook` after applying repairs to confirm the workbook is back to a low-risk state.
 3. Multi-workbook reporting

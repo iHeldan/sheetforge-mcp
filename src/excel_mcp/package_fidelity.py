@@ -188,16 +188,24 @@ class _Inventory:
     custom_parts: set[str]
     custom_links: set[tuple[str, str, str, str, str, str, str]]
     calculation_chains: set[str]
+    workbook_part: str
+    relationships: list[_Relationship]
 
 
-def _inventory(archive: _Archive) -> _Inventory:
+def _inventory(archive: _Archive, *, strict_types: bool = False) -> _Inventory:
     defaults, overrides = {}, {}
 
     def content_type(path, attrs):
         if len(path) == 2 and path[-1] == _TYPE_NS + "Default":
-            defaults[attrs["Extension"].casefold()] = attrs["ContentType"]
+            key = attrs["Extension"].casefold()
+            if strict_types and key in defaults:
+                raise _Unverified("ambiguous_content_types")
+            defaults[key] = attrs["ContentType"]
         elif len(path) == 2 and path[-1] == _TYPE_NS + "Override":
-            overrides[_resolve_target("", attrs["PartName"])] = attrs["ContentType"]
+            key = _resolve_target("", attrs["PartName"])
+            if strict_types and key in overrides:
+                raise _Unverified("ambiguous_content_types")
+            overrides[key] = attrs["ContentType"]
 
     archive.xml("[Content_Types].xml", _TYPE_NS + "Types", content_type)
 
@@ -259,7 +267,7 @@ def _inventory(archive: _Archive) -> _Inventory:
             raise _Unverified("unsupported_workbook_layout")
 
     archive.xml(workbook, _SHEET_NS + "workbook", sheet)
-    return _Inventory(sheets, types, custom, links, chains)
+    return _Inventory(sheets, types, custom, links, chains, workbook, relationships)
 
 
 def _formula_caches(

@@ -38,6 +38,7 @@ from .exceptions import (
 )
 from .formatting import format_range, format_ranges
 from .package_fidelity import inspect_package_fidelity
+from .preserve import PRESERVE_VERSION, build_preserving_candidate, check_source_size
 from .sheet import (
     autofit_columns,
     set_auto_filter,
@@ -612,7 +613,9 @@ def _new_temp_workbook(parent: Path, *, source: Path, label: str) -> Path:
     return Path(name)
 
 
-def _stage_workbook(source: Path, baseline: Path, candidate: Path) -> str:
+def _stage_workbook(
+    source: Path, baseline: Path, candidate: Path, *, preserving: bool = False
+) -> str:
     source_stat_before = source.stat()
     if not stat.S_ISREG(source_stat_before.st_mode):
         raise ValidationError("Workbook source must be a regular file")
@@ -626,7 +629,13 @@ def _stage_workbook(source: Path, baseline: Path, candidate: Path) -> str:
             raise ValidationError("Workbook source must be a regular file")
         if workbook_module._file_identity(opened_stat) != workbook_module._file_identity(source_stat_before):
             raise PreconditionFailedError("Workbook source changed while opening", code="stale_workbook")
+        if preserving:
+            check_source_size(opened_stat.st_size)
+        copied = 0
         while chunk := source_handle.read(1024 * 1024):
+            if preserving:
+                copied += len(chunk)
+                check_source_size(copied)
             baseline_handle.write(chunk)
             digest.update(chunk)
         baseline_handle.flush()
@@ -644,10 +653,12 @@ def _stage_workbook(source: Path, baseline: Path, candidate: Path) -> str:
 
     with suppress(OSError):
         os.chmod(baseline, source_stat_before.st_mode)
-    workbook_module._verify_saved_workbook(str(baseline))
+    if not preserving:
+        workbook_module._verify_saved_workbook(str(baseline))
     shutil.copy2(baseline, candidate)
     workbook_module._fsync_file(candidate)
-    workbook_module._verify_saved_workbook(str(candidate))
+    if not preserving:
+        workbook_module._verify_saved_workbook(str(candidate))
     return digest.hexdigest()
 
 
@@ -659,8 +670,9 @@ def _plan_payload(
     assertions: list[dict[str, Any]],
     create_snapshot: bool,
     snapshot_filepath: Path | None,
+    save_mode: str = "standard",
 ) -> dict[str, Any]:
-    return {
+    plan = {
         "version": CHANGESET_VERSION,
         "target_path": str(source),
         "source_sha256": source_sha256,
@@ -671,6 +683,9 @@ def _plan_payload(
             "path": str(snapshot_filepath) if snapshot_filepath is not None else None,
         },
     }
+    if save_mode == "preserve":
+        plan.update(save_mode=save_mode, preserve_version=PRESERVE_VERSION)
+    return plan
 
 
 def _changeset_token(plan: dict[str, Any]) -> str:
@@ -948,6 +963,19 @@ def _worksheet_or_none(wb: Any, sheet_name: str) -> Worksheet | None:
         return None
     ws = wb[sheet_name]
     return ws if isinstance(ws, Worksheet) else None
+
+
+def _prepare_candidate(baseline, candidate, operations, *, save_mode, sample_limit):
+    if save_mode == "standard":
+        results, cell_changes = _apply_operations(candidate, operations, sample_limit=sample_limit)
+        return results, cell_changes, {}
+    results, changes, report = build_preserving_candidate(baseline, candidate, operations)
+    workbook_module._fsync_file(candidate)
+    return (
+        results,
+        {"count": len(changes), "changes": _bound_response_value(changes)},
+        {"save_mode": save_mode, "preservation": report},
+    )
 
 
 def _range_values(ws: Worksheet, range_ref: str) -> list[list[Any]]:
@@ -1582,8 +1610,11 @@ def apply_workbook_changeset(
     create_snapshot: bool = True,
     snapshot_filepath: str | None = None,
     sample_limit: int = 25,
+    save_mode: str = "standard",
 ) -> dict[str, Any]:
     """Preview or atomically commit an assertion-backed workbook mutation plan."""
+    if not isinstance(save_mode, str) or save_mode not in {"standard", "preserve"}:
+        raise ValidationError("save_mode must be 'standard' or 'preserve'")
     (
         source,
         normalized_operations,
@@ -1611,7 +1642,9 @@ def apply_workbook_changeset(
         candidate = work_dir / "candidate.xlsx"
         try:
             with workbook_module._exclusive_workbook_lock(source):
-                source_sha256 = _stage_workbook(source, baseline, candidate)
+                source_sha256 = _stage_workbook(
+                    source, baseline, candidate, preserving=save_mode == "preserve"
+                )
             if expected_sha256 is not None and expected_sha256 != source_sha256:
                 raise PreconditionFailedError(
                     "Workbook SHA-256 does not match the caller's expected baseline",
@@ -1630,6 +1663,7 @@ def apply_workbook_changeset(
                 assertions=normalized_assertions,
                 create_snapshot=snapshot_enabled,
                 snapshot_filepath=requested_snapshot,
+                save_mode=save_mode,
             )
             computed_token = _changeset_token(plan)
             if supplied_token is not None and not hmac.compare_digest(
@@ -1641,9 +1675,11 @@ def apply_workbook_changeset(
                     suggested_next_tool="apply_workbook_changeset",
                 )
 
-            operation_results, cell_changes = _apply_operations(
+            operation_results, cell_changes, preservation = _prepare_candidate(
+                baseline,
                 candidate,
                 normalized_operations,
+                save_mode=save_mode,
                 sample_limit=sample_limit,
             )
             workbook_module._verify_saved_workbook(str(candidate))
@@ -1689,6 +1725,7 @@ def apply_workbook_changeset(
                 "assertions": assertion_results,
                 "snapshot": snapshot,
                 "package_fidelity": package_fidelity,
+                **preservation,
                 "diff": _preview_diff(
                     baseline,
                     candidate,
@@ -1711,7 +1748,9 @@ def apply_workbook_changeset(
         baseline = _new_temp_workbook(source.parent, source=source, label="baseline")
         candidate = _new_temp_workbook(source.parent, source=source, label="candidate")
         with workbook_module._exclusive_workbook_lock(source):
-            source_sha256 = _stage_workbook(source, baseline, candidate)
+            source_sha256 = _stage_workbook(
+                source, baseline, candidate, preserving=save_mode == "preserve"
+            )
             if expected_sha256 != source_sha256:
                 raise PreconditionFailedError(
                     "Workbook changed after preview; no ChangeSet operations were committed",
@@ -1730,6 +1769,7 @@ def apply_workbook_changeset(
                 assertions=normalized_assertions,
                 create_snapshot=snapshot_enabled,
                 snapshot_filepath=requested_snapshot,
+                save_mode=save_mode,
             )
             computed_token = _changeset_token(plan)
             if not hmac.compare_digest(supplied_token or "", computed_token):
@@ -1754,9 +1794,11 @@ def apply_workbook_changeset(
                     suggested_next_tool="apply_workbook_changeset",
                 )
 
-            operation_results, cell_changes = _apply_operations(
+            operation_results, cell_changes, preservation = _prepare_candidate(
+                baseline,
                 candidate,
                 normalized_operations,
+                save_mode=save_mode,
                 sample_limit=sample_limit,
             )
             workbook_module._verify_saved_workbook(str(candidate))
@@ -1808,6 +1850,7 @@ def apply_workbook_changeset(
                     "assertions": assertion_results,
                     "snapshot": snapshot,
                     "package_fidelity": package_fidelity,
+                    **preservation,
                     "diff": preview_diff,
                 }
             )
@@ -1935,6 +1978,7 @@ def apply_workbook_changeset(
                 "assertions_passed": len(assertion_results),
                 "assertions": assertion_results,
                 "package_fidelity": package_fidelity,
+                **preservation,
                 "diff": preview_diff,
             }
     finally:
