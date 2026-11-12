@@ -526,6 +526,8 @@ def evaluate_workbook_scenarios(
                 else {"enabled": False, "status": "not_created"},
             }
         )
+        if transaction:
+            results[-1]["package_fidelity"] = transaction["package_fidelity"]
     result = {
         **common,
         "persisted": False,

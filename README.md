@@ -23,7 +23,7 @@ Verified Rebase and Verified Scenarios v1 are included in `0.13.0`: intent-prese
 - outcome-checked alternatives via `evaluate_workbook_scenarios`: compare explicit keyed changes against exact overall/group metric bounds, then commit one selected outcome with post-save recomputation and rollback
 - intent-preserving table edits via `apply_table_patch`: rebind keyed updates against a pinned base, reject changed premises and conflicting writes, and commit a fresh verified preview while keeping unrelated current values
 - agent-friendly reads via `suggest_read_strategy`, `describe_dataset`, `query_table`, and `aggregate_table`
-- verified multi-step edits via `apply_workbook_changeset`: preview the complete candidate, value/table/layout assertions, structural diff, and sampled cell changes, then commit that exact plan only if the source workbook still matches
+- verified multi-step edits via `apply_workbook_changeset`: preview the candidate, value/table/layout assertions, structural diff, sampled cell changes, and targeted XLSX fidelity checks before committing against the same source bytes
 - reusable report recipes via `run_workbook_recipe`: filter and aggregate a native table, check the result, and write it through a verified ChangeSet without passing intermediate rows through the model
 - explainable report changes via `explain_recipe_delta`: recompute the same recipe on two source versions, compare by unique keys, and reconcile added/removed/updated contributions without modifying either workbook
 - safer workbook creation and baselines: `create_workbook` refuses to overwrite an existing `.xlsx`, while `create_workbook_snapshot` creates a verified non-overwriting copy for before/after validation
@@ -281,7 +281,7 @@ For the compact table readers (`quick_read`, `read_excel_as_table`, `read_excel_
 ## Recommended Agent Workflows
 
 1. Unfamiliar workbook -> verified multi-step mutation
-   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, and run `analyze_range_impact`. Put supported report-building edits and explicit postconditions into `apply_workbook_changeset(mode="preview")`; if `ready_to_commit=true`, repeat the same plan with `mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from the preview.
+   Start with `profile_workbook` (or `list_all_sheets` for the lightest inventory), inspect layout-heavy tabs with `describe_sheet_layout`, and run `analyze_range_impact`. Put supported report-building edits and explicit postconditions into `apply_workbook_changeset(mode="preview")`. Review `package_fidelity`; only if `ready_to_commit=true` should you repeat the same plan with `mode="commit"`, `expected_workbook_sha256`, and `changeset_token` from the preview. See [XLSX fidelity checks](docs/xlsx-fidelity.md) for what is protected and what is not.
 2. Workbook repair loop
    Use `audit_workbook` to find high-signal issues, `plan_workbook_repairs` to turn them into an action queue, `apply_workbook_repairs(..., dry_run=True)` to preview the safe subset, then rerun `audit_workbook` after applying repairs to confirm the workbook is back to a low-risk state.
 3. Multi-workbook reporting

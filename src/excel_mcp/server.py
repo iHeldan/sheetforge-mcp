@@ -1836,6 +1836,8 @@ def apply_workbook_changeset(
 
     Call preview first. Commit the identical plan with expected_workbook_sha256 and
     changeset_token from that preview. Snapshot creation defaults to enabled.
+    Inspect package_fidelity: custom XML or untouched formula-cache loss blocks
+    commit. The check is targeted, not a guarantee of full Excel round-trip fidelity.
     """
     return _run_tool(
         "apply_workbook_changeset",

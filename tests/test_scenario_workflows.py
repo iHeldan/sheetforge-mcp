@@ -113,7 +113,9 @@ def test_stdio_scenario_selection_and_global_guard_drift(tmp_path):
                         }
 
                     original, mtime = path.read_bytes(), path.stat().st_mtime_ns
-                    preview = (await request())["data"]
+                    comparison = await request()
+                    assert comparison["ok"], comparison.get("error")
+                    preview = comparison["data"]
                     assert [s["ready_to_commit"] for s in preview["scenarios"]] == [
                         False,
                         True,

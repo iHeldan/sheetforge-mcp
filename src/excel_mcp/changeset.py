@@ -37,6 +37,7 @@ from .exceptions import (
     WorkbookError,
 )
 from .formatting import format_range, format_ranges
+from .package_fidelity import inspect_package_fidelity
 from .sheet import (
     autofit_columns,
     set_auto_filter,
@@ -1367,6 +1368,22 @@ def _preview_diff(
     return _bound_response_value(workbook_diff)
 
 
+def _package_fidelity(
+    baseline: Path,
+    candidate: Path,
+    cell_changes: dict[str, Any],
+    sample_limit: int,
+) -> dict[str, Any]:
+    return inspect_package_fidelity(
+        baseline,
+        candidate,
+        changed_cells={
+            (change["sheet_name"], change["cell"]) for change in cell_changes["changes"]
+        },
+        sample_limit=sample_limit,
+    )
+
+
 def _create_or_reuse_snapshot(
     baseline: Path,
     snapshot_status: dict[str, Any],
@@ -1625,6 +1642,9 @@ def apply_workbook_changeset(
                 sample_limit=sample_limit,
             )
             workbook_module._verify_saved_workbook(str(candidate))
+            package_fidelity = _package_fidelity(
+                baseline, candidate, cell_changes, sample_limit
+            )
             assertion_results = _evaluate_assertions(
                 baseline,
                 candidate,
@@ -1639,7 +1659,11 @@ def apply_workbook_changeset(
             )
             snapshot = _snapshot_status(snapshot_path, source_sha256=source_sha256)
             assertions_passed = all(item["passed"] for item in assertion_results)
-            ready_to_commit = assertions_passed and snapshot["status"] != "conflict"
+            ready_to_commit = (
+                assertions_passed
+                and snapshot["status"] != "conflict"
+                and package_fidelity["status"] == "passed"
+            )
             preview_result = {
                 "message": (
                     "ChangeSet preview is ready to commit"
@@ -1659,6 +1683,7 @@ def apply_workbook_changeset(
                 ),
                 "assertions": assertion_results,
                 "snapshot": snapshot,
+                "package_fidelity": package_fidelity,
                 "diff": _preview_diff(
                     baseline,
                     candidate,
@@ -1753,6 +1778,18 @@ def apply_workbook_changeset(
                     suggested_next_tool="apply_workbook_changeset",
                 )
 
+            candidate_sha256 = _sha256_file(candidate)
+            package_fidelity = _package_fidelity(
+                baseline, candidate, cell_changes, sample_limit
+            )
+            if package_fidelity["status"] != "passed":
+                raise PreconditionFailedError(
+                    "ChangeSet could not preserve or verify protected XLSX content; "
+                    "the original workbook was not modified",
+                    code="changeset_package_fidelity_failed",
+                    details={"package_fidelity": package_fidelity},
+                )
+
             preview_diff = _preview_diff(
                 baseline,
                 candidate,
@@ -1765,6 +1802,7 @@ def apply_workbook_changeset(
                     "operations": operation_results,
                     "assertions": assertion_results,
                     "snapshot": snapshot,
+                    "package_fidelity": package_fidelity,
                     "diff": preview_diff,
                 }
             )
@@ -1788,6 +1826,12 @@ def apply_workbook_changeset(
                     snapshot,
                     source_sha256=source_sha256,
                 )
+                if _sha256_file(candidate) != candidate_sha256:
+                    raise PreconditionFailedError(
+                        "ChangeSet candidate changed after inspection; "
+                        "the original workbook was not modified",
+                        code="changeset_candidate_changed",
+                    )
                 live_sha256 = _sha256_file(source)
                 if live_sha256 != source_sha256:
                     raise PreconditionFailedError(
@@ -1885,6 +1929,7 @@ def apply_workbook_changeset(
                 "operations": operation_results,
                 "assertions_passed": len(assertion_results),
                 "assertions": assertion_results,
+                "package_fidelity": package_fidelity,
                 "diff": preview_diff,
             }
     finally:

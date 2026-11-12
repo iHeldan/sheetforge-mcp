@@ -471,5 +471,7 @@ def apply_table_patch(
     return {
         **transaction,
         **summary,
-        "message": f"Table patch {mode} completed and verified",
+        "message": f"Table patch {mode} completed and verified"
+        if transaction["persisted"] or transaction["ready_to_commit"]
+        else transaction["message"],
     }

@@ -799,5 +799,7 @@ def run_workbook_recipe(
         return {
             **transaction,
             **summary,
-            "message": f"Recipe {mode} completed and verified",
+            "message": f"Recipe {mode} completed and verified"
+            if transaction["persisted"] or transaction["ready_to_commit"]
+            else transaction["message"],
         }
