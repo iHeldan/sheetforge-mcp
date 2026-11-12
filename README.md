@@ -10,8 +10,9 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.14.0`
+Published package release: `0.14.1`
 Repository docs track the current main-branch tool surface, which currently exposes `83` MCP tools.
+Version `0.14.1` adds [targeted XLSX fidelity checks](docs/xlsx-fidelity.md) for direct and ChangeSet-backed writes. Previously accepted writes can now be blocked if they would lose protected workbook content.
 Workbook Contracts v1 is included in `0.14.0`: explicit bindings and full bounded data checks can guard Recipe preview/commit, with logical-field, file-path and worksheet-versus-table recovery guidance.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.

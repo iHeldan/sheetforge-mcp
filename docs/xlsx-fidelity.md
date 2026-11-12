@@ -1,5 +1,7 @@
 # XLSX Fidelity Checks
 
+Available since SheetForge MCP `0.14.1`.
+
 An XLSX file is a ZIP package. A workbook can reopen successfully and satisfy
 cell assertions even when a writer discarded package content. Guarded writes
 check the staged save against the original package separately from cell changes.
