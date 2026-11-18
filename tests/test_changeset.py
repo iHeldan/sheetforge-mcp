@@ -824,9 +824,258 @@ def test_changeset_rolls_back_when_final_digest_cannot_be_read(
             create_snapshot=False,
         )
 
-    assert source_digest_calls == 4
+    assert source_digest_calls == 5
     assert source.read_bytes() == original_bytes
     _assert_no_changeset_artifacts(source)
+
+
+@pytest.mark.parametrize("save_mode", ["standard", "preserve"])
+@pytest.mark.parametrize("create_snapshot", [False, True])
+@pytest.mark.parametrize("fail_reopen", [False, True])
+def test_changeset_retains_external_save_and_recovery_baseline(
+    tmp_workbook, monkeypatch, save_mode, create_snapshot, fail_reopen
+):
+    source = Path(tmp_workbook).resolve()
+    original = source.read_bytes()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "start_cell": "B2", "data": [[99]]},
+        }
+    ]
+    options = dict(save_mode=save_mode, create_snapshot=create_snapshot)
+    preview = apply_workbook_changeset(tmp_workbook, operations, **options)
+    verify = changeset_module.workbook_module._verify_saved_workbook
+    external = []
+
+    def reopen(filepath):
+        if Path(filepath).resolve() == source and not external:
+            wb = load_workbook(source)
+            assert wb["Sheet1"]["B2"].value == 99
+            wb["Sheet1"]["B2"] = 999
+            wb["Sheet1"]["D1"] = "independent save"
+            wb.save(source)
+            wb.close()
+            external.append(source.read_bytes())
+            if fail_reopen:
+                raise OSError("simulated post-replace read failure")
+        verify(filepath)
+
+    monkeypatch.setattr(
+        changeset_module.workbook_module, "_verify_saved_workbook", reopen
+    )
+    with pytest.raises(PreconditionFailedError) as error:
+        apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            mode="commit",
+            **options,
+            changeset_token=preview["changeset_token"],
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+        )
+    assert error.value.code == "changeset_recovery_required"
+    assert error.value.details["rollback_status"] == "skipped_source_changed"
+    assert error.value.details["retry_safe"] is False
+    baseline = Path(error.value.details["recovery_baseline"])
+    assert baseline.read_bytes() == original
+    assert external and source.read_bytes() == external[0]
+    leftovers = list(source.parent.glob(f".{source.stem}.sheetforge-changeset-*.xlsx"))
+    assert leftovers == [baseline]
+    if create_snapshot:
+        assert Path(preview["snapshot"]["path"]).read_bytes() == original
+
+
+def test_changeset_rechecks_source_after_live_assertions(tmp_workbook, monkeypatch):
+    source = Path(tmp_workbook).resolve()
+    original = source.read_bytes()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "start_cell": "B2", "data": [[99]]},
+        }
+    ]
+    assertions = [
+        {"type": "cell_equals", "sheet_name": "Sheet1", "cell": "B2", "expected": 99}
+    ]
+    preview = apply_workbook_changeset(
+        tmp_workbook, operations, assertions, create_snapshot=False
+    )
+    evaluate = changeset_module._evaluate_assertions
+    external = []
+
+    def evaluate_then_change(baseline, candidate, checks, **kwargs):
+        result = evaluate(baseline, candidate, checks, **kwargs)
+        if candidate == source and not external:
+            assert all(item["passed"] for item in result)
+            wb = load_workbook(source)
+            wb["Sheet1"]["B2"] = 999
+            wb.save(source)
+            wb.close()
+            external.append(source.read_bytes())
+        return result
+
+    monkeypatch.setattr(changeset_module, "_evaluate_assertions", evaluate_then_change)
+    with pytest.raises(PreconditionFailedError) as error:
+        apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            assertions,
+            mode="commit",
+            create_snapshot=False,
+            changeset_token=preview["changeset_token"],
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+        )
+    assert error.value.code == "changeset_recovery_required"
+    assert source.read_bytes() == external[0]
+    assert Path(error.value.details["recovery_baseline"]).read_bytes() == original
+
+
+def test_changeset_checks_again_after_preparing_rollback(tmp_workbook, monkeypatch):
+    source = Path(tmp_workbook).resolve()
+    original = source.read_bytes()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "start_cell": "B2", "data": [[99]]},
+        }
+    ]
+    preview = apply_workbook_changeset(tmp_workbook, operations, create_snapshot=False)
+    verify = changeset_module.workbook_module._verify_saved_workbook
+    failed = False
+    external = []
+
+    def reopen(filepath):
+        nonlocal failed
+        path = Path(filepath)
+        if path == source and not failed:
+            failed = True
+            raise OSError("simulated post-replace read failure")
+        if "-changeset-rollback-" in path.name:
+            wb = load_workbook(source)
+            wb["Sheet1"]["D1"] = "saved during rollback preparation"
+            wb.save(source)
+            wb.close()
+            external.append(source.read_bytes())
+        verify(filepath)
+
+    monkeypatch.setattr(
+        changeset_module.workbook_module, "_verify_saved_workbook", reopen
+    )
+    with pytest.raises(PreconditionFailedError) as error:
+        apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            mode="commit",
+            create_snapshot=False,
+            changeset_token=preview["changeset_token"],
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+        )
+    assert error.value.code == "changeset_recovery_required"
+    assert source.read_bytes() == external[0]
+    assert Path(error.value.details["recovery_baseline"]).read_bytes() == original
+
+
+def test_changeset_detects_drift_during_final_hash_and_reports_mcp_recovery(
+    tmp_workbook, monkeypatch
+):
+    source = Path(tmp_workbook).resolve()
+    original = source.read_bytes()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "start_cell": "B2", "data": [[99]]},
+        }
+    ]
+    preview = apply_workbook_changeset(tmp_workbook, operations, create_snapshot=False)
+    verify = changeset_module.workbook_module._verify_saved_workbook
+    digest = changeset_module._sha256_file
+    replaced = False
+    external = []
+
+    def mark_replaced(filepath):
+        nonlocal replaced
+        if Path(filepath) == source:
+            replaced = True
+        verify(filepath)
+
+    def digest_then_change(path):
+        value = digest(path)
+        if path == source and replaced and not external:
+            wb = load_workbook(source)
+            wb["Sheet1"]["D1"] = "saved during digest"
+            wb.save(source)
+            wb.close()
+            external.append(source.read_bytes())
+        return value
+
+    monkeypatch.setattr(
+        changeset_module.workbook_module, "_verify_saved_workbook", mark_replaced
+    )
+    monkeypatch.setattr(changeset_module, "_sha256_file", digest_then_change)
+    reply = json.loads(
+        server_module.apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            mode="commit",
+            create_snapshot=False,
+            changeset_token=preview["changeset_token"],
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+        )
+    )
+    assert not reply["ok"]
+    assert reply["error"]["code"] == "changeset_recovery_required"
+    assert reply["error"]["details"]["retry_safe"] is False
+    assert source.read_bytes() == external[0]
+    assert Path(reply["error"]["details"]["recovery_baseline"]).read_bytes() == original
+
+
+def test_changeset_does_not_replace_an_external_symlink_during_rollback(
+    tmp_workbook, tmp_path, monkeypatch
+):
+    source = Path(tmp_workbook).resolve()
+    original = source.read_bytes()
+    external = tmp_path / "external.xlsx"
+    external.write_bytes(original)
+    alias = tmp_path / "symlink-check.xlsx"
+    try:
+        alias.symlink_to(external)
+    except OSError:
+        pytest.skip("Symlinks are not supported")
+    alias.unlink()
+    operations = [
+        {
+            "tool": "write_data_to_excel",
+            "args": {"sheet_name": "Sheet1", "start_cell": "B2", "data": [[99]]},
+        }
+    ]
+    preview = apply_workbook_changeset(tmp_workbook, operations, create_snapshot=False)
+    verify = changeset_module.workbook_module._verify_saved_workbook
+    changed = False
+
+    def switch_to_symlink(filepath):
+        nonlocal changed
+        if Path(filepath) == source and not changed:
+            changed = True
+            source.unlink()
+            source.symlink_to(external)
+        verify(filepath)
+
+    monkeypatch.setattr(
+        changeset_module.workbook_module, "_verify_saved_workbook", switch_to_symlink
+    )
+    with pytest.raises(PreconditionFailedError) as error:
+        apply_workbook_changeset(
+            tmp_workbook,
+            operations,
+            mode="commit",
+            create_snapshot=False,
+            changeset_token=preview["changeset_token"],
+            expected_workbook_sha256=preview["expected_workbook_sha256"],
+        )
+    assert error.value.code == "changeset_recovery_required"
+    assert source.is_symlink()
+    assert external.read_bytes() == original
+    assert Path(error.value.details["recovery_baseline"]).read_bytes() == original
 
 
 def test_changeset_enforces_response_budget_before_replacing_source(

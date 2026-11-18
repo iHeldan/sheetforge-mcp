@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- ChangeSet commits compare the reopened file with the exact inspected candidate. Rollback checks the live file again before replacement and refuses to overwrite observed external changes, retaining a recovery baseline and returning `changeset_recovery_required`. Both standard and preserving saves use these checks.
+- Native table upserts now clear existing cells for explicit null values. Append and upsert expansions keep an existing native table AutoFilter range in sync without changing its criteria or adding a disabled filter.
+- Workbook audits and worksheet data-boundary detection scan recorded cells instead of the full used-range rectangle. Sample reads no longer materialize missing cells, so distant sparse values do not cause massive blank-grid allocation.
+
 ## 0.15.0 - 2026-11-12
 
 ### Added

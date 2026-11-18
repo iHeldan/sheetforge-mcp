@@ -183,6 +183,12 @@ def _reject_totals_row_appends(table: Table) -> None:
     )
 
 
+def _expand_table_range(table: Table, range_ref: str) -> None:
+    table.ref = range_ref
+    if table.autoFilter is not None:
+        table.autoFilter.ref = range_ref
+
+
 def _supports_tables(ws: Any) -> bool:
     return hasattr(ws, "tables")
 
@@ -591,7 +597,7 @@ def upsert_excel_table_rows(
                 for column_name, new_value in row_data.items():
                     if column_name == key_column:
                         continue
-                    ws.cell(row=target_row, column=header_map[column_name], value=new_value)
+                    ws.cell(row=target_row, column=header_map[column_name]).value = new_value
 
             for row_offset, row_data in enumerate(append_rows):
                 target_row = append_start_row + row_offset
@@ -601,7 +607,7 @@ def upsert_excel_table_rows(
                     ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
 
             if append_rows:
-                table.ref = table_range
+                _expand_table_range(table, table_range)
 
             new_dataset_tokens = _table_dataset_tokens(
                 ws,
@@ -748,7 +754,7 @@ def append_excel_table_rows(
                     if column_name not in row_data:
                         continue
                     ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
-            table.ref = table_range
+            _expand_table_range(table, table_range)
 
             new_dataset_tokens = _table_dataset_tokens(
                 ws,

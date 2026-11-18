@@ -408,7 +408,7 @@ def test_race_between_capture_and_changeset_is_rejected(scenario_case, monkeypat
 
 
 @pytest.mark.parametrize("fault", ["guard", "cancelled", "exception"])
-def test_post_replace_verification_rolls_back_exact_bytes(
+def test_post_replace_verification_preserves_external_changes_or_rolls_back(
     scenario_case, monkeypatch, fault
 ):
     path, _ = scenario_case
@@ -416,6 +416,7 @@ def test_post_replace_verification_rolls_back_exact_bytes(
     original = path.read_bytes()
     real = workbook._verify_saved_workbook
     triggered = False
+    external = []
 
     def corrupt_once(filepath):
         nonlocal triggered
@@ -429,12 +430,20 @@ def test_post_replace_verification_rolls_back_exact_bytes(
                 wb["Data"]["C3"] = 24000
             wb.save(path)
             wb.close()
+            external.append(path.read_bytes())
         return real(filepath)
 
     monkeypatch.setattr(workbook, "_verify_saved_workbook", corrupt_once)
-    with pytest.raises(WorkbookError):
+    with pytest.raises((WorkbookError, PreconditionFailedError)) as error:
         commit(scenario_case, preview)
-    assert triggered and path.read_bytes() == original
+    assert triggered
+    if fault == "exception":
+        assert isinstance(error.value, WorkbookError)
+        assert path.read_bytes() == original
+    else:
+        assert error.value.code == "changeset_recovery_required"
+        assert path.read_bytes() == external[0]
+        assert Path(error.value.details["recovery_baseline"]).read_bytes() == original
 
 
 def test_independent_evaluator_disagreement_is_not_a_pass(scenario_case, monkeypatch):

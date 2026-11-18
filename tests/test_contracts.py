@@ -1,5 +1,6 @@
 import copy
 import json
+from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -325,24 +326,42 @@ def test_chart_sheet_and_transport_containment(book, contract, monkeypatch, tmp_
     assert not result["ok"]
 
 
-def test_contract_assertion_pre_and_post_replace_rollback(
-    book, contract, recipe, monkeypatch
+@pytest.mark.parametrize(
+    "fault", ["candidate_assertion", "saved_assertion", "external_save"]
+)
+def test_contract_assertion_failure_respects_live_file_identity(
+    book, contract, recipe, monkeypatch, fault
 ):
     preview = recipes.run_workbook_recipe(str(book), recipe, workbook_contract=contract)
     original = book.read_bytes()
     evaluate = changeset._evaluate_assertions
     calls = []
+    external = []
 
     def fail_saved(baseline, candidate, assertions, **kwargs):
         calls.append(candidate)
-        if candidate == book:
+        if candidate == book and fault == "external_save":
             edit(book, lambda ws: setattr(ws["C2"], "value", "USD"))
-        return evaluate(baseline, candidate, assertions, **kwargs)
+            external.append(book.read_bytes())
+        result = evaluate(baseline, candidate, assertions, **kwargs)
+        if (fault == "candidate_assertion" and candidate != book) or (
+            fault == "saved_assertion" and candidate == book
+        ):
+            next(item for item in result if item["type"] == "table_contract_matches")[
+                "passed"
+            ] = False
+        return result
 
     monkeypatch.setattr(changeset, "_evaluate_assertions", fail_saved)
-    with pytest.raises((PreconditionFailedError, WorkbookError)):
+    with pytest.raises((PreconditionFailedError, WorkbookError)) as error:
         commit(book, recipe, contract, preview)
-    assert book in calls and book.read_bytes() == original
+    if fault == "external_save":
+        assert error.value.code == "changeset_recovery_required"
+        assert book.read_bytes() == external[0]
+        assert Path(error.value.details["recovery_baseline"]).read_bytes() == original
+    else:
+        assert book.read_bytes() == original
+        assert (book in calls) == (fault == "saved_assertion")
 
 
 def test_escaped_wire_budget_checked_before_mutation(

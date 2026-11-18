@@ -1496,12 +1496,46 @@ def _discard_uncommitted_snapshot(snapshot_result: dict[str, Any] | None) -> dic
         }
 
 
-def _restore_baseline(source: Path, baseline: Path, *, expected_sha256: str) -> None:
+def _assert_live_candidate(source: Path, *, expected_sha256: str) -> str:
+    try:
+        before = workbook_module._guarded_source_stamp(source)
+        actual_sha256 = _sha256_file(source)
+        unchanged = before == workbook_module._guarded_source_stamp(source)
+    except PreconditionFailedError as exc:
+        raise PreconditionFailedError(
+            "Workbook source changed after replacement",
+            code="changeset_post_commit_drift",
+        ) from exc
+    if not unchanged or actual_sha256 != expected_sha256:
+        raise PreconditionFailedError(
+            "Workbook source no longer matches the inspected candidate",
+            code="changeset_post_commit_drift",
+            details={
+                "expected_candidate_sha256": expected_sha256,
+                "actual_workbook_sha256": actual_sha256,
+            },
+        )
+    return actual_sha256
+
+
+def _restore_baseline(
+    source: Path,
+    baseline: Path,
+    *,
+    expected_sha256: str,
+    expected_candidate_sha256: str,
+) -> None:
     rollback = _new_temp_workbook(source.parent, source=source, label="rollback")
     try:
         shutil.copy2(baseline, rollback)
         workbook_module._fsync_file(rollback)
         workbook_module._verify_saved_workbook(str(rollback))
+        if _sha256_file(rollback) != expected_sha256:
+            raise WorkbookError(
+                "Recovery baseline no longer matches the original workbook"
+            )
+        # Outside writers do not share our lock. Never knowingly erase their save.
+        _assert_live_candidate(source, expected_sha256=expected_candidate_sha256)
         os.replace(rollback, source)
         workbook_module._fsync_directory(source.parent)
         workbook_module._verify_saved_workbook(str(source))
@@ -1906,7 +1940,9 @@ def apply_workbook_changeset(
                     raise WorkbookError(
                         "Post-commit assertion verification failed"
                     )
-                after_sha256 = _sha256_file(source)
+                after_sha256 = _assert_live_candidate(
+                    source, expected_sha256=candidate_sha256
+                )
             except Exception as commit_error:
                 if not destination_replaced:
                     snapshot_cleanup = _discard_uncommitted_snapshot(snapshot_result)
@@ -1937,10 +1973,30 @@ def apply_workbook_changeset(
                     ) from commit_error
                 try:
                     _restore_baseline(
-                        source, baseline, expected_sha256=source_sha256
+                        source,
+                        baseline,
+                        expected_sha256=source_sha256,
+                        expected_candidate_sha256=candidate_sha256,
                     )
                 except Exception as rollback_error:
                     preserve_baseline = True
+                    if (
+                        isinstance(rollback_error, PreconditionFailedError)
+                        and rollback_error.code == "changeset_post_commit_drift"
+                    ):
+                        raise PreconditionFailedError(
+                            "Workbook changed after replacement; automatic rollback was skipped "
+                            "to preserve the current file. Inspect it and the recovery baseline "
+                            f"at {baseline} before retrying.",
+                            code="changeset_recovery_required",
+                            details={
+                                "recovery_baseline": str(baseline),
+                                "baseline_sha256": source_sha256,
+                                "expected_candidate_sha256": candidate_sha256,
+                                "rollback_status": "skipped_source_changed",
+                                "retry_safe": False,
+                            },
+                        ) from commit_error
                     raise WorkbookError(
                         "ChangeSet verification failed and rollback could not be verified. "
                         f"Recovery baseline retained at {baseline}: {rollback_error!s}"

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -582,6 +583,73 @@ def test_append_excel_table_rows_dry_run_does_not_persist(tmp_workbook):
     ws = wb["Sheet1"]
     assert ws.tables["Customers"].ref == "A1:C6"
     assert ws["A7"].value is None
+    wb.close()
+
+
+def test_upsert_explicit_null_clears_existing_cell_and_matches_preview(tmp_workbook):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    path = Path(tmp_workbook)
+    before = path.read_bytes()
+    args = dict(
+        filepath=tmp_workbook,
+        table_name="Customers",
+        key_column="Name",
+        rows=[{"Name": "Alice", "Age": None}],
+        include_changes=True,
+    )
+    preview = upsert_excel_table_rows(**args, dry_run=True)
+    assert path.read_bytes() == before
+    applied = upsert_excel_table_rows(**args)
+    assert preview["changes"] == applied["changes"]
+    assert applied["changed_cells"] == 1
+    assert applied["changes"][0]["old_value"] == 30
+    assert applied["changes"][0]["new_value"] is None
+    assert applied["new_content_token"] == preview["new_content_token"]
+    assert applied["new_content_token"] != applied["previous_content_token"]
+    wb = load_workbook(tmp_workbook)
+    try:
+        assert wb["Sheet1"]["B2"].value is None
+        assert wb["Sheet1"]["A2"].value == "Alice"
+        assert wb["Sheet1"]["C2"].value == "Helsinki"
+    finally:
+        wb.close()
+
+
+@pytest.mark.parametrize("upsert", [False, True])
+@pytest.mark.parametrize("with_filter", [False, True])
+def test_native_table_expansion_keeps_filter_range_in_sync(
+    tmp_workbook, upsert, with_filter
+):
+    create_excel_table(tmp_workbook, "Sheet1", "A1:C6", table_name="Customers")
+    wb = load_workbook(tmp_workbook)
+    table = wb["Sheet1"].tables["Customers"]
+    if with_filter:
+        table.autoFilter.add_filter_column(2, ["Helsinki"])
+    else:
+        table.autoFilter = None
+    wb.save(tmp_workbook)
+    wb.close()
+    before = Path(tmp_workbook).read_bytes()
+    operation = upsert_excel_table_rows if upsert else append_excel_table_rows
+    args = dict(
+        filepath=tmp_workbook,
+        table_name="Customers",
+        rows=[{"Name": "Frank", "Age": 29}],
+    )
+    if upsert:
+        args["key_column"] = "Name"
+    preview = operation(**args, dry_run=True)
+    assert preview["table_range"] == "A1:C7"
+    assert Path(tmp_workbook).read_bytes() == before
+    result = operation(**args)
+    wb = load_workbook(tmp_workbook)
+    table = wb["Sheet1"].tables["Customers"]
+    assert table.ref == result["table_range"] == "A1:C7"
+    if with_filter:
+        assert table.autoFilter.ref == table.ref
+        assert table.autoFilter.filterColumn[0].filters.filter == ["Helsinki"]
+    else:
+        assert table.autoFilter is None
     wb.close()
 
 

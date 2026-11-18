@@ -1634,25 +1634,23 @@ def _cells_with_broken_formula_references(
     sheet_name: str,
 ) -> list[str]:
     cells: list[str] = []
-    for row in ws.iter_rows():
-        for cell in row:
-            if not isinstance(cell.value, str) or not cell.value.startswith("="):
-                continue
-            if _formula_text_has_broken_reference(
-                wb,
-                formula_text=cell.value,
-                formula_sheet_name=sheet_name,
-            ):
-                cells.append(cell.coordinate)
+    for _, cell in sorted(ws._cells.items()):
+        if not isinstance(cell.value, str) or not cell.value.startswith("="):
+            continue
+        if _formula_text_has_broken_reference(
+            wb,
+            formula_text=cell.value,
+            formula_sheet_name=sheet_name,
+        ):
+            cells.append(cell.coordinate)
     return cells
 
 
 def _cells_with_error_values(ws: Worksheet) -> list[str]:
     cells: list[str] = []
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.data_type == "e":
-                cells.append(cell.coordinate)
+    for _, cell in sorted(ws._cells.items()):
+        if cell.data_type == "e":
+            cells.append(cell.coordinate)
     return cells
 
 

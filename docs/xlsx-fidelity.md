@@ -42,6 +42,28 @@ calls. Use ChangeSet if the commit must match a specific previewed SHA-256.
 Within ChangeSet, an omitted `sheet_name` on a cell write selects the active
 worksheet (an active chart sheet is rejected).
 
+### Post-save Recovery (Unreleased)
+
+ChangeSet's final source SHA-256 must match the inspected candidate, not just
+describe a readable workbook. If verification fails, rollback checks again
+that the current source is still that candidate before restoring the baseline.
+If it observes a different file or content, it skips rollback and retains the
+baseline rather than knowingly overwriting an outside save.
+
+The structured error is `changeset_recovery_required`.
+`error.details.recovery_baseline` points to the retained original;
+`rollback_status="skipped_source_changed"` and `retry_safe=false` mean that the
+current file and baseline require inspection before another mutation. The
+current file may contain the attempted edit, external changes, or both. Do not
+automatically copy the baseline over it or blindly repeat the commit. Existing
+verified snapshots are also retained. Other rollback failures retain the
+baseline and report that recovery could not be verified.
+
+This applies to standard and preserving ChangeSets and their backed workflows.
+It is still optimistic concurrency with a cooperative same-host lock, not an
+atomic compare-and-swap against Excel, a cloud sync client, or another outside
+writer. An external change after a check remains possible.
+
 ## Scope and recovery
 
 - The guard runs in `write_data_to_excel`, `apply_workbook_changeset` and

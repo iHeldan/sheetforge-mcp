@@ -7,6 +7,7 @@ from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.workbook.defined_name import DefinedName
 from excel_mcp.chart import create_chart_in_sheet
 from excel_mcp.exceptions import SheetError, WorkbookError
@@ -348,6 +349,34 @@ def test_audit_workbook_reports_clean_structured_workbook(tmp_workbook):
         }
     ]
     assert result["recommended_actions"] == []
+
+
+def test_audit_workbook_handles_sparse_maximum_coordinates_without_densifying(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "sparse-audit.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sparse"
+    ws["A1"] = "Id"
+    ws["B2"] = 42
+    ws["XFC1048576"] = "#VALUE!"
+    ws["XFD1048576"] = "=#REF!"
+    wb.save(path)
+    wb.close()
+    original_bytes = path.read_bytes()
+    get_cell = Worksheet._get_cell
+
+    def existing_cells_only(self, row, column):
+        assert (row, column) in self._cells, "Audit must not materialize blank cells"
+        return get_cell(self, row, column)
+
+    monkeypatch.setattr(Worksheet, "_get_cell", existing_cells_only)
+    result = audit_workbook(str(path), sample_limit=10)
+    by_code = {item["code"]: item for item in result["findings"]["sample"]}
+    assert by_code["broken_formula_reference"]["details"]["sample"] == ["XFD1048576"]
+    assert by_code["error_cells_present"]["details"]["sample"] == ["XFC1048576"]
+    assert path.read_bytes() == original_bytes
 
 
 def test_audit_workbook_reports_high_signal_findings(tmp_path):

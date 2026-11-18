@@ -646,10 +646,6 @@ def _get_header_map(ws: Worksheet, header_row: int) -> Dict[str, int]:
     return header_map
 
 
-def _row_has_selected_data(ws: Worksheet, row: int, columns: List[int]) -> bool:
-    return any(ws.cell(row=row, column=col).value is not None for col in columns)
-
-
 def _validate_read_boundary_mode(read_boundary_mode: str) -> int:
     if read_boundary_mode not in READ_BOUNDARY_GAP_TOLERANCES:
         supported = ", ".join(sorted(READ_BOUNDARY_GAP_TOLERANCES))
@@ -734,11 +730,14 @@ def _detect_tabular_data_extent(
     blank_gap_tolerance = _validate_read_boundary_mode(read_boundary_mode)
     # Worksheet-shaped readers favor the first contiguous data block after the header.
     # This keeps sparse footer notes or distant outlier cells from stretching a table read.
-    non_empty_rows = [
-        row
-        for row in range(header_row + 1, ws.max_row + 1)
-        if _row_has_selected_data(ws, row, columns)
-    ]
+    selected = set(columns)
+    non_empty_rows = sorted(
+        {
+            row
+            for (row, col), cell in ws._cells.items()
+            if row > header_row and col in selected and cell.value is not None
+        }
+    )
     if not non_empty_rows:
         return {
             "first_data_row": None,
@@ -2216,9 +2215,10 @@ def _read_table_from_worksheet(
     )
     last_data_row = data_extent["last_data_row"]
 
-    headers = []
-    for col in selected_columns:
-        headers.append(ws.cell(row=header_row, column=col).value)
+    headers = [
+        cell.value if (cell := ws._cells.get((header_row, col))) is not None else None
+        for col in selected_columns
+    ]
 
     total_rows = last_data_row - header_row
     if total_rows < 0:
@@ -2230,9 +2230,10 @@ def _read_table_from_worksheet(
         available_rows = last_data_row - effective_start_row + 1
         row_limit = available_rows if max_rows is None else min(max_rows, available_rows)
         for row_idx in range(effective_start_row, effective_start_row + row_limit):
-            row_data = []
-            for col in selected_columns:
-                row_data.append(ws.cell(row=row_idx, column=col).value)
+            row_data = [
+                cell.value if (cell := ws._cells.get((row_idx, col))) is not None else None
+                for col in selected_columns
+            ]
             rows.append(row_data)
 
     next_start_row = None
