@@ -1,3 +1,4 @@
+from .exceptions import PreconditionFailedError
 from enum import Enum
 import logging
 import math
@@ -851,6 +852,8 @@ def list_charts(
 
     except ValidationError:
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to list charts: {e}")
         raise ChartError(str(e))
@@ -894,6 +897,8 @@ def find_free_canvas_slots(
                 padding_columns=padding_columns,
             )
     except ValidationError:
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to find free canvas slots: {e}")
@@ -1099,6 +1104,8 @@ def _apply_chart_style(chart: Any, style: Dict[str, Any]) -> None:
                 chart.x_axis.majorGridlines = ChartLines()
             if hasattr(chart, "y_axis"):
                 chart.y_axis.majorGridlines = ChartLines()
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to apply chart style: {e}")
         raise ChartError(f"Failed to apply chart style: {str(e)}")
@@ -1118,6 +1125,8 @@ def _finalize_chart(
         chart.height = height
         worksheet.add_chart(chart, target_cell)
     except ValidationError:
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to create chart drawing: {e}")
@@ -1267,6 +1276,8 @@ def create_chart_in_sheet(
 
     except (ValidationError, ChartError):
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Unexpected error creating chart: {e}")
         raise ChartError(f"Unexpected error creating chart: {str(e)}")
@@ -1391,6 +1402,8 @@ def create_chart_from_series(
         }
 
     except (ValidationError, ChartError):
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Unexpected error creating chart from series: {e}")

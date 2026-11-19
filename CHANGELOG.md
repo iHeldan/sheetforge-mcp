@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Standalone workbook saves now reject observed external changes before replacement, compare the reopened file with the exact candidate, and retain the original backup rather than rolling back over an outside save. Structured `write_recovery_required` errors require inspection before retrying. Creation uses non-overwriting publication even if another writer creates the destination concurrently.
 - ChangeSet commits compare the reopened file with the exact inspected candidate. Rollback checks the live file again before replacement and refuses to overwrite observed external changes, retaining a recovery baseline and returning `changeset_recovery_required`. Both standard and preserving saves use these checks.
 - Native table upserts now clear existing cells for explicit null values. Append and upsert expansions keep an existing native table AutoFilter range in sync without changing its criteria or adding a disabled filter.
 - Workbook audits and worksheet data-boundary detection scan recorded cells instead of the full used-range rectangle. Sample reads no longer materialize missing cells, so distant sparse values do not cause massive blank-grid allocation.

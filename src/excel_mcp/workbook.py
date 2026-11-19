@@ -31,7 +31,7 @@ from openpyxl.utils.cell import quote_sheetname
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .exceptions import PreconditionFailedError, WorkbookError
+from .exceptions import PreconditionFailedError, WorkbookError, WorkbookRecoveryError
 
 logger = logging.getLogger(__name__)
 
@@ -2658,6 +2658,24 @@ def _guarded_source_stamp(path: Path) -> tuple[int, ...]:
     )
 
 
+def _workbook_file_state(path: Path) -> tuple[tuple[int, ...], str]:
+    """Hash a stable regular file without following a substituted symlink/FIFO."""
+    before = _guarded_source_stamp(path)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if not stat.S_ISREG(opened.st_mode) or (*_file_identity(opened), opened.st_ctime_ns) != before:
+            raise PreconditionFailedError("Workbook changed while opening", code="stale_workbook")
+        digest = hashlib.sha256()
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+        after = os.fstat(handle.fileno())
+    if (*_file_identity(after), after.st_ctime_ns) != before or _guarded_source_stamp(path) != before:
+        raise PreconditionFailedError("Workbook changed while reading", code="stale_workbook")
+    return before, digest.hexdigest()
+
+
 @contextmanager
 def safe_workbook(
     filepath: str,
@@ -2685,10 +2703,11 @@ def safe_workbook(
         else nullcontext()
     )
     with lock_context:
-        stamp = _guarded_source_stamp(resolved_path) if guarded else None
+        writing = guarded or (save and not read_only)
+        source_state = _workbook_file_state(resolved_path) if writing else None
 
         def verify_source() -> None:
-            if _guarded_source_stamp(resolved_path) != stamp:
+            if _workbook_file_state(resolved_path) != source_state:
                 raise PreconditionFailedError(
                     "Workbook changed during the guarded write; no changes were written",
                     code="stale_workbook",
@@ -2720,7 +2739,7 @@ def safe_workbook(
                     _verify_saved_workbook(str(candidate))
                     verify_candidate(candidate)
             elif save and not read_only:
-                _persist_workbook_atomically(wb, str(resolved_path))
+                _persist_workbook_atomically(wb, str(resolved_path), verify_source=verify_source)
         finally:
             wb.close()
 
@@ -2768,6 +2787,7 @@ def _persist_workbook_atomically(
     *,
     validate_candidate: Callable[[Path], None] | None = None,
     verify_source: Callable[[], None] | None = None,
+    create_only: bool = False,
 ) -> None:
     """Persist workbook changes via temp file + atomic replace + reopen verify."""
     destination = Path(filepath)
@@ -2791,13 +2811,18 @@ def _persist_workbook_atomically(
             with suppress(OSError):
                 os.chmod(temp_path, destination.stat().st_mode)
         _fsync_file(temp_path)
+        candidate_state = _workbook_file_state(temp_path)
         _verify_saved_workbook(str(temp_path))
-        candidate_stamp = None
         if validate_candidate is not None:
-            candidate_stamp = _guarded_source_stamp(temp_path)
             validate_candidate(temp_path)
 
+        if verify_source is not None:
+            verify_source()
+        original_state = None
         if destination.exists():
+            if create_only:
+                raise WorkbookError(f"Workbook already exists: {destination}")
+            original_state = _workbook_file_state(destination)
             backup_fd, backup_name = tempfile.mkstemp(
                 prefix=f".{destination.name}.sheetforge-backup-",
                 suffix=".bak",
@@ -2807,34 +2832,60 @@ def _persist_workbook_atomically(
             backup_path = Path(backup_name)
             shutil.copy2(destination, backup_path)
             _fsync_file(backup_path)
+            if _workbook_file_state(backup_path)[1] != original_state[1]:
+                raise PreconditionFailedError("Workbook changed during backup", code="stale_workbook")
 
-        if candidate_stamp is not None and _guarded_source_stamp(temp_path) != candidate_stamp:
+        if _workbook_file_state(temp_path) != candidate_state:
             raise PreconditionFailedError(
                 "Workbook candidate changed after inspection; no changes were written",
                 code="write_candidate_changed",
             )
         if verify_source is not None:
             verify_source()
-        os.replace(temp_path, destination)
+        if original_state is not None and _workbook_file_state(destination) != original_state:
+            raise PreconditionFailedError("Workbook changed before replacement", code="stale_workbook")
+        if create_only:
+            os.link(temp_path, destination)
+        else:
+            os.replace(temp_path, destination)
         _fsync_directory(destination.parent)
+        committed_stamp = None
         try:
+            committed_stamp = _guarded_source_stamp(destination)
             _verify_saved_workbook(str(destination))
+            live_state = _workbook_file_state(destination)
+            if live_state != (committed_stamp, candidate_state[1]):
+                raise PreconditionFailedError("Saved workbook changed during verification", code="stale_workbook")
         except Exception as verification_error:
-            if backup_path is not None and backup_path.exists():
-                try:
-                    os.replace(backup_path, destination)
+            try:
+                if _workbook_file_state(destination) != (committed_stamp, candidate_state[1]):
+                    raise PreconditionFailedError("Outside changes observed; rollback skipped")
+                if backup_path is not None:
+                    if _workbook_file_state(backup_path)[1] != original_state[1]:
+                        raise WorkbookError("Recovery backup changed; rollback skipped")
+                    shutil.copy2(backup_path, temp_path)
+                    _fsync_file(temp_path)
+                    if _workbook_file_state(temp_path)[1] != original_state[1]:
+                        raise WorkbookError("Recovery candidate changed; rollback skipped")
+                    if _workbook_file_state(destination) != (committed_stamp, candidate_state[1]):
+                        raise WorkbookError("Outside changes observed; rollback skipped")
+                    os.replace(temp_path, destination)
                     _fsync_directory(destination.parent)
-                except Exception as rollback_error:
-                    preserve_backup = True
-                    raise WorkbookError(
-                        "Post-save verification failed and the original workbook could not "
-                        f"be restored. Recovery backup retained at {backup_path}: "
-                        f"{rollback_error!s}"
-                    ) from rollback_error
-            else:
-                with suppress(FileNotFoundError):
+                    _verify_saved_workbook(str(destination))
+                    if _workbook_file_state(destination)[1] != original_state[1]:
+                        raise WorkbookError("Restored workbook changed during verification")
+                else:
                     destination.unlink()
-                _fsync_directory(destination.parent)
+                    _fsync_directory(destination.parent)
+            except Exception as rollback_error:
+                preserve_backup = True
+                raise WorkbookRecoveryError(
+                    "Post-save verification failed; inspect the current workbook before retrying. "
+                    f"Recovery backup retained at {backup_path}: {rollback_error!s}",
+                    code="write_recovery_required",
+                    details={"recovery_backup": str(backup_path) if backup_path else None,
+                             "retry_safe": False, "rollback_status": "unverified"},
+                ) from verification_error
             raise verification_error
     except PreconditionFailedError:
         raise
@@ -2956,7 +3007,7 @@ def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> dict[str, Any]
                 wb.create_sheet(sheet_name)
 
             path.parent.mkdir(parents=True, exist_ok=True)
-            _persist_workbook_atomically(wb, str(path))
+            _persist_workbook_atomically(wb, str(path), create_only=True)
         return {
             "message": f"Created workbook: {filepath}",
             "active_sheet": sheet_name,

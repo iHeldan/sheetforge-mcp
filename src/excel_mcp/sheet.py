@@ -1,3 +1,4 @@
+from .exceptions import PreconditionFailedError
 import logging
 from collections import OrderedDict
 from copy import copy, deepcopy
@@ -1333,6 +1334,8 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
     except SheetError as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to copy sheet: {e}")
         raise SheetError(str(e))
@@ -1361,6 +1364,8 @@ def delete_sheet(filepath: str, sheet_name: str) -> Dict[str, Any]:
         return {"message": f"Sheet '{sheet_name}' deleted"}
     except SheetError as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to delete sheet: {e}")
@@ -1424,6 +1429,8 @@ def rename_sheet(filepath: str, old_name: str, new_name: str) -> Dict[str, Any]:
     except SheetError as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to rename sheet: {e}")
         raise SheetError(str(e))
@@ -1485,6 +1492,8 @@ def set_sheet_visibility(
         ], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to set worksheet visibility: {e}")
@@ -1605,6 +1614,8 @@ def get_sheet_protection(filepath: str, sheet_name: str) -> Dict[str, Any]:
     except SheetError as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get worksheet protection: {e}")
         raise SheetError(str(e))
@@ -1672,6 +1683,8 @@ def set_sheet_protection(
         ], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to set worksheet protection: {e}")
@@ -1791,6 +1804,8 @@ def set_print_area(
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to set print area: {e}")
         raise SheetError(str(e))
@@ -1868,6 +1883,8 @@ def set_print_titles(
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to set print titles: {e}")
         raise SheetError(str(e))
@@ -1928,6 +1945,8 @@ def set_column_widths(
         }, changes=changes, dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to set column widths: {e}")
@@ -1990,6 +2009,8 @@ def set_row_heights(
         }, changes=changes, dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to set row heights: {e}")
@@ -2067,6 +2088,8 @@ def autofit_columns(
         }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to auto-fit columns: {e}")
@@ -2259,6 +2282,8 @@ def merge_range(
     except SheetError as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to merge range: {e}")
         raise SheetError(str(e))
@@ -2309,6 +2334,8 @@ def unmerge_range(
     except SheetError as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to unmerge range: {e}")
         raise SheetError(str(e))
@@ -2326,6 +2353,8 @@ def get_merged_ranges(filepath: str, sheet_name: str) -> list[str]:
             return [str(merged_range) for merged_range in worksheet.merged_cells.ranges]
     except SheetError as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to get merged cells: {e}")
@@ -2378,6 +2407,8 @@ def set_freeze_panes(
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to set freeze panes: {e}")
         raise SheetError(str(e))
@@ -2429,6 +2460,8 @@ def set_auto_filter(
         }], dry_run=dry_run, include_changes=include_changes)
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to set autofilter: {e}")
@@ -2531,6 +2564,8 @@ def copy_range_operation(
         }
 
     except (ValidationError, SheetError):
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to copy range: {e}")
@@ -2662,6 +2697,8 @@ def delete_range_operation(
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete range: {e}")
         raise SheetError(str(e))
@@ -2717,6 +2754,8 @@ def insert_row(
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to insert rows: {e}")
         raise SheetError(str(e))
@@ -2771,6 +2810,8 @@ def insert_cols(
         }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to insert columns: {e}")
@@ -2829,6 +2870,8 @@ def delete_rows(
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete rows: {e}")
         raise SheetError(str(e))
@@ -2885,6 +2928,8 @@ def delete_cols(
         }
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to delete columns: {e}")

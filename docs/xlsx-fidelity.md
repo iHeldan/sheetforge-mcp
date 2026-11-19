@@ -44,6 +44,14 @@ worksheet (an active chart sheet is rejected).
 
 ### Post-save Recovery (Unreleased)
 
+Standalone saves also check source identity and bytes before replacement and
+compare the reopened file with the saved candidate. An observed outside change
+blocks automatic rollback. `write_recovery_required` includes
+`error.details.recovery_backup` (null for a new file) and `retry_safe=false`.
+Inspect the current file and retained backup; do not blindly retry or restore.
+This concurrency protection is separate from the targeted package-fidelity
+guard below and does not extend that guard to other standalone tools.
+
 ChangeSet's final source SHA-256 must match the inspected candidate, not just
 describe a readable workbook. If verification fails, rollback checks again
 that the current source is still that candidate before restoring the baseline.

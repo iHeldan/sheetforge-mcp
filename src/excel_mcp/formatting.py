@@ -1,3 +1,4 @@
+from .exceptions import PreconditionFailedError
 import json
 import logging
 import re
@@ -350,6 +351,8 @@ def read_range_formatting(
         return result
     except (ValidationError, FormattingError):
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to read range formatting: {e}")
         raise FormattingError(str(e))
@@ -458,6 +461,8 @@ def _build_conditional_format_rule(
 
         return rule
     except FormattingError:
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         hint = ""
@@ -678,6 +683,8 @@ def _apply_format_to_sheet(
     except (ValidationError, FormattingError):
         _restore_format_range(sheet, snapshot)
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         _restore_format_range(sheet, snapshot)
         raise FormattingError(f"Failed to apply formatting: {str(e)}") from e
@@ -781,6 +788,8 @@ def format_range(
 
     except (ValidationError, FormattingError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to apply formatting: {e}")
@@ -888,6 +897,8 @@ def format_ranges(
 
     except (ValidationError, FormattingError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to apply batch formatting: {e}")

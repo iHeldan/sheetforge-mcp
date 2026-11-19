@@ -80,3 +80,7 @@ class PreconditionFailedError(ExcelMCPError):
         self.code = code
         self.details = details or {}
         self.suggested_next_tool = suggested_next_tool
+
+
+class WorkbookRecoveryError(PreconditionFailedError, WorkbookError):
+    """A save failed after replacement and needs explicit recovery inspection."""

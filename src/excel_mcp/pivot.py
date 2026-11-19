@@ -1,3 +1,4 @@
+from .exceptions import PreconditionFailedError
 from typing import Any
 import uuid
 import logging
@@ -283,6 +284,8 @@ def create_pivot_table(
 
     except (ValidationError, PivotError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to create pivot table: {e}")

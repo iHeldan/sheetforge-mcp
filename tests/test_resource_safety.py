@@ -8,7 +8,7 @@ import pytest
 from openpyxl import load_workbook
 
 import excel_mcp.workbook as workbook_module
-from excel_mcp.exceptions import WorkbookError
+from excel_mcp.exceptions import PreconditionFailedError, WorkbookError
 from excel_mcp.workbook import create_workbook_snapshot, safe_workbook
 
 
@@ -107,6 +107,73 @@ def test_safe_workbook_does_not_save_on_error(tmp_workbook):
 
     with safe_workbook(tmp_workbook) as wb:
         assert wb["Sheet1"]["D1"].value is None
+
+
+def test_direct_save_rejects_an_independent_save_before_replace(tmp_workbook):
+    with pytest.raises(PreconditionFailedError, match="changed"):
+        with safe_workbook(tmp_workbook, save=True) as wb:
+            wb["Sheet1"]["D1"] = "attempt"
+            outside = load_workbook(tmp_workbook)
+            outside["Sheet1"]["E1"] = "outside"
+            outside.save(tmp_workbook)
+            outside.close()
+    with safe_workbook(tmp_workbook) as wb:
+        assert wb["Sheet1"]["D1"].value is None
+        assert wb["Sheet1"]["E1"].value == "outside"
+    _assert_no_sheetforge_artifacts(Path(tmp_workbook))
+
+
+@pytest.mark.parametrize("fail_verification", [False, True])
+def test_direct_save_keeps_outside_changes_and_recovery_backup(
+    tmp_workbook, monkeypatch, fail_verification,
+):
+    original_verify = workbook_module._verify_saved_workbook
+
+    def change_after_replace(filepath):
+        if Path(filepath) == Path(tmp_workbook):
+            outside = load_workbook(filepath)
+            outside["Sheet1"]["E1"] = "outside"
+            outside.save(filepath)
+            outside.close()
+            if fail_verification:
+                raise OSError("injected verification failure")
+        original_verify(filepath)
+
+    monkeypatch.setattr(workbook_module, "_verify_saved_workbook", change_after_replace)
+    with pytest.raises(PreconditionFailedError) as error:
+        with safe_workbook(tmp_workbook, save=True) as wb:
+            wb["Sheet1"]["D1"] = "attempt"
+    assert error.value.code == "write_recovery_required"
+    assert error.value.details["retry_safe"] is False
+    backup = Path(error.value.details["recovery_backup"])
+    assert backup.is_file()
+    with backup.open("rb") as handle:
+        original = load_workbook(handle)
+        assert original["Sheet1"]["D1"].value is None
+        original.close()
+    with safe_workbook(tmp_workbook) as wb:
+        assert wb["Sheet1"]["D1"].value == "attempt"
+        assert wb["Sheet1"]["E1"].value == "outside"
+
+
+def test_create_never_replaces_a_concurrently_created_file(tmp_path, monkeypatch):
+    path = tmp_path / "new.xlsx"
+    original_verify = workbook_module._verify_saved_workbook
+
+    def create_outside(filepath):
+        original_verify(filepath)
+        if Path(filepath) != path:
+            outside = workbook_module.Workbook()
+            outside.active["A1"] = "outside"
+            outside.save(path)
+            outside.close()
+
+    monkeypatch.setattr(workbook_module, "_verify_saved_workbook", create_outside)
+    with pytest.raises(WorkbookError, match="already exists"):
+        workbook_module.create_workbook(str(path))
+    with safe_workbook(str(path)) as wb:
+        assert wb.active["A1"].value == "outside"
+    _assert_no_sheetforge_artifacts(path)
 
 
 def test_safe_workbook_atomic_save_leaves_no_temp_artifacts(tmp_workbook):

@@ -1,3 +1,4 @@
+from .exceptions import PreconditionFailedError
 from collections import Counter
 from typing import Any
 import logging
@@ -133,6 +134,8 @@ def inspect_formula(formula: str) -> dict[str, Any]:
 
     except CalculationError:
         raise
+    except PreconditionFailedError:
+        raise
     except Exception as e:
         logger.error(f"Failed to inspect formula: {e}")
         raise CalculationError(str(e))
@@ -180,6 +183,8 @@ def apply_formula(
 
     except (ValidationError, CalculationError) as e:
         logger.error(str(e))
+        raise
+    except PreconditionFailedError:
         raise
     except Exception as e:
         logger.error(f"Failed to apply formula: {e}")
