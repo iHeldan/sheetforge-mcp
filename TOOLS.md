@@ -422,7 +422,7 @@ Returns matches under `data.matches`:
 - `delete_worksheet(filepath: str, sheet_name: str) -> str`
   Deletes the target sheet, but fails early if that would leave the workbook without any visible sheet.
 - `rename_worksheet(filepath: str, old_name: str, new_name: str) -> str`
-  Renames a worksheet and keeps formula cells, chart-series references, and named-range sheet references aligned. When a default sibling pivot sheet such as `Data_pivot` exists, SheetForge also renames it to match the new worksheet name when no conflict blocks that move.
+  Renames a worksheet and keeps formula cells, native-table calculated/totals formulas, chart-series references, validations, conditional formats, and named-range sheet references aligned. Sheet qualifiers are case-insensitive; quoted formula text and external-workbook references are not renamed. When a default sibling pivot sheet such as `Data_pivot` exists, SheetForge also renames it to match the new worksheet name when no conflict blocks that move.
 - `set_worksheet_visibility(filepath: str, sheet_name: str, visibility: str, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Sets worksheet visibility to `visible`, `hidden`, or `veryHidden`, and supports preview mode. Committed writes stay compact unless `include_changes=True`.
 - `get_worksheet_protection(filepath: str, sheet_name: str) -> str`

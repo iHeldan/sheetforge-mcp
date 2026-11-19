@@ -63,7 +63,7 @@ _STRUCTURED_REFERENCE_COLUMN_RANGE_RE = re.compile(
 _STRUCTURED_REFERENCE_FLAG_ONLY_RE = re.compile(r"^\[(?P<flag>#[^\]]+)\]$")
 _STRUCTURED_REFERENCE_THIS_ROW_COLUMN_RE = re.compile(r"^\[@(?P<column>[^\]]+)\]$")
 _STRUCTURED_REFERENCE_COLUMN_RE = re.compile(r"^\[(?P<column>[^\]]+)\]$")
-_SHEET_REFERENCE_TOKEN_RE = re.compile(r"(?<!\])(?P<sheet>'(?:[^']|'')+'|[A-Za-z0-9_.]+)!")
+_SHEET_REFERENCE_TOKEN_RE = re.compile(r"(?<![\w.\]'])(?P<sheet>'(?:[^']|'')+'|[\w.]+)!")
 
 
 def _get_sheet_usage(ws) -> tuple[int, int, str | None, bool]:
@@ -104,11 +104,36 @@ def _rewrite_sheet_references_in_text(
     quoted_new_sheet = quote_sheetname(new_sheet_name)
 
     def _replace(match: re.Match[str]) -> str:
-        if _normalize_sheet_reference_name(match.group("sheet")) != old_sheet_name:
+        if _normalize_sheet_reference_name(match.group("sheet")).casefold() != old_sheet_name.casefold():
             return match.group(0)
         return f"{quoted_new_sheet}!"
 
-    return _SHEET_REFERENCE_TOKEN_RE.sub(_replace, text)
+    had_equals = text.startswith("=")
+    try:
+        tokens = Tokenizer(text if had_equals else f"={text}").items
+    except Exception as exc:
+        raise WorkbookError("Cannot safely rewrite an unparseable sheet-reference formula") from exc
+    rewritten = []
+    changed = False
+    for token in tokens:
+        value = token.value
+        if token.type == "OPERAND" and token.subtype == "RANGE" and "!" in value:
+            qualifier, reference = value.split("!", 1)
+            sheet_names = _normalize_sheet_reference_name(qualifier)
+            if ":" in sheet_names and "[" not in sheet_names:
+                names = sheet_names.split(":")
+                names = [new_sheet_name if name.casefold() == old_sheet_name.casefold() else name
+                         for name in names]
+                if ":".join(names) != sheet_names:
+                    value = f"{quote_sheetname(':'.join(names))}!{reference}"
+            else:
+                value = _SHEET_REFERENCE_TOKEN_RE.sub(_replace, value)
+        changed |= value != token.value
+        rewritten.append(value)
+    if not changed:
+        return text
+    result = "".join(rewritten)
+    return f"={result}" if had_equals else result
 
 
 def _update_defined_name_sheet_references(

@@ -5,7 +5,7 @@ import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.table import Table, TableFormula, TableStyleInfo
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.workbook.defined_name import DefinedName
@@ -865,6 +865,65 @@ def test_rename_sheet_updates_formulas_and_generated_pivot_sheet(tmp_path):
     assert "Data_pivot" not in wb.sheetnames
     assert wb["Summary"]["A1"].value == "='Revenue'!C2"
     assert wb["Summary"]["B1"].value == "Data!C2"
+    wb.close()
+
+
+@pytest.mark.parametrize("sheet_name", ["Data", "Owner's Data", "N\u00e4ytt\u00f6"])
+def test_rename_preserves_text_and_updates_case_variant_references(tmp_path, sheet_name):
+    from openpyxl.utils.cell import quote_sheetname
+
+    path = str(tmp_path / "rename-tokens.xlsx")
+    wb = Workbook()
+    wb.active.title = sheet_name
+    report = wb.create_sheet("Report")
+    qualifier = quote_sheetname(sheet_name.swapcase())
+    literal = f'="{sheet_name}!A1"'
+    report["A1"] = literal
+    report["B1"] = f'={qualifier}!A1&"{sheet_name}!A1"'
+    report["C1"] = f"='[Other.xlsx]{sheet_name.replace(chr(39), chr(39)*2)}'!A1"
+    report["D1"] = "=[Other.xlsx]Data!A1"
+    wb.defined_names.add(DefinedName("QuotedText", attr_text=literal[1:]))
+    validation = DataValidation(type="list", formula1=f'"{sheet_name}!A1,other"')
+    report.add_data_validation(validation)
+    validation.add("A2")
+    wb.save(path)
+    wb.close()
+
+    rename_sheet(path, sheet_name, "Sales")
+    wb = load_workbook(path)
+    assert wb["Report"]["A1"].value == literal
+    assert wb["Report"]["B1"].value == f'=\'Sales\'!A1&"{sheet_name}!A1"'
+    assert wb["Report"]["C1"].value.startswith("='[Other.xlsx]")
+    assert wb["Report"]["D1"].value == "=[Other.xlsx]Data!A1"
+    assert wb.defined_names["QuotedText"].attr_text == literal[1:]
+    assert wb["Report"].data_validations.dataValidation[0].formula1 == f'"{sheet_name}!A1,other"'
+    wb.close()
+
+
+def test_rename_updates_both_native_table_formula_metadata_fields(tmp_path):
+    path = str(tmp_path / "table-formula-rename.xlsx")
+    wb = Workbook()
+    wb.active.title = "Data"
+    wb.active["A1"] = 10
+    report = wb.create_sheet("Report")
+    report.append(["Id", "Value"])
+    report.append([1, "=data!A1"])
+    table = Table(displayName="ReportTable", ref="A1:B2")
+    table._initialise_columns()
+    for column, name in zip(table.tableColumns, ["Id", "Value"]):
+        column.name = name
+    table.tableColumns[1].calculatedColumnFormula = TableFormula(attr_text="data!A1")
+    table.tableColumns[1].totalsRowFormula = TableFormula(attr_text='SUM(Data!A1)&"Data!A1"')
+    report.add_table(table)
+    wb.save(path)
+    wb.close()
+
+    rename_sheet(path, "Data", "Sales")
+    wb = load_workbook(path)
+    column = wb["Report"].tables["ReportTable"].tableColumns[1]
+    assert wb["Report"]["B2"].value == "='Sales'!A1"
+    assert column.calculatedColumnFormula.text == "'Sales'!A1"
+    assert column.totalsRowFormula.text == 'SUM(\'Sales\'!A1)&"Data!A1"'
     wb.close()
 
 

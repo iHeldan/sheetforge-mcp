@@ -817,6 +817,29 @@ def test_insert_row_rewrites_workbook_references_and_ranges(tmp_path):
     wb.close()
 
 
+@pytest.mark.parametrize("operation", [insert_row, delete_rows, insert_cols, delete_cols])
+def test_structure_changes_follow_case_variant_sheet_references(tmp_path, operation):
+    path = str(tmp_path / "case-reference.xlsx")
+    wb = Workbook()
+    wb.active.title = "Data"
+    wb.active["B2"] = 42
+    report = wb.create_sheet("Report")
+    report["A1"] = "=data!B2"
+    report["A2"] = "='dAtA'!B2"
+    report["A3"] = "=[Other.xlsx]Data!B2"
+    report["A4"] = '="data!B2"'
+    wb.save(path)
+    wb.close()
+    operation(path, "Data", 1)
+    coordinate = {insert_row: "B3", delete_rows: "B1", insert_cols: "C2", delete_cols: "A2"}[operation]
+    wb = load_workbook(path)
+    assert wb["Report"]["A1"].value == f"=data!{coordinate}"
+    assert wb["Report"]["A2"].value == f"='dAtA'!{coordinate}"
+    assert wb["Report"]["A3"].value == "=[Other.xlsx]Data!B2"
+    assert wb["Report"]["A4"].value == '="data!B2"'
+    wb.close()
+
+
 def test_delete_column_rewrites_workbook_references_and_ranges(tmp_path):
     filepath = tmp_path / "delete-column-structure.xlsx"
     wb = Workbook()

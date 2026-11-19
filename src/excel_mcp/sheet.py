@@ -188,19 +188,24 @@ def _update_workbook_formula_sheet_references(
     updated_count = 0
 
     for worksheet in getattr(workbook, "worksheets", []):
-        for row in worksheet.iter_rows():
-            for cell in row:
-                if not isinstance(cell.value, str) or not cell.value.startswith("="):
-                    continue
-                updated_value = _rewrite_sheet_reference_formula(
-                    cell.value,
-                    old_sheet_name=old_sheet_name,
-                    new_sheet_name=new_sheet_name,
-                )
-                if updated_value == cell.value:
-                    continue
-                cell.value = updated_value
-                updated_count += 1
+        for cell in list(worksheet._cells.values()):
+            if not isinstance(cell.value, str) or not cell.value.startswith("="):
+                continue
+            updated_value = _rewrite_sheet_reference_formula(
+                cell.value,
+                old_sheet_name=old_sheet_name,
+                new_sheet_name=new_sheet_name,
+            )
+            if updated_value == cell.value:
+                continue
+            cell.value = updated_value
+            updated_count += 1
+
+        for table in worksheet.tables.values():
+            updated_count += _rewrite_table_column_formulas(
+                table, source_sheet_name=old_sheet_name,
+                target_sheet_name=new_sheet_name, table_name_map={},
+            )
 
         for validation in getattr(getattr(worksheet, "data_validations", None), "dataValidation", []):
             for attr_name in ("formula1", "formula2"):
@@ -470,9 +475,9 @@ def _rewrite_reference_token_for_structure_change(
     local_reference = token_value
     if "!" in token_value:
         raw_sheet_prefix, local_reference = token_value.rsplit("!", 1)
-        if _normalize_sheet_reference_name(raw_sheet_prefix) != target_sheet_name:
+        if _normalize_sheet_reference_name(raw_sheet_prefix).casefold() != target_sheet_name.casefold():
             return token_value
-    elif formula_sheet_name != target_sheet_name:
+    elif formula_sheet_name is None or formula_sheet_name.casefold() != target_sheet_name.casefold():
         return token_value
 
     rewritten_local_reference = _rewrite_local_reference_for_structure_change(
