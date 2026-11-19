@@ -329,6 +329,18 @@ Returns matches under `data.matches`:
 - `read_excel_table(filepath: str, table_name: str, sheet_name: Optional[str] = None, start_row: int = 1, start_col: Optional[str] = None, end_col: Optional[str] = None, max_rows: Optional[int] = None, compact: bool = False, include_headers: bool = True, row_mode: str = "arrays", infer_schema: bool = False) -> str`
   Reads rows from a native Excel table by `table_name`, preserving the table's exact range instead of inferring worksheet bounds. Use `start_row` plus `max_rows` to paginate within table data rows, `start_col` / `end_col` to narrow the table width, and `include_headers=False` for follow-up pages after the first. Requested columns must fall inside the table range. When more rows remain, the response includes `next_start_row` for the next page. Responses also include `structure_token`, `content_token`, and `snapshot_metadata`.
 
+Multi-workbook alignment (Unreleased) uses actual headers, case-insensitively,
+while preserving punctuation and surrounding spaces. Reordered `Net Sales` and
+`Net-Sales` remain distinct. Empty/duplicate headers and aliases that resolve to
+different headers across sources fail explicitly; use exact, distinct headers.
+`strict` compares these header sets, not generated object-field names.
+Generated provenance/output headers must not collide with selected data headers.
+With `include_source_columns=False`, actual `_source_file`, `_source_sheet`, and
+`_source_table` data columns are returned unchanged rather than replaced by
+metadata. Reserved provenance references remain unavailable in query arguments.
+Lookup and union dedupe keys distinguish booleans from numbers and text;
+numerically equal `1` and `1.0` still match. Text case follows `case_sensitive`.
+
 ## Read, Search, And Write Tools
 
 - `write_data_to_excel(filepath: str, sheet_name: str, data: List[List], start_cell: str = "A1", dry_run: bool = False, include_changes: Optional[bool] = None) -> str`

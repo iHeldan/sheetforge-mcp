@@ -43,6 +43,114 @@ def _create_query_workbook(tmp_path, filename: str, headers: list[str], rows: li
     return filepath
 
 
+@pytest.mark.parametrize("schema_mode", ["strict", "intersect", "union"])
+def test_multi_workbook_alignment_uses_headers_not_positional_aliases(tmp_path, schema_mode):
+    paths = [
+        _create_query_workbook(tmp_path, "first.xlsx", ["Id", "Net Sales", "Net-Sales"], [(1, 100, 1)]),
+        _create_query_workbook(tmp_path, "second.xlsx", ["Id", "Net-Sales", "Net Sales"], [(2, 2, 200)]),
+    ]
+    result = union_tables_impl(paths, schema_mode=schema_mode, include_source_columns=False)
+    assert result["headers"] == ["Id", "Net Sales", "Net-Sales"]
+    assert result["rows"] == [[1, 100, 1], [2, 200, 2]]
+    filtered = bulk_filter_workbooks_impl(
+        paths, schema_mode=schema_mode, include_source_columns=False,
+        filters=[{"field": "Net Sales", "op": "gte", "value": 100}],
+    )
+    assert filtered["rows"] == result["rows"]
+    selected = union_tables_impl(
+        paths, schema_mode=schema_mode, select=["Net Sales"], include_source_columns=False,
+    )
+    assert selected["rows"] == [[100], [200]]
+    aggregate = bulk_aggregate_workbooks_impl(
+        paths, schema_mode=schema_mode, metrics=[{"op": "sum", "field": "Net Sales", "as": "Total"}],
+    )
+    assert aggregate["rows"] == [[300]]
+    source = _create_query_workbook(tmp_path, "source.xlsx", ["Id"], [(1,), (2,)])
+    lookup = cross_workbook_lookup_impl(
+        source, paths, source_key="Id", schema_mode=schema_mode,
+        include_lookup_source_columns=False, include_lookup_match_count=False,
+    )
+    assert lookup["rows"] == [[1, 100, 1], [2, 200, 2]]
+
+
+@pytest.mark.parametrize("operation", [union_tables_impl, bulk_filter_workbooks_impl])
+def test_multi_workbook_rejects_ambiguous_aliases_and_duplicate_headers(tmp_path, operation):
+    paths = [
+        _create_query_workbook(tmp_path, "first.xlsx", ["Net Sales", "Net-Sales"], [(100, 1)]),
+        _create_query_workbook(tmp_path, "second.xlsx", ["Net-Sales", "Net Sales"], [(2, 200)]),
+    ]
+    with pytest.raises(DataError, match="Ambiguous column alias"):
+        operation(paths, select=["net_sales"])
+    duplicate = _create_query_workbook(tmp_path, "duplicate.xlsx", ["Id", "Id"], [(1, 2)])
+    with pytest.raises(DataError, match="Ambiguous duplicate headers"):
+        operation([duplicate])
+
+
+@pytest.mark.parametrize("operation", [union_tables_impl, bulk_filter_workbooks_impl])
+@pytest.mark.parametrize("reserved", ["_source_file", "_source_sheet", "_source_table"])
+def test_omitting_provenance_preserves_same_named_user_columns(tmp_path, operation, reserved):
+    path = _create_query_workbook(tmp_path, "shadow.xlsx", ["Id", reserved], [(1, "user value")])
+    result = operation([path], include_source_columns=False)
+    assert result["headers"] == ["Id", reserved]
+    assert result["rows"] == [[1, "user value"]]
+    with pytest.raises(DataError, match="conflict with data headers"):
+        operation([path])
+
+
+@pytest.mark.parametrize("reserved", ["_lookup_match_count", "_lookup_source_file", "lookup_Name"])
+def test_lookup_rejects_generated_header_collisions(tmp_path, reserved):
+    source = _create_query_workbook(tmp_path, "source.xlsx", ["Id", reserved], [(1, "keep")])
+    lookup = _create_query_workbook(tmp_path, "lookup.xlsx", ["Id", "Name"], [(1, "new")])
+    with pytest.raises(DataError, match="conflict with data headers"):
+        cross_workbook_lookup_impl(source, [lookup], source_key="Id")
+
+
+@pytest.mark.parametrize("match_mode", ["first", "all", "error"])
+def test_lookup_keys_distinguish_boolean_number_and_text(tmp_path, match_mode):
+    source = _create_query_workbook(tmp_path, "source.xlsx", ["Id"], [(1,), (0,), (True,), (False,), ("1",)])
+    lookup = _create_query_workbook(
+        tmp_path, "lookup.xlsx", ["Id", "Name"],
+        [(True, "true"), (False, "false"), (1, "one"), (0, "zero"), ("1", "text")],
+    )
+    result = cross_workbook_lookup_impl(
+        source, [lookup], source_key="Id", match_mode=match_mode,
+        include_lookup_source_columns=False, include_lookup_match_count=False,
+    )
+    assert result["rows"] == [[1, "one"], [0, "zero"], [True, "true"], [False, "false"], ["1", "text"]]
+    assert result["lookup_key_summary"]["duplicate_keys"] == 0
+
+
+def test_union_dedupe_uses_type_aware_composite_keys(tmp_path):
+    path = _create_query_workbook(
+        tmp_path, "types.xlsx", ["Id", "Group"],
+        [(1, "a"), (True, "a"), (1.0, "a"), (0, "a"), (False, "a"), ("1", "a"), (1, "b")],
+    )
+    result = union_tables_impl([path], dedupe_on=["Id", "Group"], include_source_columns=False)
+    assert result["duplicates_removed"] == 1
+    assert len(result["rows"]) == 6
+
+
+def test_lookup_typed_keys_preserve_numeric_and_text_case_semantics():
+    from datetime import date
+    from excel_mcp.query import _normalize_lookup_key_value as key
+
+    assert key(1, case_sensitive=False) == key(1.0, case_sensitive=False)
+    assert key(True, case_sensitive=False) != key(1, case_sensitive=False)
+    assert key("ABC", case_sensitive=False) == key("abc", case_sensitive=False)
+    assert key("ABC", case_sensitive=True) != key("abc", case_sensitive=True)
+    assert key(date(2026, 1, 1), case_sensitive=False) != key("2026-01-01", case_sensitive=False)
+    assert key("  ", case_sensitive=False) is None
+
+
+@pytest.mark.parametrize("operation", [union_tables_impl, bulk_filter_workbooks_impl])
+def test_multi_workbook_exact_header_selection_keeps_surrounding_spaces(tmp_path, operation):
+    first = _create_query_workbook(tmp_path, "first.xlsx", ["Sales", " Sales "], [(1, 100)])
+    second = _create_query_workbook(tmp_path, "second.xlsx", [" Sales ", "Sales"], [(200, 2)])
+    result = operation([first, second], select=[" Sales "], include_source_columns=False)
+    assert result["headers"] == [" Sales "]
+    assert result["rows"] == [[100], [200]]
+
+
 @pytest.mark.parametrize("values", [[1e16, 1, -1e16], [-1e16, 1, 1e16], [1e16, 1, 1, -1e16]])
 def test_aggregate_preserves_small_adjustments_between_large_values(tmp_path, values):
     from decimal import Decimal

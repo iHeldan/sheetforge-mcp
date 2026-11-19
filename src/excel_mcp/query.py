@@ -163,7 +163,18 @@ def _load_source_dataset(
 
 
 def _field_keys(schema: List[Dict[str, Any]]) -> set[str]:
-    return {str(column["field"]).casefold() for column in schema}
+    keys = [_header_field_key(column["header"]) for column in schema]
+    if len(set(keys)) != len(keys):
+        raise DataError("Ambiguous duplicate headers across workbooks; use distinct explicit headers")
+    return set(keys)
+
+
+def _header_field_key(header: Any) -> str:
+    if header is None or not str(header).strip():
+        raise DataError("Multi-workbook alignment requires non-empty, distinct headers")
+    # Output aliases can change when colliding headers are reordered. They are
+    # not column identities: punctuation and whitespace in real headers matter.
+    return str(header).casefold()
 
 
 def _collect_aggregate_input_refs(
@@ -178,7 +189,7 @@ def _collect_aggregate_input_refs(
     def add_ref(value: Any) -> None:
         if not isinstance(value, str) or not value.strip():
             return
-        normalized = value.strip()
+        normalized = value
         ref_key = normalized.casefold()
         if ref_key in seen_refs:
             return
@@ -218,7 +229,7 @@ def _collect_query_input_refs(
     def add_ref(value: Any) -> None:
         if not isinstance(value, str) or not value.strip():
             return
-        normalized = value.strip()
+        normalized = value
         ref_key = normalized.casefold()
         if ref_key in seen_refs:
             return
@@ -250,7 +261,7 @@ def _collect_union_input_refs(
     def add_ref(value: Any) -> None:
         if not isinstance(value, str) or not value.strip():
             return
-        normalized = value.strip()
+        normalized = value
         ref_key = normalized.casefold()
         if ref_key in seen_refs:
             return
@@ -343,8 +354,9 @@ def _resolve_column_or_none(
 
 
 def _source_field_key_to_index(source: Dict[str, Any]) -> Dict[str, int]:
+    _field_keys(source["schema"])
     return {
-        str(column["field"]).casefold(): index
+        _header_field_key(column["header"]): index
         for index, column in enumerate(source["schema"])
     }
 
@@ -362,7 +374,7 @@ def _default_multi_workbook_columns(
 
     if schema_mode in {"strict", "intersect"}:
         for index, column in enumerate(sources[0]["schema"]):
-            field_key = str(column["field"]).casefold()
+            field_key = _header_field_key(column["header"])
             if schema_mode == "intersect" and field_key not in shared_field_keys:
                 continue
             columns.append(
@@ -377,7 +389,7 @@ def _default_multi_workbook_columns(
     seen_field_keys: set[str] = set()
     for source in sources:
         for index, column in enumerate(source["schema"]):
-            field_key = str(column["field"]).casefold()
+            field_key = _header_field_key(column["header"])
             if field_key in seen_field_keys:
                 continue
             seen_field_keys.add(field_key)
@@ -396,29 +408,38 @@ def _resolve_multi_workbook_columns(
     sources: List[Dict[str, Any]],
     *,
     schema_mode: str,
-    source_column_flag_name: str = "include_source_columns",
+    source_column_flag_name: Optional[str] = "include_source_columns",
 ) -> List[Dict[str, Any]]:
     columns: List[Dict[str, Any]] = []
     seen_field_keys: set[str] = set()
 
     for ref in refs:
-        _reject_source_column_ref(
-            ref,
-            argument_name="column reference",
-            suggested_flag_name=source_column_flag_name,
-        )
+        if source_column_flag_name is not None:
+            _reject_source_column_ref(
+                ref,
+                argument_name="column reference",
+                suggested_flag_name=source_column_flag_name,
+            )
         resolved_header = None
         resolved_field_key = None
         resolved_field = None
 
-        for source in sources:
+        exact_sources = [source for source in sources if ref in source["headers"]]
+        resolved_keys = set()
+        for source in exact_sources or sources:
             resolved = _resolve_column_or_none(ref, source["headers"], source["schema"])
             if resolved is None:
                 continue
-            resolved_index, resolved_header = resolved
-            resolved_field_key = str(source["schema"][resolved_index]["field"]).casefold()
-            resolved_field = source["schema"][resolved_index]["field"]
-            break
+            resolved_index, header = resolved
+            key = _header_field_key(source["headers"][resolved_index])
+            resolved_keys.add(key)
+            if resolved_field_key is None:
+                resolved_header = header
+                resolved_field_key = key
+                resolved_field = source["schema"][resolved_index]["field"]
+
+        if len(resolved_keys) > 1:
+            raise DataError(f"Ambiguous column alias '{ref}' across workbooks; use an exact header")
 
         if resolved_header is None or resolved_field_key is None or resolved_field is None:
             raise DataError(f"Column '{ref}' was not found in any selected workbook")
@@ -705,7 +726,7 @@ def _deduplicate_rows(
     duplicates_removed = 0
     for row in rows:
         dedupe_key = tuple(
-            _stringify_value_for_uniqueness(row[column_index] if column_index < len(row) else None)
+            _typed_key_value(row[column_index] if column_index < len(row) else None)
             for column_index, _ in dedupe_specs
         )
         if dedupe_key in seen_keys:
@@ -734,10 +755,26 @@ def _validate_lookup_match_mode(match_mode: str) -> None:
 def _normalize_lookup_key_value(value: Any, *, case_sensitive: bool) -> Any:
     if _is_blank(value):
         return None
-    normalized = _stringify_value_for_uniqueness(value)
-    if isinstance(normalized, str) and not case_sensitive:
-        return normalized.casefold()
-    return normalized
+    if isinstance(value, str) and not case_sensitive:
+        value = value.casefold()
+    return _typed_key_value(value)
+
+
+def _typed_key_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if _is_numeric(value):
+        return ("number", value)
+    return (type(value).__name__, _stringify_value_for_uniqueness(value))
+
+
+def _check_output_headers(headers: List[Any]) -> None:
+    keys = [_header_field_key(header) for header in headers]
+    if len(set(keys)) != len(keys):
+        raise DataError(
+            "Generated output columns conflict with data headers; select distinct columns "
+            "or disable source/match metadata"
+        )
 
 
 def _lookup_output_header(column: Dict[str, Any]) -> str:
@@ -1214,6 +1251,9 @@ def bulk_filter_workbooks(
             select=select,
             sort_by=sort_by,
         )
+        _resolve_multi_workbook_columns(
+            query_refs, sources, schema_mode=schema_mode,
+        )
         if select is None:
             data_columns = _default_multi_workbook_columns(
                 sources,
@@ -1229,9 +1269,9 @@ def bulk_filter_workbooks(
         if not data_columns and not include_source_columns:
             raise DataError("No data columns are available to return for the selected workbooks")
 
-        combined_headers = list(MULTI_WORKBOOK_SOURCE_HEADERS) + [
-            column["header"] for column in data_columns
-        ]
+        source_headers = list(MULTI_WORKBOOK_SOURCE_HEADERS) if include_source_columns else []
+        combined_headers = source_headers + [column["header"] for column in data_columns]
+        _check_output_headers(combined_headers)
         combined_rows: List[List[Any]] = []
         source_rows_by_file: Dict[str, List[List[Any]]] = {}
         for source in sources:
@@ -1241,7 +1281,7 @@ def bulk_filter_workbooks(
                     source["file_name"],
                     source["sheet_name"],
                     source["table_name"],
-                ]
+                ] if include_source_columns else []
                 output_row.extend(
                     row[source["field_key_to_index"][column["field_key"]]]
                     if column["field_key"] in source["field_key_to_index"]
@@ -1277,10 +1317,7 @@ def bulk_filter_workbooks(
 
         effective_select: Optional[List[str]]
         if select is None:
-            if include_source_columns:
-                effective_select = None
-            else:
-                effective_select = [column["header"] for column in data_columns]
+            effective_select = None
         else:
             effective_select = list(select)
             if include_source_columns:
@@ -1442,6 +1479,9 @@ def union_tables(
             sort_by=sort_by,
             dedupe_on=dedupe_on,
         )
+        _resolve_multi_workbook_columns(
+            union_refs, sources, schema_mode=schema_mode,
+        )
         if select is None:
             data_columns = _default_multi_workbook_columns(
                 sources,
@@ -1457,9 +1497,9 @@ def union_tables(
         if not data_columns and not include_source_columns:
             raise DataError("No data columns are available to return for the selected workbooks")
 
-        combined_headers = list(MULTI_WORKBOOK_SOURCE_HEADERS) + [
-            column["header"] for column in data_columns
-        ]
+        source_headers = list(MULTI_WORKBOOK_SOURCE_HEADERS) if include_source_columns else []
+        combined_headers = source_headers + [column["header"] for column in data_columns]
+        _check_output_headers(combined_headers)
         combined_rows: List[List[Any]] = []
         for source in sources:
             for row in source["rows"]:
@@ -1467,7 +1507,7 @@ def union_tables(
                     source["file_name"],
                     source["sheet_name"],
                     source["table_name"],
-                ]
+                ] if include_source_columns else []
                 output_row.extend(
                     row[source["field_key_to_index"][column["field_key"]]]
                     if column["field_key"] in source["field_key_to_index"]
@@ -1505,10 +1545,7 @@ def union_tables(
 
         effective_select: Optional[List[str]]
         if select is None:
-            if include_source_columns:
-                effective_select = None
-            else:
-                effective_select = [column["header"] for column in data_columns]
+            effective_select = None
         else:
             effective_select = list(select)
             if include_source_columns:
@@ -1699,7 +1736,7 @@ def cross_workbook_lookup(
                     f"'{source_dataset['file_name']}'"
                 )
             lookup_key_index, resolved_lookup_key = resolved
-            field_key = str(source_dataset["schema"][lookup_key_index]["field"]).casefold()
+            field_key = _header_field_key(source_dataset["headers"][lookup_key_index])
             if lookup_key_field_key is None:
                 lookup_key_field_key = field_key
             elif field_key != lookup_key_field_key:
@@ -1825,6 +1862,7 @@ def cross_workbook_lookup(
             _lookup_output_header(column) for column in lookup_output_columns
         ]
         output_headers.extend(output_lookup_headers)
+        _check_output_headers(output_headers)
 
         matched_source_rows = 0
         unmatched_source_rows = 0
@@ -2082,32 +2120,21 @@ def bulk_aggregate_workbooks(
         )
 
         combined_headers: List[Any] = []
+        input_columns = []
         for ref in input_refs:
-            resolved_header = None
-            for source in sources:
-                resolved = _resolve_column_or_none(ref, source["headers"], source["schema"])
-                if resolved is not None:
-                    _, resolved_header = resolved
-                    break
-            if resolved_header is None:
-                raise DataError(f"Column '{ref}' was not found in any selected workbook")
-            combined_headers.append(resolved_header)
+            column = _resolve_multi_workbook_columns(
+                [ref], sources, schema_mode=schema_mode, source_column_flag_name=None,
+            )[0]
+            input_columns.append(column)
+            combined_headers.append(column["header"])
 
         combined_rows: List[List[Any]] = []
         source_rows_by_file: Dict[str, List[List[Any]]] = {}
         for source in sources:
             resolved_indexes: List[Optional[int]] = []
-            for ref in input_refs:
-                resolved = _resolve_column_or_none(ref, source["headers"], source["schema"])
-                if resolved is None:
-                    if schema_mode == "union":
-                        resolved_indexes.append(None)
-                        continue
-                    raise DataError(
-                        f"schema_mode '{schema_mode}' requires column '{ref}' in workbook "
-                        f"'{source['file_name']}'"
-                    )
-                resolved_indexes.append(resolved[0])
+            source_indexes = _source_field_key_to_index(source)
+            for column in input_columns:
+                resolved_indexes.append(source_indexes.get(column["field_key"]))
 
             unified_rows: List[List[Any]] = []
             for row in source["rows"]:

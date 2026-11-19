@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Multi-workbook alignment uses distinct real headers rather than position-dependent generated aliases. Ambiguous aliases and duplicate headers fail explicitly. Disabling provenance preserves same-named user columns; generated output-name collisions are rejected rather than shadowing values. Lookup and union deduplication distinguish boolean, numeric, text, and date keys while keeping equal numeric values equivalent.
 - Sheet renaming rewrites reference tokens rather than quoted formula text, follows case-insensitive sheet references, and updates native-table calculated-column and totals formulas. Row and column edits also recognize case-variant sheet qualifiers.
 - Standalone workbook saves now reject observed external changes before replacement, compare the reopened file with the exact candidate, and retain the original backup rather than rolling back over an outside save. Structured `write_recovery_required` errors require inspection before retrying. Creation uses non-overwriting publication even if another writer creates the destination concurrently.
 - ChangeSet commits compare the reopened file with the exact inspected candidate. Rollback checks the live file again before replacement and refuses to overwrite observed external changes, retaining a recovery baseline and returning `changeset_recovery_required`. Both standard and preserving saves use these checks.
