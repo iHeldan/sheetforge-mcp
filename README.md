@@ -156,6 +156,11 @@ path in normal stdio. No automatic basename fallback or relocation occurs. See
 | `EXCEL_FILES_PATH` | `./excel_files` | HTTP and SSE | Base directory for relative workbook paths |
 | `SHEETFORGE_ALLOW_REMOTE` | unset | HTTP and SSE | Required opt-in for any non-loopback bind; does not add authentication |
 
+All transports also enforce early XLSX input budgets before XML expansion.
+Server operators can configure compressed/member/total/directory byte limits
+and member counts using the `SHEETFORGE_XLSX_MAX_*` settings. See
+[XLSX input limits and safe recovery](docs/xlsx-input-limits.md).
+
 ## Tooling Overview
 
 Worksheet tabs and native Excel tables have separate names. For a named source,

@@ -1405,7 +1405,7 @@ def describe_dataset(
             sample_rows=sample_rows,
             read_boundary_mode=read_boundary_mode,
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to describe dataset: {e}")
@@ -1557,7 +1557,7 @@ def suggest_read_strategy(
             "alternatives": alternatives,
             "observations": observations,
         }
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to suggest read strategy: {e}")
@@ -1742,7 +1742,7 @@ def read_excel_range(
                     data.append(row_data)
 
             return data
-    except DataError as e:
+    except (DataError, PreconditionFailedError) as e:
         logger.error(str(e))
         raise
     except Exception as e:
@@ -1902,7 +1902,7 @@ def _write_data(
         return result
     except (PreconditionFailedError, ResponseTooLargeError):
         raise
-    except DataError as e:
+    except (DataError, PreconditionFailedError) as e:
         logger.error(str(e))
         raise
     except Exception as e:
@@ -1938,7 +1938,7 @@ def _write_data_to_worksheet(
                 ):
                     continue
                 cell.value = val
-    except DataError as e:
+    except (DataError, PreconditionFailedError) as e:
         logger.error(str(e))
         raise
     except Exception as e:
@@ -2135,7 +2135,7 @@ def read_excel_range_with_metadata(
 
             return range_data
 
-    except DataError as e:
+    except (DataError, PreconditionFailedError) as e:
         logger.error(str(e))
         raise
     except Exception as e:
@@ -2185,7 +2185,7 @@ def read_as_table(
                 infer_schema=infer_schema,
                 read_boundary_mode=read_boundary_mode,
             )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to read as table: {e}")
@@ -2341,7 +2341,7 @@ def quick_read(
             )
             result["auto_selected_sheet"] = auto_selected_sheet
             return result
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to quick read: {e}")
@@ -2402,7 +2402,7 @@ def search_cells(
                         return results
 
             return results
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to search cells: {e}")

@@ -24,7 +24,7 @@ try:
 except ImportError:  # pragma: no cover - POSIX platforms
     msvcrt = None
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from openpyxl.utils.cell import quote_sheetname
@@ -33,6 +33,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from .exceptions import PreconditionFailedError, ResponseTooLargeError, WorkbookError, WorkbookRecoveryError
 from .mutation import record_verified_commit
+from .xlsx_input import load_workbook_checked as load_workbook
 
 logger = logging.getLogger(__name__)
 

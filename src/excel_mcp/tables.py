@@ -289,7 +289,7 @@ def create_excel_table(
             "range": data_range
         }
 
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to create table: {e}")
@@ -318,7 +318,7 @@ def list_excel_tables(
 
             return tables
 
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to list tables: {e}")
@@ -435,7 +435,7 @@ def read_excel_table(
                 filepath=filepath,
             )
 
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to read table: {e}")

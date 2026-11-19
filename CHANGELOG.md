@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Workbook loading now checks configurable XLSX ZIP byte/count budgets before XML expansion and entry-object allocation. Actual central-directory records are checked against declared counts; the checked descriptor is reused for loading. Duplicate/unsafe entries and unsupported encryption/compression are rejected without weakening transport path confinement or preserving-mode limits.
 - Filtering, grouping, distinct counts and pivots now share typed scalar identity: booleans no longer merge with equal-valued numbers. Pivot numeric metrics share the checked aggregation implementation instead of counting booleans as numeric values.
 - Cell/row mutation responses are budgeted before replacement, so response-size errors cannot duplicate appends on retry. Committed metadata failures are explicit warnings; late ordinary-save response failures retain verified commit evidence and unsafe-retry guidance instead of masquerading as an untouched workbook.
 - Standard cell and row writers reject values that would silently lose precision or text, verify written cells in the serialized candidate, distinguish boolean row keys and value changes, and derive row-write content tokens from that candidate rather than unsaved Python values.

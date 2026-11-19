@@ -17,7 +17,7 @@ import stat
 import tempfile
 from typing import Any, Callable
 
-from openpyxl import load_workbook
+from .xlsx_input import load_workbook_checked as load_workbook
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 

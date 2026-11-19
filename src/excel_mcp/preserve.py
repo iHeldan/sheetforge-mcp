@@ -17,7 +17,7 @@ from xml.sax.saxutils import escape
 from zipfile import BadZipFile, ZIP_DEFLATED, ZIP_STORED, ZipFile
 from zlib import error as ZlibError
 
-from openpyxl import load_workbook
+from .xlsx_input import inspect_xlsx, load_workbook_checked as load_workbook, WorkbookInputError
 from openpyxl.cell.cell import ERROR_CODES
 from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_boundaries
 
@@ -607,6 +607,7 @@ def build_preserving_candidate(baseline: Path, candidate: Path, operations):
     if any(op["tool"] != "write_data_to_excel" for op in operations):
         _unsupported("unsupported_operation")
     try:
+        inspect_xlsx(baseline)
         with ZipFile(baseline) as source:
             scan = _Archive(source)
             inventory = _package_profile(scan)
@@ -687,6 +688,8 @@ def build_preserving_candidate(baseline: Path, candidate: Path, operations):
                         _unsupported("candidate_value_mismatch")
         finally:
             book.close()
+    except WorkbookInputError:
+        _unsupported("input_policy")
     except _Unverified as exc:
         _unsupported(str(exc))
     except (

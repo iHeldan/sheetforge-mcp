@@ -12,7 +12,7 @@ from .data import (
     quick_read,
     read_as_table,
 )
-from .exceptions import DataError
+from .exceptions import DataError, PreconditionFailedError
 from .values import value_key
 from .tables import read_excel_table
 
@@ -349,7 +349,7 @@ def _resolve_column_or_none(
             schema,
             argument_name="column",
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         return None
 
 
@@ -1169,7 +1169,7 @@ def query_table(
             row_mode=row_mode,
             infer_schema=infer_schema,
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to query table data: {e}")
@@ -1401,7 +1401,7 @@ def bulk_filter_workbooks(
             row_mode=row_mode,
             infer_schema=infer_schema,
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to filter multiple workbooks: {e}")
@@ -1616,7 +1616,7 @@ def union_tables(
             row_mode=row_mode,
             infer_schema=infer_schema,
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to union multiple workbooks: {e}")
@@ -1996,7 +1996,7 @@ def cross_workbook_lookup(
             row_mode=row_mode,
             infer_schema=infer_schema,
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to run cross-workbook lookup: {e}")
@@ -2049,7 +2049,7 @@ def aggregate_table(
                 "source_row_count": source["total_rows"],
             },
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to aggregate table data: {e}")
@@ -2195,7 +2195,7 @@ def bulk_aggregate_workbooks(
                 },
             },
         )
-    except DataError:
+    except (DataError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to aggregate multiple workbooks: {e}")
