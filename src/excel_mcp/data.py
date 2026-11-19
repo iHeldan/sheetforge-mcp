@@ -17,6 +17,7 @@ from .exceptions import DataError, PreconditionFailedError
 from .cell_utils import parse_cell_range
 from .cell_validation import get_data_validation_for_cell
 from .package_fidelity import inspect_package_fidelity
+from .values import cell_values_equal, validate_cell_value, value_key, verify_cell_writes
 from .workbook import first_worksheet, require_worksheet, safe_workbook, worksheet_not_found_error
 
 logger = logging.getLogger(__name__)
@@ -1776,6 +1777,10 @@ def _write_data(
     package_report: Dict[str, Any] = {}
 
     def check_candidate(baseline: Path, candidate: Path) -> None:
+        with safe_workbook(str(candidate)) as saved:
+            verify_cell_writes(saved, expected_writes)
+        if not check_package:
+            return
         package_report.update(inspect_package_fidelity(
             baseline, candidate,
             changed_cells={(change["sheet_name"], change["cell"]) for change in changes},
@@ -1793,9 +1798,16 @@ def _write_data(
         if not data:
             raise DataError("No data provided to write")
 
+        expected_writes = {}
+        for row in data:
+            if not isinstance(row, list):
+                raise DataError("Data must be a 2D list")
+            for value in row:
+                validate_cell_value(value)
+
         with safe_workbook(
             filepath, save=not dry_run,
-            candidate_check=check_candidate if check_package else None,
+            candidate_check=check_candidate,
         ) as wb:
             # If no sheet specified, use active sheet
             if not sheet_name:
@@ -1845,9 +1857,10 @@ def _write_data(
                     row_idx = start_row + i
                     col_idx = start_col + j
                     old_value = None if existing_ws is None else existing_ws.cell(row=row_idx, column=col_idx).value
+                    expected_writes[(sheet_name, row_idx, col_idx)] = val
                     if isinstance(old_value, CellRichText):
                         old_value = str(old_value)
-                    if old_value != val or isinstance(old_value, bool) != isinstance(val, bool):
+                    if not cell_values_equal(old_value, val):
                         changes.append(
                             _build_cell_change(
                                 sheet_name=sheet_name,
@@ -1914,6 +1927,7 @@ def _write_data_to_worksheet(
         # Write data
         for i, row in enumerate(data):
             for j, val in enumerate(row):
+                validate_cell_value(val)
                 cell = worksheet.cell(row=start_row + i, column=start_col + j)
                 if (
                     isinstance(cell.value, CellRichText) and isinstance(val, str)
@@ -2409,7 +2423,21 @@ def append_table_rows(
         if not all(isinstance(row, dict) for row in rows):
             raise DataError("Rows must be a list of objects keyed by column name")
 
-        with safe_workbook(str(filepath), save=not dry_run) as wb:
+        for record in rows:
+            for value in record.values():
+                validate_cell_value(value)
+        expected_writes = {}
+        new_dataset_tokens = {}
+
+        def check_candidate(baseline, candidate):
+            with safe_workbook(str(candidate)) as saved:
+                verify_cell_writes(saved, expected_writes)
+                new_dataset_tokens.clear()
+                new_dataset_tokens.update(_worksheet_dataset_tokens(
+                    saved[sheet_name], sheet_name=sheet_name, header_row=header_row,
+                ))
+
+        with safe_workbook(str(filepath), save=not dry_run, candidate_check=check_candidate) as wb:
             ws = require_worksheet(
                 wb,
                 sheet_name,
@@ -2479,7 +2507,7 @@ def append_table_rows(
                         continue
                     new_value = row_data[column_name]
                     old_value = ws.cell(row=target_row, column=col_idx).value
-                    if old_value != new_value:
+                    if not cell_values_equal(old_value, new_value):
                         changes.append(
                             _build_cell_change(
                                 sheet_name=sheet_name,
@@ -2490,7 +2518,8 @@ def append_table_rows(
                                 column_name=column_name,
                             )
                         )
-                    ws.cell(row=target_row, column=col_idx, value=new_value)
+                    expected_writes[(sheet_name, target_row, col_idx)] = new_value
+                    ws.cell(row=target_row, column=col_idx).value = new_value
 
             end_row = next_row + len(rows) - 1
             target_range = _range_string(
@@ -2499,11 +2528,11 @@ def append_table_rows(
                 end_row,
                 max(header_map.values()),
             )
-            new_dataset_tokens = _worksheet_dataset_tokens(
+            new_dataset_tokens.update(_worksheet_dataset_tokens(
                 ws,
                 sheet_name=sheet_name,
                 header_row=header_row,
-            )
+            ))
 
         result = {
             "message": f"{'Previewed' if dry_run else 'Appended'} {len(rows)} row(s) to {sheet_name}",
@@ -2547,7 +2576,21 @@ def update_rows_by_key(
         if not all(isinstance(update, dict) for update in updates):
             raise DataError("Updates must be a list of objects keyed by column name")
 
-        with safe_workbook(str(filepath), save=not dry_run) as wb:
+        for record in updates:
+            for value in record.values():
+                validate_cell_value(value)
+        expected_writes = {}
+        new_dataset_tokens = {}
+
+        def check_candidate(baseline, candidate):
+            with safe_workbook(str(candidate)) as saved:
+                verify_cell_writes(saved, expected_writes)
+                new_dataset_tokens.clear()
+                new_dataset_tokens.update(_worksheet_dataset_tokens(
+                    saved[sheet_name], sheet_name=sheet_name, header_row=header_row,
+                ))
+
+        with safe_workbook(str(filepath), save=not dry_run, candidate_check=check_candidate) as wb:
             ws = require_worksheet(
                 wb,
                 sheet_name,
@@ -2585,9 +2628,9 @@ def update_rows_by_key(
                 key_value = ws.cell(row=row_idx, column=key_col_idx).value
                 if key_value is None:
                     continue
-                if key_value in row_lookup:
+                if value_key(key_value) in row_lookup:
                     raise DataError(f"Duplicate key '{key_value}' found in column '{key_column}'")
-                row_lookup[key_value] = row_idx
+                row_lookup[value_key(key_value)] = row_idx
 
             seen_update_keys = set()
             changes: List[Dict[str, Any]] = []
@@ -2599,11 +2642,11 @@ def update_rows_by_key(
                     raise DataError(f"Update row is missing key column '{key_column}'")
 
                 key_value = update[key_column]
-                if key_value in seen_update_keys:
+                if value_key(key_value) in seen_update_keys:
                     raise DataError(f"Duplicate update key '{key_value}' provided")
-                seen_update_keys.add(key_value)
+                seen_update_keys.add(value_key(key_value))
 
-                target_row = row_lookup.get(key_value)
+                target_row = row_lookup.get(value_key(key_value))
                 if target_row is None:
                     missing_keys.append(key_value)
                     continue
@@ -2616,7 +2659,7 @@ def update_rows_by_key(
                     col_idx = header_map[column_name]
                     cell = ws.cell(row=target_row, column=col_idx)
                     old_value = cell.value
-                    if old_value == new_value:
+                    if cell_values_equal(old_value, new_value):
                         continue
 
                     changes.append(
@@ -2629,13 +2672,14 @@ def update_rows_by_key(
                             column_name=column_name,
                         )
                     )
+                    expected_writes[(sheet_name, target_row, col_idx)] = new_value
                     cell.value = new_value
 
-            new_dataset_tokens = _worksheet_dataset_tokens(
+            new_dataset_tokens.update(_worksheet_dataset_tokens(
                 ws,
                 sheet_name=sheet_name,
                 header_row=header_row,
-            )
+            ))
 
         updated_rows = len(matched_keys)
         message = (

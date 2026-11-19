@@ -14,6 +14,7 @@ from .data import (
     _table_dataset_tokens,
     augment_tabular_payload,
 )
+from .values import cell_values_equal, validate_cell_value, value_key, verify_cell_writes
 from .exceptions import DataError, PreconditionFailedError
 from .workbook import _sheet_type, require_worksheet, safe_workbook, worksheet_not_found_error
 
@@ -458,7 +459,25 @@ def upsert_excel_table_rows(
         if not all(isinstance(row, dict) for row in rows):
             raise DataError("Rows must be a list of objects keyed by column name")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        for record in rows:
+            for value in record.values():
+                validate_cell_value(value)
+        expected_writes = {}
+        new_dataset_tokens = {}
+
+        def check_candidate(baseline, candidate):
+            with safe_workbook(str(candidate)) as saved:
+                verify_cell_writes(saved, expected_writes)
+                saved_ws = saved[current_sheet_name]
+                new_dataset_tokens.clear()
+                new_dataset_tokens.update(_table_dataset_tokens(
+                    saved_ws, sheet_name=current_sheet_name, table_name=table.displayName,
+                    table_range=table.ref, headers=[header for header, _ in ordered_columns],
+                    header_row_count=int(table.headerRowCount or 0),
+                    totals_row_count=int(table.totalsRowCount or 0), totals_row_shown=bool(table.totalsRowShown),
+                ))
+
+        with safe_workbook(filepath, save=not dry_run, candidate_check=check_candidate) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
             header_map = _table_header_map(ws, table)
             previous_dataset_tokens = _table_dataset_tokens(
@@ -503,11 +522,11 @@ def upsert_excel_table_rows(
                     key_value = ws.cell(row=row_index, column=key_col_idx).value
                     if key_value is None:
                         continue
-                    if key_value in row_lookup:
+                    if value_key(key_value) in row_lookup:
                         raise DataError(
                             f"Duplicate key '{key_value}' found in table '{table.displayName}'"
                         )
-                    row_lookup[key_value] = row_index
+                    row_lookup[value_key(key_value)] = row_index
 
             seen_update_keys: set[Any] = set()
             update_rows: list[tuple[int, dict[str, Any]]] = []
@@ -521,11 +540,11 @@ def upsert_excel_table_rows(
                 key_value = row_data[key_column]
                 if key_value is None:
                     raise DataError(f"Key column '{key_column}' cannot be null")
-                if key_value in seen_update_keys:
+                if value_key(key_value) in seen_update_keys:
                     raise DataError(f"Duplicate input key '{key_value}' provided")
-                seen_update_keys.add(key_value)
+                seen_update_keys.add(value_key(key_value))
 
-                target_row = row_lookup.get(key_value)
+                target_row = row_lookup.get(value_key(key_value))
                 if target_row is None:
                     append_rows.append(row_data)
                     continue
@@ -536,7 +555,7 @@ def upsert_excel_table_rows(
                         continue
                     col_idx = header_map[column_name]
                     old_value = ws.cell(row=target_row, column=col_idx).value
-                    if old_value == new_value:
+                    if cell_values_equal(old_value, new_value):
                         continue
                     changes.append(
                         _build_cell_change(
@@ -597,6 +616,7 @@ def upsert_excel_table_rows(
                 for column_name, new_value in row_data.items():
                     if column_name == key_column:
                         continue
+                    expected_writes[(current_sheet_name, target_row, header_map[column_name])] = new_value
                     ws.cell(row=target_row, column=header_map[column_name]).value = new_value
 
             for row_offset, row_data in enumerate(append_rows):
@@ -604,12 +624,13 @@ def upsert_excel_table_rows(
                 for column_name, col_idx in ordered_columns:
                     if column_name not in row_data:
                         continue
-                    ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
+                    expected_writes[(current_sheet_name, target_row, col_idx)] = row_data[column_name]
+                    ws.cell(row=target_row, column=col_idx).value = row_data[column_name]
 
             if append_rows:
                 _expand_table_range(table, table_range)
 
-            new_dataset_tokens = _table_dataset_tokens(
+            new_dataset_tokens.update(_table_dataset_tokens(
                 ws,
                 sheet_name=current_sheet_name,
                 table_name=table.displayName,
@@ -618,7 +639,7 @@ def upsert_excel_table_rows(
                 header_row_count=int(table.headerRowCount or 0),
                 totals_row_count=int(table.totalsRowCount or 0),
                 totals_row_shown=bool(table.totalsRowShown),
-            )
+            ))
 
         appended_keys = [row[key_column] for row in append_rows]
         updated_keys = [row_data[key_column] for _, row_data in update_rows]
@@ -672,7 +693,25 @@ def append_excel_table_rows(
         if not all(isinstance(row, dict) for row in rows):
             raise DataError("Rows must be a list of objects keyed by column name")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        for record in rows:
+            for value in record.values():
+                validate_cell_value(value)
+        expected_writes = {}
+        new_dataset_tokens = {}
+
+        def check_candidate(baseline, candidate):
+            with safe_workbook(str(candidate)) as saved:
+                verify_cell_writes(saved, expected_writes)
+                saved_ws = saved[current_sheet_name]
+                new_dataset_tokens.clear()
+                new_dataset_tokens.update(_table_dataset_tokens(
+                    saved_ws, sheet_name=current_sheet_name, table_name=table.displayName,
+                    table_range=table.ref, headers=[header for header, _ in ordered_columns],
+                    header_row_count=int(table.headerRowCount or 0),
+                    totals_row_count=int(table.totalsRowCount or 0), totals_row_shown=bool(table.totalsRowShown),
+                ))
+
+        with safe_workbook(filepath, save=not dry_run, candidate_check=check_candidate) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
             header_map = _table_header_map(ws, table)
             ordered_columns = sorted(header_map.items(), key=lambda item: item[1])
@@ -753,10 +792,11 @@ def append_excel_table_rows(
                 for column_name, col_idx in ordered_columns:
                     if column_name not in row_data:
                         continue
-                    ws.cell(row=target_row, column=col_idx, value=row_data[column_name])
+                    expected_writes[(current_sheet_name, target_row, col_idx)] = row_data[column_name]
+                    ws.cell(row=target_row, column=col_idx).value = row_data[column_name]
             _expand_table_range(table, table_range)
 
-            new_dataset_tokens = _table_dataset_tokens(
+            new_dataset_tokens.update(_table_dataset_tokens(
                 ws,
                 sheet_name=current_sheet_name,
                 table_name=table.displayName,
@@ -765,7 +805,7 @@ def append_excel_table_rows(
                 header_row_count=int(table.headerRowCount or 0),
                 totals_row_count=int(table.totalsRowCount or 0),
                 totals_row_shown=bool(table.totalsRowShown),
-            )
+            ))
 
         result = {
             "message": (

@@ -344,6 +344,12 @@ numerically equal `1` and `1.0` still match. Text case follows `case_sensitive`.
 
 ## Read, Search, And Write Tools
 
+Standard cell and row writes validate supported values and verify requested
+cells in the serialized candidate before saving. Precision-losing numbers,
+overlong/empty text and unsupported text/date encodings fail without writing;
+no automatic text conversion or truncation. Boolean keys and values are distinct
+from numbers. See [standard write value safety](docs/value-safety.md).
+
 - `write_data_to_excel(filepath: str, sheet_name: str, data: List[List], start_cell: str = "A1", dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Writes tabular data starting at the given cell. Missing target sheets are created automatically. Returns compact summaries by default on committed writes, and detailed `changes` during previews unless explicitly disabled.
   `dry_run=true` inspects an isolated serialized candidate and returns `data.package_fidelity` and `data.ready_to_commit`. An actual write independently refuses blocked or unverified package checks with `write_package_fidelity_failed` before replacing the source. This is not a pin to the previewed source bytes; for that, use ChangeSet. See [XLSX fidelity checks](docs/xlsx-fidelity.md).
