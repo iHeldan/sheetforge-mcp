@@ -31,7 +31,8 @@ from openpyxl.utils.cell import quote_sheetname
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .exceptions import PreconditionFailedError, WorkbookError, WorkbookRecoveryError
+from .exceptions import PreconditionFailedError, ResponseTooLargeError, WorkbookError, WorkbookRecoveryError
+from .mutation import record_verified_commit
 
 logger = logging.getLogger(__name__)
 
@@ -2906,7 +2907,8 @@ def _persist_workbook_atomically(
                              "retry_safe": False, "rollback_status": "unverified"},
                 ) from verification_error
             raise verification_error
-    except PreconditionFailedError:
+        record_verified_commit(destination, candidate_state[1])
+    except (PreconditionFailedError, ResponseTooLargeError):
         raise
     except Exception as exc:
         raise WorkbookError(f"Failed to save workbook atomically: {exc!s}") from exc

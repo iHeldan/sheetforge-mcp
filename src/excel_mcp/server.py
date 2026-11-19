@@ -9,6 +9,7 @@ from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
+from .mutation import RESPONSE_RESERVE, bind_response_target, response_scope
 
 # Import exceptions
 from excel_mcp.exceptions import (
@@ -410,14 +411,34 @@ def _error_response(operation: str, error: Exception) -> str:
 
 
 def _run_tool(operation: str, action: Callable[[], Any], *, message: Optional[str] = None) -> str:
-    try:
-        return _success_response(operation, result=action(), message=message)
-    except HANDLED_TOOL_ERRORS as e:
-        logger.error("%s failed: %s", operation, e)
-        return _error_response(operation, e)
-    except Exception as e:
-        logger.exception("Unhandled error in %s", operation)
-        return _error_response(operation, e)
+    def check(result):
+        _success_response(operation, result=result, _response_reserve=" " * RESPONSE_RESERVE)
+
+    with response_scope(check) as state:
+        try:
+            result = action()
+        except Exception as error:
+            reported_error = error
+            if state.committed_sha256 is not None:
+                reported_error = PreconditionFailedError(
+                    "The workbook was saved, but a subsequent step failed. Read back before any retry.",
+                    code="write_committed_followup_failed",
+                    details={"persisted": True, "retry_safe": False, "after_sha256": state.committed_sha256},
+                )
+            logger.error("%s failed: %s", operation, type(reported_error).__name__)
+            return _error_response(operation, reported_error)
+        try:
+            return _success_response(operation, result=result, message=message)
+        except Exception as error:
+            if state.committed_sha256 is not None:
+                return _serialize_json({
+                    "ok": True, "operation": operation,
+                    "message": "Workbook saved; detailed response unavailable. Read back before any retry.",
+                    "data": {"persisted": True, "retry_safe": False, "result_available": False,
+                             "after_sha256": state.committed_sha256},
+                    "warnings": [{"code": "committed_response_unavailable"}],
+                })
+            return _error_response(operation, error)
 
 def get_excel_path(filename: str) -> str:
     """Resolve a transport-specific path without searching for a replacement file."""
@@ -443,7 +464,7 @@ def get_excel_path(filename: str) -> str:
                     "instruction": "Do not invent an absolute prefix, strip directories or try other tools with the same relative path. Obtain the intended server-side absolute path first.",
                 },
             )
-        return str(requested_path)
+        return bind_response_target(str(requested_path))
 
     base_path = Path(EXCEL_FILES_PATH).expanduser().resolve(strict=True)
     candidate = requested_path if requested_path.is_absolute() else base_path / requested_path
@@ -466,7 +487,7 @@ def get_excel_path(filename: str) -> str:
             },
         ) from exc
 
-    return str(resolved_candidate)
+    return bind_response_target(str(resolved_candidate))
 
 
 def _env_flag_enabled(name: str) -> bool:

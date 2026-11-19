@@ -28,7 +28,7 @@ def make_book(tmp_path, kind, value="KEEP", key=1):
 
 
 def write(path, kind, value, *, key=1, dry_run=False):
-    args = dict(dry_run=dry_run, include_changes=True)
+    args = dict(dry_run=dry_run, include_changes=not (isinstance(value, str) and len(value) > 1000))
     if kind == "cells":
         return write_data(str(path), "Data", [[value]], "B2", **args)
     if kind == "sheet_append":
@@ -46,7 +46,7 @@ def write(path, kind, value, *, key=1, dry_run=False):
     9007199254740993, float("nan"), float("inf"), float("-inf"),
     "x" * 32768, "\U0001f642" * 16384, "", "a\rb", "a\x00b", "\ud800",
     Decimal("0.1234567890123456789"), datetime(2026, 1, 1, microsecond=1),
-])
+], ids=lambda value: f"{type(value).__name__}-{len(value)}" if isinstance(value, str) else repr(value))
 def test_writers_reject_lossy_values_without_modifying_source(tmp_path, kind, dry_run, value):
     path = make_book(tmp_path, kind)
     before = path.read_bytes()
@@ -56,7 +56,7 @@ def test_writers_reject_lossy_values_without_modifying_source(tmp_path, kind, dr
 
 
 @pytest.mark.parametrize("kind", WRITERS)
-@pytest.mark.parametrize("value", [None, True, False, 1.0, 0.125, Decimal("1.25"), "x" * 32767, "\U0001f642" * 16383, "a\nb"])
+@pytest.mark.parametrize("value", [None, True, False, 1.0, 0.125, Decimal("1.25"), "x" * 32767, "\U0001f642" * 16383, "a\nb"], ids=lambda value: f"{type(value).__name__}-{len(value)}" if isinstance(value, str) else repr(value))
 def test_supported_values_round_trip(tmp_path, kind, value):
     path = make_book(tmp_path, kind)
     result = write(path, kind, value)

@@ -15,7 +15,8 @@ from .data import (
     augment_tabular_payload,
 )
 from .values import cell_values_equal, validate_cell_value, value_key, verify_cell_writes
-from .exceptions import DataError, PreconditionFailedError
+from .mutation import preflight_response, refresh_metadata
+from .exceptions import DataError, PreconditionFailedError, ResponseTooLargeError
 from .workbook import _sheet_type, require_worksheet, safe_workbook, worksheet_not_found_error
 
 logger = logging.getLogger(__name__)
@@ -476,6 +477,9 @@ def upsert_excel_table_rows(
                     header_row_count=int(table.headerRowCount or 0),
                     totals_row_count=int(table.totalsRowCount or 0), totals_row_shown=bool(table.totalsRowShown),
                 ))
+            result["new_structure_token"] = new_dataset_tokens["structure_token"]
+            result["new_content_token"] = new_dataset_tokens["content_token"]
+            preflight_response(result)
 
         with safe_workbook(filepath, save=not dry_run, candidate_check=check_candidate) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
@@ -641,35 +645,36 @@ def upsert_excel_table_rows(
                 totals_row_shown=bool(table.totalsRowShown),
             ))
 
-        appended_keys = [row[key_column] for row in append_rows]
-        updated_keys = [row_data[key_column] for _, row_data in update_rows]
-        result = {
-            "message": (
-                f"{'Previewed' if dry_run else 'Upserted'} {len(rows)} row(s) in table "
-                f"'{table_name}' on '{current_sheet_name}'"
-            ),
-            "sheet_name": current_sheet_name,
-            "table_name": table_name,
-            "key_column": key_column,
-            "updated_rows": len(update_rows),
-            "appended_rows": len(append_rows),
-            "updated_keys": updated_keys,
-            "appended_keys": appended_keys,
-            "changed_cells": len(changes),
-            "previous_table_range": previous_table_range,
-            "table_range": table_range,
-            "dry_run": dry_run,
-            "previous_structure_token": previous_dataset_tokens["structure_token"],
-            "new_structure_token": new_dataset_tokens["structure_token"],
-            "previous_content_token": previous_dataset_tokens["content_token"],
-            "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
-        }
-        if _should_include_changes(dry_run, include_changes):
-            result["changes"] = changes
+            appended_keys = [row[key_column] for row in append_rows]
+            updated_keys = [row_data[key_column] for _, row_data in update_rows]
+            result = {
+                "message": (
+                    f"{'Previewed' if dry_run else 'Upserted'} {len(rows)} row(s) in table "
+                    f"'{table_name}' on '{current_sheet_name}'"
+                ),
+                "sheet_name": current_sheet_name,
+                "table_name": table_name,
+                "key_column": key_column,
+                "updated_rows": len(update_rows),
+                "appended_rows": len(append_rows),
+                "updated_keys": updated_keys,
+                "appended_keys": appended_keys,
+                "changed_cells": len(changes),
+                "previous_table_range": previous_table_range,
+                "table_range": table_range,
+                "dry_run": dry_run,
+                "previous_structure_token": previous_dataset_tokens["structure_token"],
+                "new_structure_token": new_dataset_tokens["structure_token"],
+                "previous_content_token": previous_dataset_tokens["content_token"],
+                "new_content_token": new_dataset_tokens["content_token"],
+                "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
+            }
+            if _should_include_changes(dry_run, include_changes):
+                result["changes"] = changes
+        refresh_metadata(result, filepath, dry_run=dry_run, provider=_mutation_snapshot_metadata)
         return result
 
-    except (DataError, PreconditionFailedError):
+    except (DataError, PreconditionFailedError, ResponseTooLargeError):
         raise
     except Exception as e:
         logger.error(f"Failed to upsert table rows: {e}")
@@ -710,6 +715,9 @@ def append_excel_table_rows(
                     header_row_count=int(table.headerRowCount or 0),
                     totals_row_count=int(table.totalsRowCount or 0), totals_row_shown=bool(table.totalsRowShown),
                 ))
+            result["new_structure_token"] = new_dataset_tokens["structure_token"]
+            result["new_content_token"] = new_dataset_tokens["content_token"]
+            preflight_response(result)
 
         with safe_workbook(filepath, save=not dry_run, candidate_check=check_candidate) as wb:
             current_sheet_name, ws, table = _find_table(wb, table_name, sheet_name=sheet_name)
@@ -807,28 +815,29 @@ def append_excel_table_rows(
                 totals_row_shown=bool(table.totalsRowShown),
             ))
 
-        result = {
-            "message": (
-                f"{'Previewed' if dry_run else 'Appended'} {len(rows)} row(s) to table "
-                f"'{table_name}' on '{current_sheet_name}'"
-            ),
-            "sheet_name": current_sheet_name,
-            "table_name": table_name,
-            "appended_rows": len(rows),
-            "changed_cells": len(changes),
-            "previous_table_range": previous_table_range,
-            "table_range": table_range,
-            "dry_run": dry_run,
-            "previous_structure_token": previous_dataset_tokens["structure_token"],
-            "new_structure_token": new_dataset_tokens["structure_token"],
-            "previous_content_token": previous_dataset_tokens["content_token"],
-            "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
-        }
-        if _should_include_changes(dry_run, include_changes):
-            result["changes"] = changes
+            result = {
+                "message": (
+                    f"{'Previewed' if dry_run else 'Appended'} {len(rows)} row(s) to table "
+                    f"'{table_name}' on '{current_sheet_name}'"
+                ),
+                "sheet_name": current_sheet_name,
+                "table_name": table_name,
+                "appended_rows": len(rows),
+                "changed_cells": len(changes),
+                "previous_table_range": previous_table_range,
+                "table_range": table_range,
+                "dry_run": dry_run,
+                "previous_structure_token": previous_dataset_tokens["structure_token"],
+                "new_structure_token": new_dataset_tokens["structure_token"],
+                "previous_content_token": previous_dataset_tokens["content_token"],
+                "new_content_token": new_dataset_tokens["content_token"],
+                "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
+            }
+            if _should_include_changes(dry_run, include_changes):
+                result["changes"] = changes
+        refresh_metadata(result, filepath, dry_run=dry_run, provider=_mutation_snapshot_metadata)
         return result
-    except (DataError, PreconditionFailedError):
+    except (DataError, PreconditionFailedError, ResponseTooLargeError):
         raise
     except Exception as e:
         logger.error(f"Failed to append native table rows: {e}")

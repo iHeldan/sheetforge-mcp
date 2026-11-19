@@ -13,11 +13,12 @@ from openpyxl.cell.rich_text import CellRichText
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 
-from .exceptions import DataError, PreconditionFailedError
+from .exceptions import DataError, PreconditionFailedError, ResponseTooLargeError
 from .cell_utils import parse_cell_range
 from .cell_validation import get_data_validation_for_cell
 from .package_fidelity import inspect_package_fidelity
 from .values import cell_values_equal, validate_cell_value, value_key, verify_cell_writes
+from .mutation import preflight_response, refresh_metadata
 from .workbook import first_worksheet, require_worksheet, safe_workbook, worksheet_not_found_error
 
 logger = logging.getLogger(__name__)
@@ -1780,6 +1781,7 @@ def _write_data(
         with safe_workbook(str(candidate)) as saved:
             verify_cell_writes(saved, expected_writes)
         if not check_package:
+            preflight_response(result)
             return
         package_report.update(inspect_package_fidelity(
             baseline, candidate,
@@ -1793,6 +1795,11 @@ def _write_data(
                 code="write_package_fidelity_failed",
                 details={"package_fidelity": package_report},
             )
+        if check_package and dry_run:
+            result["ready_to_commit"] = package_report["status"] == "passed"
+            if not result["ready_to_commit"]:
+                result["message"] = "Write preview requires attention before saving"
+        preflight_response(result)
 
     try:
         if not data:
@@ -1879,25 +1886,21 @@ def _write_data(
                 if not dry_run or check_package:
                     _write_data_to_worksheet(ws, data, start_cell)
 
-        result = {
-            "message": f"{'Previewed' if dry_run else 'Wrote'} data to {sheet_name}",
-            "active_sheet": sheet_name,
-            "target_range": target_range,
-            "sheet_created": sheet_created,
-            "cells_written": total_cells,
-            "changed_cells": len(changes),
-            "dry_run": dry_run,
-        }
-        if _should_include_changes(dry_run, include_changes):
-            result["changes"] = changes
-        if check_package:
-            result["package_fidelity"] = package_report
-            if dry_run:
-                result["ready_to_commit"] = package_report["status"] == "passed"
-                if not result["ready_to_commit"]:
-                    result["message"] = "Write preview requires attention before saving"
+            result = {
+                "message": f"{'Previewed' if dry_run else 'Wrote'} data to {sheet_name}",
+                "active_sheet": sheet_name,
+                "target_range": target_range,
+                "sheet_created": sheet_created,
+                "cells_written": total_cells,
+                "changed_cells": len(changes),
+                "dry_run": dry_run,
+            }
+            if _should_include_changes(dry_run, include_changes):
+                result["changes"] = changes
+            if check_package:
+                result["package_fidelity"] = package_report
         return result
-    except PreconditionFailedError:
+    except (PreconditionFailedError, ResponseTooLargeError):
         raise
     except DataError as e:
         logger.error(str(e))
@@ -2436,6 +2439,9 @@ def append_table_rows(
                 new_dataset_tokens.update(_worksheet_dataset_tokens(
                     saved[sheet_name], sheet_name=sheet_name, header_row=header_row,
                 ))
+            result["new_structure_token"] = new_dataset_tokens["structure_token"]
+            result["new_content_token"] = new_dataset_tokens["content_token"]
+            preflight_response(result)
 
         with safe_workbook(str(filepath), save=not dry_run, candidate_check=check_candidate) as wb:
             ws = require_worksheet(
@@ -2534,25 +2540,26 @@ def append_table_rows(
                 header_row=header_row,
             ))
 
-        result = {
-            "message": f"{'Previewed' if dry_run else 'Appended'} {len(rows)} row(s) to {sheet_name}",
-            "sheet_name": sheet_name,
-            "header_row": header_row,
-            "rows_appended": len(rows),
-            "start_row": next_row,
-            "target_range": target_range,
-            "changed_cells": len(changes),
-            "dry_run": dry_run,
-            "previous_structure_token": previous_dataset_tokens["structure_token"],
-            "new_structure_token": new_dataset_tokens["structure_token"],
-            "previous_content_token": previous_dataset_tokens["content_token"],
-            "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
-        }
-        if _should_include_changes(dry_run, include_changes):
-            result["changes"] = changes
+            result = {
+                "message": f"{'Previewed' if dry_run else 'Appended'} {len(rows)} row(s) to {sheet_name}",
+                "sheet_name": sheet_name,
+                "header_row": header_row,
+                "rows_appended": len(rows),
+                "start_row": next_row,
+                "target_range": target_range,
+                "changed_cells": len(changes),
+                "dry_run": dry_run,
+                "previous_structure_token": previous_dataset_tokens["structure_token"],
+                "new_structure_token": new_dataset_tokens["structure_token"],
+                "previous_content_token": previous_dataset_tokens["content_token"],
+                "new_content_token": new_dataset_tokens["content_token"],
+                "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
+            }
+            if _should_include_changes(dry_run, include_changes):
+                result["changes"] = changes
+        refresh_metadata(result, filepath, dry_run=dry_run, provider=_mutation_snapshot_metadata)
         return result
-    except (DataError, PreconditionFailedError):
+    except (DataError, PreconditionFailedError, ResponseTooLargeError):
         raise
     except Exception as e:
         logger.error(f"Failed to append table rows: {e}")
@@ -2589,6 +2596,9 @@ def update_rows_by_key(
                 new_dataset_tokens.update(_worksheet_dataset_tokens(
                     saved[sheet_name], sheet_name=sheet_name, header_row=header_row,
                 ))
+            result["new_structure_token"] = new_dataset_tokens["structure_token"]
+            result["new_content_token"] = new_dataset_tokens["content_token"]
+            preflight_response(result)
 
         with safe_workbook(str(filepath), save=not dry_run, candidate_check=check_candidate) as wb:
             ws = require_worksheet(
@@ -2681,32 +2691,33 @@ def update_rows_by_key(
                 header_row=header_row,
             ))
 
-        updated_rows = len(matched_keys)
-        message = (
-            f"{'Previewed' if dry_run else 'Updated'} {updated_rows} row(s) in {sheet_name}"
-        )
-        if missing_keys:
-            message += f"; {len(missing_keys)} key(s) not found"
+            updated_rows = len(matched_keys)
+            message = (
+                f"{'Previewed' if dry_run else 'Updated'} {updated_rows} row(s) in {sheet_name}"
+            )
+            if missing_keys:
+                message += f"; {len(missing_keys)} key(s) not found"
 
-        result = {
-            "message": message,
-            "sheet_name": sheet_name,
-            "key_column": key_column,
-            "header_row": header_row,
-            "updated_rows": updated_rows,
-            "missing_keys": missing_keys,
-            "changed_cells": len(changes),
-            "dry_run": dry_run,
-            "previous_structure_token": previous_dataset_tokens["structure_token"],
-            "new_structure_token": new_dataset_tokens["structure_token"],
-            "previous_content_token": previous_dataset_tokens["content_token"],
-            "new_content_token": new_dataset_tokens["content_token"],
-            "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
-        }
-        if _should_include_changes(dry_run, include_changes):
-            result["changes"] = changes
+            result = {
+                "message": message,
+                "sheet_name": sheet_name,
+                "key_column": key_column,
+                "header_row": header_row,
+                "updated_rows": updated_rows,
+                "missing_keys": missing_keys,
+                "changed_cells": len(changes),
+                "dry_run": dry_run,
+                "previous_structure_token": previous_dataset_tokens["structure_token"],
+                "new_structure_token": new_dataset_tokens["structure_token"],
+                "previous_content_token": previous_dataset_tokens["content_token"],
+                "new_content_token": new_dataset_tokens["content_token"],
+                "snapshot_metadata": _mutation_snapshot_metadata(filepath, dry_run=dry_run),
+            }
+            if _should_include_changes(dry_run, include_changes):
+                result["changes"] = changes
+        refresh_metadata(result, filepath, dry_run=dry_run, provider=_mutation_snapshot_metadata)
         return result
-    except (DataError, PreconditionFailedError):
+    except (DataError, PreconditionFailedError, ResponseTooLargeError):
         raise
     except Exception as e:
         logger.error(f"Failed to update rows by key: {e}")

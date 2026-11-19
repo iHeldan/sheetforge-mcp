@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Cell/row mutation responses are budgeted before replacement, so response-size errors cannot duplicate appends on retry. Committed metadata failures are explicit warnings; late ordinary-save response failures retain verified commit evidence and unsafe-retry guidance instead of masquerading as an untouched workbook.
 - Standard cell and row writers reject values that would silently lose precision or text, verify written cells in the serialized candidate, distinguish boolean row keys and value changes, and derive row-write content tokens from that candidate rather than unsaved Python values.
 - Package metadata now restricts the MCP Python SDK to the supported 1.x series. A fresh unconstrained install could otherwise select MCP 2.x, which removed the server API used here and prevented startup.
 - Formula dependency, range-impact, explanation, and cell-diff scans visit recorded cells instead of materializing sparse rectangles, including large formula-reference ranges. Workbook diffs now report numeric-to-boolean changes while preserving numeric equality and row-major samples.

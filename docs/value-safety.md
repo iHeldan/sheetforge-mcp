@@ -32,3 +32,23 @@ Row-write previews serialize an isolated candidate too. Their new tokens refer
 to that simulated state and are marked unpersisted. Committed row-write tokens
 describe the serialized, verified candidate, not unsaved Python types. Tokens
 remain sampled semantic identities, not full content hashes or locks.
+
+## Response and Retry Safety
+
+Cell and row writes check the serialized response budget before replacement.
+An oversized detailed response fails without writing; omit `include_changes`
+or reduce the batch. Native upsert key lists are included in this budget too.
+Post-save filesystem metadata is advisory: if unavailable, the response keeps
+the committed tokens and reports `snapshot_metadata_unavailable` instead of
+claiming the write failed.
+
+For other ordinary saves, a late response-encoding/size failure returns a compact
+success receipt with `persisted=true`, `result_available=false`, `retry_safe=false`
+and the verified saved SHA-256. If a subsequent action step itself fails after a
+verified save, `write_committed_followup_failed` explicitly reports the persisted
+state and unsafe retry rather than claiming full action success. Staging files
+do not count as commits to the requested source.
+
+These checks do not guarantee exactly-once delivery. A broken connection or
+terminated process after commit can prevent any receipt reaching the caller.
+Read back the intended workbook before repeating an uncertain mutation.
