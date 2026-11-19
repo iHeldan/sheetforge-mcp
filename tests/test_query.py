@@ -43,6 +43,45 @@ def _create_query_workbook(tmp_path, filename: str, headers: list[str], rows: li
     return filepath
 
 
+def test_analysis_preserves_boolean_number_and_text_identities(tmp_path):
+    from excel_mcp.values import value_key
+
+    path = _create_query_workbook(tmp_path, "typed-analysis.xlsx", ["Id", "Amount"], [
+        (1, 10), (True, 20), (0, 30), (False, 40), ("1", 50),
+    ])
+    for op in ["eq", "in"]:
+        predicate = {"field": "Id", "op": op, "values" if op == "in" else "value": [True] if op == "in" else True}
+        result = query_table_impl(path, filters=[predicate])
+        assert len(result["rows"]) == 1 and result["rows"][0][0] is True
+    for op in ["neq", "not_in"]:
+        predicate = {"field": "Id", "op": op, "values" if op == "not_in" else "value": [True] if op == "not_in" else True}
+        assert len(query_table_impl(path, filters=[predicate])["rows"]) == 4
+    grouped = aggregate_table_impl(path, group_by=["Id"], metrics=[{"op": "sum", "field": "Amount", "as": "Total"}])
+    assert [(value_key(row[0]), row[1]) for row in grouped["rows"]] == [
+        (value_key(key), total) for key, total in [(1, 10), (True, 20), (0, 30), (False, 40), ("1", 50)]
+    ]
+    distinct = aggregate_table_impl(path, metrics=[{"op": "count_distinct", "field": "Id", "as": "Distinct"}])
+    assert distinct["rows"] == [[5]]
+
+
+def test_typed_filters_keep_text_case_numeric_equivalence_and_null_semantics():
+    from excel_mcp.query import _matches_filter
+
+    def match(left, op, right, case=False):
+        return _matches_filter(left, operator=op, value=right, values=right if op == "in" else None,
+                               case_sensitive=case, field_name="test")
+
+    assert match(1, "eq", 1.0)
+    assert not match(True, "eq", 1)
+    assert not match(1, "gt", False)
+    assert not match(True, "lte", 1)
+    assert match("ABC", "eq", "abc")
+    assert not match("ABC", "eq", "abc", True)
+    assert match("ABC", "in", ["abc"])
+    assert match(None, "eq", None)
+    assert not match(None, "eq", "")
+
+
 @pytest.mark.parametrize("schema_mode", ["strict", "intersect", "union"])
 def test_multi_workbook_alignment_uses_headers_not_positional_aliases(tmp_path, schema_mode):
     paths = [

@@ -333,3 +333,37 @@ def test_get_present_combinations_only_uses_observed_records():
         {"region": "North", "product": "Widget"},
         {"region": "South", "product": "Gadget"},
     ]
+
+
+def test_pivot_keeps_boolean_numeric_and_text_groups_distinct(tmp_path):
+    from openpyxl import Workbook
+    from excel_mcp.values import value_key
+
+    path = tmp_path / "typed-pivot.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active.append(["Id", "Amount"])
+    for key, amount in [(1, 10), (True, 20), (0, 30), (False, 40), ("1", 50)]:
+        book.active.append([key, amount])
+    book.save(path)
+    book.close()
+    create_pivot_table(str(path), "Data", "A1:B6", rows=["Id"], values=["Amount"])
+    book = load_workbook(path)
+    rows = list(book["Data_pivot"].values)[1:]
+    assert {value_key(key): total for key, total in rows} == {
+        value_key(key): total for key, total in [(1, 10), (True, 20), (0, 30), (False, 40), ("1", 50)]
+    }
+    assert len(rows) == 5
+    book.close()
+
+
+def test_pivot_filters_column_keys_with_typed_identity():
+    data = [{"key": 1, "value": "numeric"}, {"key": True, "value": "boolean"}]
+    assert _filter_data(data, {}, {"key": True}) == [data[1]]
+
+
+def test_pivot_numeric_aggregation_does_not_treat_boolean_as_one():
+    from excel_mcp.exceptions import DataError
+
+    with pytest.raises(DataError, match="requires numeric"):
+        _aggregate_values([{"val": True}], "val", "sum")

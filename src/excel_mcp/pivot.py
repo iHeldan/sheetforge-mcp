@@ -10,6 +10,8 @@ from .data import read_excel_range
 from .cell_utils import parse_cell_range
 from .exceptions import PreconditionFailedError, ValidationError, PivotError
 from .workbook import safe_workbook
+from .values import cell_values_equal, value_key
+from .query import _compute_metric
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,7 @@ def _get_present_combinations(
     seen: set[tuple[Any, ...]] = set()
     combinations: list[dict[str, Any]] = []
     for record in data:
-        key = tuple(record.get(field) for field in fields)
+        key = tuple(value_key(record.get(field)) for field in fields)
         if key in seen:
             continue
         seen.add(key)
@@ -311,11 +313,11 @@ def _filter_data(data: list[dict], row_filters: dict, col_filters: dict) -> list
     for record in data:
         matches = True
         for field, value in row_filters.items():
-            if record.get(field) != value:
+            if not cell_values_equal(record.get(field), value):
                 matches = False
                 break
         for field, value in col_filters.items():
-            if record.get(field) != value:
+            if not cell_values_equal(record.get(field), value):
                 matches = False
                 break
         if matches:
@@ -326,21 +328,9 @@ def _filter_data(data: list[dict], row_filters: dict, col_filters: dict) -> list
 def _aggregate_values(data: list[dict], field: str, agg_func: str) -> float:
     """Aggregate values using the specified function."""
     present_values = [record[field] for record in data if field in record and record[field] is not None]
-
-    if agg_func == "count":
-        return len(present_values)
-
-    values = [value for value in present_values if isinstance(value, (int, float))]
-    if not values:
-        return 0
-
-    if agg_func == "sum":
-        return sum(values)
-    elif agg_func == "average":
-        return sum(values) / len(values)
-    elif agg_func == "min":
-        return min(values)
-    elif agg_func == "max":
-        return max(values)
-    else:
-        return sum(values)  # Default to sum
+    operator = {"average": "avg", "count": "count_non_null"}.get(agg_func, agg_func)
+    result = _compute_metric(
+        {"op": operator, "column_index": 0, "as": field, "resolved_header": field},
+        [[value] for value in present_values],
+    )
+    return 0 if result is None else result

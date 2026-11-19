@@ -341,6 +341,10 @@ With `include_source_columns=False`, actual `_source_file`, `_source_sheet`, and
 metadata. Reserved provenance references remain unavailable in query arguments.
 Lookup and union dedupe keys distinguish booleans from numbers and text;
 numerically equal `1` and `1.0` still match. Text case follows `case_sensitive`.
+The same typed identity applies to equality/membership filters, aggregation
+groups, distinct counts and pivots. Ordering comparisons do not coerce booleans
+into numbers. Verified Recipes and Contracts retain their stricter source-type
+validation rather than silently accepting mixed-type fields.
 
 ## Read, Search, And Write Tools
 

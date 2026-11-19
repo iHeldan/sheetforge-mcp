@@ -7,13 +7,13 @@ from typing import Any, Dict, List, Optional
 
 from .data import (
     _build_schema,
-    _stringify_value_for_uniqueness,
     _validate_row_mode,
     augment_tabular_payload,
     quick_read,
     read_as_table,
 )
 from .exceptions import DataError
+from .values import value_key
 from .tables import read_excel_table
 
 logger = logging.getLogger(__name__)
@@ -474,9 +474,7 @@ def _normalize_string(value: Any, *, case_sensitive: bool) -> Optional[str]:
 
 
 def _normalize_membership_value(value: Any, *, case_sensitive: bool) -> Any:
-    if isinstance(value, str):
-        return _normalize_string(value, case_sensitive=case_sensitive)
-    return value
+    return value_key(value, case_sensitive=case_sensitive)
 
 
 def _matches_filter(
@@ -526,11 +524,13 @@ def _matches_filter(
         return match if operator == "eq" else not match
 
     if operator == "eq":
-        return cell_value == value
+        return value_key(cell_value) == value_key(value)
     if operator == "neq":
-        return cell_value != value
+        return value_key(cell_value) != value_key(value)
 
     if cell_value is None or value is None:
+        return False
+    if isinstance(cell_value, bool) != isinstance(value, bool):
         return False
 
     try:
@@ -761,11 +761,7 @@ def _normalize_lookup_key_value(value: Any, *, case_sensitive: bool) -> Any:
 
 
 def _typed_key_value(value: Any) -> Any:
-    if isinstance(value, bool):
-        return ("boolean", value)
-    if _is_numeric(value):
-        return ("number", value)
-    return (type(value).__name__, _stringify_value_for_uniqueness(value))
+    return value_key(value)
 
 
 def _check_output_headers(headers: List[Any]) -> None:
@@ -899,7 +895,7 @@ def _compute_metric(metric: Dict[str, Any], rows: List[List[Any]]) -> Any:
     if operator == "count_non_null":
         return len(non_blank_values)
     if operator == "count_distinct":
-        return len({_stringify_value_for_uniqueness(value) for value in non_blank_values})
+        return len({value_key(value) for value in non_blank_values})
 
     if operator in {"sum", "avg"}:
         numeric_values = [value for value in non_blank_values if _is_numeric(value)]
@@ -997,7 +993,7 @@ def _aggregate_dataset(
     if normalized_groups:
         for row in matched_rows:
             key = tuple(
-                row[group["column_index"]] if group["column_index"] < len(row) else None
+                value_key(row[group["column_index"]] if group["column_index"] < len(row) else None)
                 for group in normalized_groups
             )
             grouped_rows[key].append(row)
@@ -1009,7 +1005,8 @@ def _aggregate_dataset(
     ]
     result_rows: List[List[Any]] = []
     for key, grouped in grouped_rows.items():
-        output_row = list(key)
+        output_row = [grouped[0][group["column_index"]] if group["column_index"] < len(grouped[0]) else None
+                      for group in normalized_groups]
         for metric in normalized_metrics:
             output_row.append(_compute_metric(metric, grouped))
         result_rows.append(output_row)
