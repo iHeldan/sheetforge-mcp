@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 import pytest
@@ -46,6 +46,7 @@ def write(path, kind, value, *, key=1, dry_run=False):
     9007199254740993, float("nan"), float("inf"), float("-inf"),
     "x" * 32768, "\U0001f642" * 16384, "", "a\rb", "a\x00b", "\ud800",
     Decimal("0.1234567890123456789"), datetime(2026, 1, 1, microsecond=1),
+    0.1 + 0.2, datetime(2026, 1, 1, tzinfo=timezone.utc),
 ], ids=lambda value: f"{type(value).__name__}-{len(value)}" if isinstance(value, str) else repr(value))
 def test_writers_reject_lossy_values_without_modifying_source(tmp_path, kind, dry_run, value):
     path = make_book(tmp_path, kind)
@@ -167,3 +168,15 @@ def test_rich_text_change_details_match_plain_read_values(tmp_path, kind):
     result = write(path, kind, "new")
     assert result["changes"][0]["old_value"] == "KEEP"
     assert result["changes"][0]["new_value"] == "new"
+
+
+@pytest.mark.parametrize("kind", WRITERS)
+@pytest.mark.parametrize("value", [date(2026, 1, 1), datetime(2026, 1, 1, 12, 30, microsecond=123000), time(12, 30, microsecond=123000)])
+def test_documented_naive_date_time_policy_round_trips(tmp_path, kind, value):
+    path = make_book(tmp_path, kind)
+    write(path, kind, value)
+    book = load_workbook(path)
+    actual = book["Data"]["B3" if kind.endswith("append") else "B2"].value
+    book.close()
+    expected = datetime.combine(value, time()) if type(value) is date else value
+    assert actual == expected

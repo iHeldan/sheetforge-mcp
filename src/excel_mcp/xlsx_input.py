@@ -1,6 +1,7 @@
 """Bound ZIP metadata before openpyxl can allocate or decompress workbook data."""
 
 from dataclasses import dataclass, fields
+from contextlib import suppress
 import os
 from pathlib import Path, PurePosixPath
 import stat
@@ -189,7 +190,8 @@ def load_workbook_checked(filename, **kwargs):
     except BaseException:
         try:
             if book is not None:
-                book.close()
+                with suppress(Exception):
+                    book.close()
         finally:
             stream.close()
         raise

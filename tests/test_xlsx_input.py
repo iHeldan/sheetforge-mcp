@@ -177,3 +177,31 @@ def test_mcp_input_limit_error_is_structured_without_server_root_disclosure(tmp_
     assert not result["ok"]
     assert result["error"]["code"] == "xlsx_input_rejected"
     assert str(tmp_path) not in result["error"]["message"]
+
+
+def test_failed_load_closes_checked_descriptor_even_if_workbook_cleanup_fails(tmp_path, monkeypatch):
+    path = make_input(tmp_path)
+    original_open = xlsx_input._open_checked
+    original_load = xlsx_input._load_workbook
+    streams = []
+
+    def changed_stamp(filename):
+        stream, stamp = original_open(filename)
+        streams.append(stream)
+        return stream, (stamp[0] + 1, *stamp[1:])
+
+    def broken_cleanup(*args, **kwargs):
+        book = original_load(*args, **kwargs)
+
+        def close():
+            raise OSError("injected cleanup failure")
+
+        book.close = close
+        return book
+
+    monkeypatch.setattr(xlsx_input, "_open_checked", changed_stamp)
+    monkeypatch.setattr(xlsx_input, "_load_workbook", broken_cleanup)
+    with pytest.raises(WorkbookInputError) as error:
+        load_workbook_checked(path)
+    assert error.value.details["reason"] == "source_changed_during_load"
+    assert streams[0].closed
