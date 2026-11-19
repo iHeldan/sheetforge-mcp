@@ -106,6 +106,8 @@ def _normalize_decimal_string(value: Decimal) -> str:
 
 
 def _normalize_token_value(value: Any) -> Any:
+    if isinstance(value, CellRichText):
+        value = str(value)
     if value is None:
         return None
     if isinstance(value, bool):
@@ -177,7 +179,8 @@ def _read_rows_for_columns(
     for row_idx in range(first_row, last_row + 1):
         if remaining is not None and remaining <= 0:
             break
-        rows.append([ws.cell(row=row_idx, column=col).value for col in columns])
+        values = [ws.cell(row=row_idx, column=col).value for col in columns]
+        rows.append([str(value) if isinstance(value, CellRichText) else value for value in values])
         if remaining is not None:
             remaining -= 1
     return rows
@@ -192,6 +195,7 @@ def _worksheet_structure_summary(
 ) -> Dict[str, Any]:
     columns = _token_header_columns(ws, header_row)
     headers = [ws.cell(row=header_row, column=col).value for col in columns]
+    headers = [str(value) if isinstance(value, CellRichText) else value for value in headers]
     data_extent = _detect_tabular_data_extent(
         ws,
         header_row,
@@ -850,8 +854,8 @@ def _build_cell_change(
         "cell": _cell_address(row, col),
         "row": row,
         "column": col,
-        "old_value": old_value,
-        "new_value": new_value,
+        "old_value": str(old_value) if isinstance(old_value, CellRichText) else old_value,
+        "new_value": str(new_value) if isinstance(new_value, CellRichText) else new_value,
     }
     if column_name is not None:
         change["column_name"] = column_name

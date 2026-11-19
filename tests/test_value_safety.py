@@ -128,3 +128,42 @@ def test_candidate_value_check_blocks_number_reinterpreted_by_existing_date_styl
     with pytest.raises(DataError, match="Serialized value"):
         write(path, "cells", 1)
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["sheet_append", "sheet_update", "native_append", "native_upsert"])
+def test_row_guards_keep_rich_text_read_identity_and_unchanged_runs(tmp_path, kind):
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+
+    path = make_book(tmp_path, kind)
+    book = load_workbook(path)
+    book["Data"]["B2"] = CellRichText(TextBlock(InlineFont(b=True), "KEEP"))
+    book["Data"].append([2, "other"])
+    if kind.startswith("native"):
+        book["Data"].tables["Records"].ref = "A1:B3"
+    else:
+        book["Data"]["B1"] = CellRichText(TextBlock(InlineFont(b=True), "Value"))
+    book.save(path)
+    book.close()
+    read = read_excel_table(str(path), "Records") if kind.startswith("native") else quick_read(str(path), "Data")
+    result = write(path, kind, "KEEP")
+    assert result["previous_content_token"] == read["content_token"]
+    assert result["previous_structure_token"] == read["structure_token"]
+    book = load_workbook(path, rich_text=True)
+    assert isinstance(book["Data"]["B2"].value, CellRichText)
+    book.close()
+
+
+@pytest.mark.parametrize("kind", ["cells", "sheet_update", "native_upsert"])
+def test_rich_text_change_details_match_plain_read_values(tmp_path, kind):
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+
+    path = make_book(tmp_path, kind)
+    book = load_workbook(path)
+    book["Data"]["B2"] = CellRichText(TextBlock(InlineFont(b=True), "KEEP"))
+    book.save(path)
+    book.close()
+    result = write(path, kind, "new")
+    assert result["changes"][0]["old_value"] == "KEEP"
+    assert result["changes"][0]["new_value"] == "new"

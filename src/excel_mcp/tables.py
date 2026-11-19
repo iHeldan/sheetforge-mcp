@@ -621,7 +621,9 @@ def upsert_excel_table_rows(
                     if column_name == key_column:
                         continue
                     expected_writes[(current_sheet_name, target_row, header_map[column_name])] = new_value
-                    ws.cell(row=target_row, column=header_map[column_name]).value = new_value
+                    cell = ws.cell(row=target_row, column=header_map[column_name])
+                    if not cell_values_equal(cell.value, new_value):
+                        cell.value = new_value
 
             for row_offset, row_data in enumerate(append_rows):
                 target_row = append_start_row + row_offset

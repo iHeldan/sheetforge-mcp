@@ -187,7 +187,9 @@ def load_workbook_checked(filename, **kwargs):
             stream.close()
         return book
     except BaseException:
-        if book is not None:
-            book.close()
-        stream.close()
+        try:
+            if book is not None:
+                book.close()
+        finally:
+            stream.close()
         raise
