@@ -532,8 +532,9 @@ def apply_formula(
     formula: str,
 ) -> str:
     """
-    Apply Excel formula to cell.
-    Excel formula will write to cell with verification.
+    Apply a validated formula and verify its serialized text before saving.
+    Maximum 8192 UTF-16 units; lossy text and unsafe functions are refused.
+    Does not calculate formulas. Protected XLSX loss blocks the save.
     """
     def action() -> Any:
         full_path = get_excel_path(filepath)
@@ -1500,7 +1501,12 @@ def create_pivot_table(
     agg_func: str = "sum",
     replace_existing: bool = False,
 ) -> str:
-    """Create pivot table in worksheet."""
+    """Create a checked pivot-style summary from one locked workbook version.
+
+    Source/output limit: 250000 cells each. Exact integer results must round-trip;
+    computed floats use standard-writer precision. Existing output requires
+    replace_existing=True; case-insensitive name collisions are refused.
+    """
     return _run_tool(
         "create_pivot_table",
         lambda: create_pivot_table_impl(
@@ -2585,7 +2591,12 @@ def copy_range(
     target_sheet: Optional[str] = None,
     dry_run: bool = False,
 ) -> str:
-    """Copy a range of cells to another location."""
+    """Copy values/formulas and styles, including General, with saved-value checks.
+
+    Limit 250000 source cells; the full target must fit Excel's grid. Merged-cell
+    intersections and failed relative-formula translations are refused. dry_run
+    checks an isolated candidate, including targeted XLSX preservation.
+    """
     def action() -> Any:
         from excel_mcp.sheet import copy_range_operation
 
@@ -2616,7 +2627,12 @@ def delete_range(
     shift_direction: str = "up",
     dry_run: bool = False,
 ) -> str:
-    """Delete a range of cells and shift remaining cells."""
+    """Delete cells and shift up/left, updating supported dependent references.
+
+    Ambiguous/straddling/dynamic references and affected layout metadata are
+    refused without saving. Sheets with drawings are unsupported. dry_run runs
+    the same checks; reference_updates reports supported dependency changes.
+    """
     def action() -> Any:
         from excel_mcp.sheet import delete_range_operation
 

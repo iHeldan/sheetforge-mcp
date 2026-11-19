@@ -13,6 +13,7 @@ from contextlib import contextmanager, nullcontext, suppress
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable
+from xml.parsers import expat
 
 try:
     import fcntl
@@ -33,6 +34,8 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from .exceptions import PreconditionFailedError, ResponseTooLargeError, WorkbookError, WorkbookRecoveryError
 from .mutation import record_verified_commit
+from .cell_utils import parse_cell_range, validate_grid_bounds, validate_sheet_title
+from .package_fidelity import inspect_package_fidelity
 from .xlsx_input import load_workbook_checked as load_workbook
 
 logger = logging.getLogger(__name__)
@@ -2375,7 +2378,7 @@ def create_named_range(
         if isinstance(dry_run, bool) is False:
             raise WorkbookError("dry_run must be a boolean")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             if normalized_scope_sheet is not None:
                 scope_ws = require_worksheet(
                     wb,
@@ -2453,7 +2456,7 @@ def create_named_range(
                 "replaced": replaced,
                 "named_range": created,
             }
-    except WorkbookError:
+    except (WorkbookError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to create named range '{name}': {e}")
@@ -2659,6 +2662,7 @@ def _exclusive_workbook_lock(
 
 @contextmanager
 def _preserve_rich_text_in_staging():
+    """Preserve rich text in intermediate saves; ChangeSet checks the final package."""
     token = _STAGED_RICH_TEXT.set(True)
     try:
         yield
@@ -2704,6 +2708,8 @@ def safe_workbook(
     read_only: bool = False,
     *,
     candidate_check: Callable[[Path, Path], None] | None = None,
+    preview: bool = False,
+    check_package: bool = True,
 ):
     """Context manager that ensures workbook is always closed.
 
@@ -2713,9 +2719,12 @@ def safe_workbook(
         read_only: If True, open in read-only mode.
         candidate_check: Inspect an isolated serialized candidate before saving,
             or simulate and inspect the save when save=False.
+        preview: Simulate the ordinary save checks without modifying the source.
+        check_package: Skip only when the caller supplies its own final-package
+            check, as direct cell writes and ChangeSet staging do.
     """
     resolved_path = _canonical_workbook_path(filepath, must_exist=True)
-    guarded = candidate_check is not None
+    guarded = candidate_check is not None or preview
     if guarded and read_only:
         raise ValueError("Candidate checks require an editable in-memory workbook")
     lock_context = (
@@ -2736,18 +2745,49 @@ def safe_workbook(
 
         def verify_candidate(candidate: Path) -> None:
             verify_source()
-            candidate_check(resolved_path, candidate)
+            if candidate_check is not None:
+                candidate_check(resolved_path, candidate)
+            if check_package and not _STAGED_RICH_TEXT.get():
+                changed_formulas = {
+                    (name, coordinate)
+                    for (name, coordinate), value in original_formulas.items()
+                    if name in wb.sheetnames
+                    and isinstance(wb[name], Worksheet)
+                    and getattr(wb[name]._cells.get(value[0]), "value", None) != value[1]
+                }
+                report = inspect_package_fidelity(
+                    resolved_path, candidate, changed_cells=changed_formulas, sample_limit=5,
+                )
+                if report["status"] != "passed":
+                    raise PreconditionFailedError(
+                        "Mutation could not preserve or verify protected XLSX content; no changes were saved",
+                        code="write_package_fidelity_failed", details={"package_fidelity": report},
+                    )
             verify_source()
 
         wb = load_workbook(
             resolved_path, read_only=read_only,
-            rich_text=guarded or (save and _STAGED_RICH_TEXT.get()),
+            rich_text=guarded or save,
         )
         try:
+            original_formulas = {
+                (ws.title, cell.coordinate): ((cell.row, cell.column), cell.value)
+                for ws in wb.worksheets for cell in ws._cells.values()
+                if writing and isinstance(cell.value, str) and cell.value.startswith("=")
+            } if writing else {}
             yield wb
         except Exception:
             raise
         else:
+            if writing:
+                for ws in wb.worksheets:
+                    for row, column in ws._cells:
+                        validate_grid_bounds(row, column, row, column)
+                    for dim in ws.column_dimensions.values():
+                        if dim.max:
+                            validate_grid_bounds(1, dim.min, 1, dim.max)
+                    for row in ws.row_dimensions:
+                        validate_grid_bounds(row, 1, row, 1)
             if guarded and save:
                 _persist_workbook_atomically(
                     wb, str(resolved_path),
@@ -2760,7 +2800,9 @@ def safe_workbook(
                     _verify_saved_workbook(str(candidate))
                     verify_candidate(candidate)
             elif save and not read_only:
-                _persist_workbook_atomically(wb, str(resolved_path), verify_source=verify_source)
+                _persist_workbook_atomically(
+                    wb, str(resolved_path), validate_candidate=verify_candidate, verify_source=verify_source,
+                )
         finally:
             wb.close()
 
@@ -2770,6 +2812,28 @@ def _verify_saved_workbook(filepath: str) -> None:
     verification_wb = load_workbook(filepath, read_only=True)
     try:
         _ = verification_wb.sheetnames
+        namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+
+        def check_grid(tag, attributes):
+            if tag == namespace + "row" and "r" in attributes:
+                row = int(attributes["r"])
+                validate_grid_bounds(row, 1, row, 1)
+            elif tag in {namespace + "c", namespace + "dimension", namespace + "mergeCell"}:
+                reference = attributes.get("r" if tag == namespace + "c" else "ref")
+                if reference:
+                    parse_cell_range(reference)
+
+        def reject_doctype(*_):
+            raise WorkbookError("Saved worksheet XML must not contain a DTD")
+
+        for ws in verification_wb.worksheets:
+            parser = expat.ParserCreate(namespace_separator="}")
+            parser.StartElementHandler = check_grid
+            parser.StartDoctypeDeclHandler = reject_doctype
+            with ws._get_source() as stream:
+                while chunk := stream.read(64 * 1024):
+                    parser.Parse(chunk, False)
+            parser.Parse(b"", True)
     finally:
         verification_wb.close()
 
@@ -3015,6 +3079,7 @@ def create_workbook(filepath: str, sheet_name: str = "Sheet1") -> dict[str, Any]
     """Create a new Excel workbook with optional custom sheet name"""
     wb: Workbook | None = None
     try:
+        validate_sheet_title(sheet_name, [])
         path = _canonical_workbook_path(filepath, must_exist=False)
         with _exclusive_workbook_lock(path):
             if path.exists():
@@ -3052,6 +3117,7 @@ def create_sheet(filepath: str, sheet_name: str) -> dict:
     """Create a new worksheet in the workbook if it doesn't exist."""
     try:
         with safe_workbook(filepath, save=True) as wb:
+            validate_sheet_title(sheet_name, wb.sheetnames)
             # Check if sheet already exists
             if sheet_name in wb.sheetnames:
                 raise WorkbookError(f"Sheet {sheet_name} already exists")
@@ -3059,7 +3125,7 @@ def create_sheet(filepath: str, sheet_name: str) -> dict:
             # Create new sheet
             wb.create_sheet(sheet_name)
         return {"message": f"Sheet {sheet_name} created successfully"}
-    except WorkbookError as e:
+    except (WorkbookError, PreconditionFailedError) as e:
         logger.error(str(e))
         raise
     except Exception as e:
@@ -4717,7 +4783,7 @@ def delete_named_range(
         if isinstance(dry_run, bool) is False:
             raise WorkbookError("dry_run must be a boolean")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             removed = _remove_named_range_sources(
                 wb,
                 name=str(name).strip(),
@@ -4743,7 +4809,7 @@ def delete_named_range(
                     for item in removed
                 ],
             }
-    except WorkbookError:
+    except (WorkbookError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to delete named range '{name}': {e}")
@@ -4767,7 +4833,7 @@ def remove_data_validation_rules(
         if not normalized_indexes and not broken_only:
             raise WorkbookError("Specify rule_indexes or set broken_only=True")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             ws = require_worksheet(
                 wb,
                 sheet_name,
@@ -4815,7 +4881,7 @@ def remove_data_validation_rules(
                     for rule in removed
                 ],
             }
-    except WorkbookError:
+    except (WorkbookError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to remove data validation rules: {e}")
@@ -4839,7 +4905,7 @@ def remove_conditional_format_rules(
         if not normalized_indexes and not broken_only:
             raise WorkbookError("Specify rule_indexes or set broken_only=True")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             ws = require_worksheet(
                 wb,
                 sheet_name,
@@ -4887,7 +4953,7 @@ def remove_conditional_format_rules(
                     for rule in removed
                 ],
             }
-    except WorkbookError:
+    except (WorkbookError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to remove conditional formatting rules: {e}")
@@ -5411,7 +5477,7 @@ def apply_workbook_repairs(
             sample_limit=sample_limit,
         )
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             before_snapshot = _snapshot_workbook_state(wb)
             actions: list[dict[str, Any]] = []
 
@@ -5542,7 +5608,7 @@ def apply_workbook_repairs(
                 sample_limit=sample_limit,
             ),
         }
-    except WorkbookError:
+    except (WorkbookError, PreconditionFailedError):
         raise
     except Exception as e:
         logger.error(f"Failed to apply workbook repairs: {e}")

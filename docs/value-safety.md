@@ -1,7 +1,8 @@
 # Standard Write Value Safety
 
 Unreleased. Applies to cell writes, worksheet append/update, native-table
-append/upsert, and standard ChangeSet cell operations.
+append/upsert, formula application, range copies, generated pivot cells, and
+standard ChangeSet cell operations.
 
 Inputs are validated before saving. The serialized candidate's requested cells
 are read back before replacement, even without optional ChangeSet assertions.
@@ -25,8 +26,22 @@ cell values, not complete XLSX feature fidelity or calculated formula results.
   Dates may reopen as midnight datetimes. A retained date number format can
   reinterpret a numeric replacement; the candidate check blocks that mismatch.
   Change the number format explicitly if the cell is meant to become numeric.
-- Formula strings remain formulas and are not evaluated. Existing supported
-  rich text is retained when repeating its plain text.
+- Formula strings remain formulas and are not evaluated. Formula text is limited
+  to 8192 UTF-16 code units, including the leading `=`. Existing supported rich
+  text is retained when repeating its plain text.
+
+Range copies transfer the source style, including the default General style,
+and check saved values. Copies refuse malformed/out-of-grid targets, intersecting
+merged cells and failed relative-formula translation rather than saving an
+untranslated formula. The source rectangle is limited to 250,000 cells.
+
+Pivot summaries validate and read back generated labels and aggregates too.
+Exact integer results that cannot round-trip are refused, never implicitly
+converted to text or float. Computed floating-point aggregates are explicitly
+normalized to openpyxl's standard numeric serialization precision (16 significant
+digits) before validation and readback. For example, the computed sum of `0.1`
+and `0.2` is materialized as `0.3`. This is a declared output policy for generated
+floating results, not permission to round exact integer results or caller inputs.
 
 Row-write previews serialize an isolated candidate too. Their new tokens refer
 to that simulated state and are marked unpersisted. Committed row-write tokens
@@ -35,7 +50,8 @@ remain sampled semantic identities, not full content hashes or locks.
 
 ## Response and Retry Safety
 
-Cell and row writes check the serialized response budget before replacement.
+Cell and row writes, formula application, range copy/delete, and pivot summaries
+check the serialized response budget before replacement.
 An oversized detailed response fails without writing; omit `include_changes`
 or reduce the batch. Native upsert key lists are included in this budget too.
 Post-save filesystem metadata is advisory: if unavailable, the response keeps

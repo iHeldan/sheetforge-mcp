@@ -18,6 +18,7 @@ import tempfile
 from typing import Any, Callable
 
 from .xlsx_input import load_workbook_checked as load_workbook
+from .values import cell_values_equal
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -950,7 +951,7 @@ def _apply_operations(
     effective_changes = [
         _bound_response_value(change)
         for change in cell_change_map.values()
-        if change["before"] != change["after"]
+        if not cell_values_equal(change["before"], change["after"])
     ]
     return operation_results, {
         "count": len(effective_changes),

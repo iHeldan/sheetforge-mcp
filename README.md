@@ -13,6 +13,7 @@ CLI command: `sheetforge-mcp`
 Published package release: `0.15.0`
 Repository docs track the current main-branch tool surface, which currently exposes `83` MCP tools.
 Version `0.15.0` adds [opt-in preserving XLSX saves](docs/xlsx-fidelity.md#preserving-save-mode) for literal cell edits in a restricted workbook profile. [Targeted XLSX fidelity checks](docs/xlsx-fidelity.md) still guard direct and ChangeSet-backed writes.
+Unreleased: ordinary standalone mutations and their dry runs also apply the targeted fidelity guard, with checked grid boundaries, safer structural edits, and verified formula/copy/pivot values. See the [changelog](CHANGELOG.md#unreleased) and [value-safety policy](docs/value-safety.md).
 Workbook Contracts v1 is included in `0.14.0`: explicit bindings and full bounded data checks can guard Recipe preview/commit, with logical-field, file-path and worksheet-versus-table recovery guidance.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.

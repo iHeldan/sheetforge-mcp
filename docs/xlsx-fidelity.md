@@ -32,7 +32,7 @@ Commit recomputes the check. If it fails, the original remains unchanged and
 no snapshot is created by that attempt. Read the report in
 `error.details.package_fidelity`: the error code is
 `changeset_package_fidelity_failed` for ChangeSet or
-`write_package_fidelity_failed` for `write_data_to_excel`. Both paths reject
+`write_package_fidelity_failed` for standalone mutations. These paths reject
 observed candidate drift before replacement.
 
 For `write_data_to_excel`, `dry_run=true` saves and checks an isolated
@@ -50,7 +50,7 @@ blocks automatic rollback. `write_recovery_required` includes
 `error.details.recovery_backup` (null for a new file) and `retry_safe=false`.
 Inspect the current file and retained backup; do not blindly retry or restore.
 This concurrency protection is separate from the targeted package-fidelity
-guard below and does not extend that guard to other standalone tools.
+guard below; neither check establishes complete XLSX feature fidelity.
 
 ChangeSet's final source SHA-256 must match the inspected candidate, not just
 describe a readable workbook. If verification fails, rollback checks again
@@ -74,14 +74,26 @@ writer. An external change after a check remains possible.
 
 ## Scope and recovery
 
-- The guard runs in `write_data_to_excel`, `apply_workbook_changeset` and
-  ChangeSet-backed writes (Verified Recipes, Rebase and Scenarios). It does not
-  run in other standalone mutation tools or in `diff_workbooks`.
-- Direct cell writes and standard ChangeSet staging saves load with openpyxl's
+- Since `0.14.1`, the guard runs in `write_data_to_excel`,
+  `apply_workbook_changeset` and ChangeSet-backed writes (Verified Recipes,
+  Rebase and Scenarios). Unreleased: it also runs on ordinary standalone
+  mutations, including formatting, charts, formulas, sheet operations and
+  native-table writes. Their dry runs serialize and inspect an isolated
+  candidate too. Unlike direct cell previews, which return `ready_to_commit`
+  and the report, other standalone tools return a structured guard error on
+  refusal. `diff_workbooks` is read-only and does not perform this comparison.
+- ChangeSet intermediate saves defer the package comparison to its final
+  original-versus-candidate check; they do not weaken that final check.
+- Editable mutation loads, including standard ChangeSet staging, use openpyxl's
   [rich-text preservation](https://openpyxl.readthedocs.io/en/3.1/rich_text.html).
   Ordinary text writes that repeat the same non-formula text leave existing
   inline formatting intact; replacing a cell with new text can replace its
   formatting runs. Read APIs and cell-value assertions still use plain text.
+- An ordinary mutation may intentionally replace or remove a formula's value
+  at its existing worksheet/cell coordinate. Its old result is then exempted;
+  an unchanged formula is not. Moving or renaming cached formulas can still
+  be blocked when the check cannot establish their preservation. No automatic
+  fallback to a less-protected writer is performed.
 - This does not preserve or recalculate formulas, validate the correctness of
   cached values, or guarantee complete Excel round-trip fidelity. It does not
   establish whether unclassified changes such as comment or drawing member

@@ -383,7 +383,7 @@ from numbers. See [standard write value safety](docs/value-safety.md).
 ## Formula And Validation Tools
 
 - `apply_formula(filepath: str, sheet_name: str, cell: str, formula: str) -> str`
-  Writes a structurally validated Excel formula into the target cell. Risky functions such as `INDIRECT`, `HYPERLINK`, `WEBSERVICE`, `DGET`, and `RTD` are rejected case-insensitively before mutation.
+  Writes a structurally validated Excel formula into the target cell. Risky functions such as `INDIRECT`, `HYPERLINK`, `WEBSERVICE`, `DGET`, and `RTD` are rejected case-insensitively before mutation. Unreleased: lossless text checks, an 8192-UTF-16-unit formula limit, and serialized value readback apply before replacement; formulas are not calculated.
 - `validate_formula_syntax(filepath: str, sheet_name: str, cell: str, formula: str) -> str`
   Performs structural token, operator, parenthesis, unsafe-function, and Excel-coordinate checks without changing the workbook. It does not execute or calculate the formula.
 - `inspect_formula(formula: str) -> str`
@@ -440,6 +440,12 @@ from numbers. See [standard write value safety](docs/value-safety.md).
 
 ## Worksheet And Range Mutation Tools
 
+Unreleased: new sheet titles must be valid Excel names (at most 31 UTF-16 code
+units). Case-insensitive collisions are refused, not silently auto-suffixed.
+Intentional case-only renames preserve the exact requested title and update
+references accordingly. Standalone saves and their previews also apply the
+[targeted package-fidelity guard](docs/xlsx-fidelity.md).
+
 - `copy_worksheet(filepath: str, source_sheet: str, target_sheet: str) -> str`
   Copies a worksheet inside the same workbook. The copy preserves native tables with workbook-unique names, data validations, conditional formatting, freeze panes and view state, autofilters, print area/titles, worksheet protection, charts with their exact anchor geometry, and sheet-scoped named ranges. Self-referencing formulas and copied table structured references are rewritten to the target sheet and copied table names.
 - `delete_worksheet(filepath: str, sheet_name: str) -> str`
@@ -453,9 +459,9 @@ from numbers. See [standard write value safety](docs/value-safety.md).
 - `set_worksheet_protection(filepath: str, sheet_name: str, enabled: bool = True, password: Optional[str] = None, options: Optional[Dict[str, bool]] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Enables or disables worksheet protection and optionally overrides supported protection flags in one call. Committed writes stay compact unless `include_changes=True`.
 - `copy_range(filepath: str, sheet_name: str, source_start: str, source_end: str, target_start: str, target_sheet: Optional[str] = None, dry_run: bool = False) -> str`
-  Copies a range to another location, optionally on a different sheet, and supports preview mode.
+  Copies a range to another location, optionally on a different sheet, and supports preview mode. Unreleased: bounded to 250,000 source cells; the full destination must fit `A1:XFD1048576`. Transfers default styles too, checks saved values, and refuses merged-cell intersections and failed formula translations without saving.
 - `delete_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str, shift_direction: str = "up", dry_run: bool = False) -> str`
-  Deletes a range and shifts remaining cells up or left. Supports preview mode.
+  Deletes a range and shifts remaining cells up or left. Supports preview mode. Unreleased: updates supported local/cross-sheet formulas, names and chart/rule references and returns `reference_updates`. Refuses straddling rectangular references, ambiguous unqualified global references, dynamic `INDIRECT`/`OFFSET`, 3D and array/data-table formulas, and affected layout metadata. Target sheets with drawings are refused. No guessed translation or nonrectangular reference union is emitted.
 - `insert_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1, dry_run: bool = False) -> str`
   Inserts one or more rows, supports preview mode, and keeps workbook formulas, named ranges, chart series, validations, conditional formatting, and merged ranges aligned with the structural shift.
 - `insert_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1, dry_run: bool = False) -> str`
@@ -464,6 +470,12 @@ from numbers. See [standard write value safety](docs/value-safety.md).
   Deletes one or more rows, supports preview mode, and rewrites dependent workbook references instead of leaving stale formulas or range metadata behind.
 - `delete_sheet_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1, dry_run: bool = False) -> str`
   Deletes one or more columns, supports preview mode, and rewrites dependent workbook references instead of leaving stale formulas or range metadata behind.
+
+Unreleased: structural movement and dependency scans visit recorded cells,
+including sparse formatting-only tails, instead of materializing the used-range
+rectangle. Insertions that push recorded cells or supported references outside
+Excel's grid are refused. Native-table structural guardrails remain in force.
+These tools are not a complete emulation of Excel's structural editing engine.
 
 ## Table, Chart, And Pivot Tools
 
@@ -481,6 +493,7 @@ from numbers. See [standard write value safety](docs/value-safety.md).
   Placement objects support `direction` (`right` or `below`), optional `padding_columns` / `padding_rows`, and `relative_to` values of `content`, `used_range`, `data_range`, `free_canvas`, `table:<name>`, or a worksheet range like `A1:C10`. `free_canvas` also accepts `origin_cell`, `search_rows`, and `search_columns`.
 - `create_pivot_table(filepath: str, sheet_name: str, data_range: str, rows: List[str], values: List[str], columns: Optional[List[str]] = None, agg_func: str = "sum", replace_existing: bool = False) -> str`
   Creates a pivot-style summary from the given data range. Supported aggregation functions: `sum`, `average`, `count`, `min`, `max`. By default SheetForge now protects any existing `<sheet_name>_pivot` worksheet instead of deleting it implicitly; pass `replace_existing=True` only when you intentionally want to overwrite that generated pivot sheet.
+  Unreleased: source capture through verified save uses one same-host write lock and refuses observed outside drift. Source and expanded output are each bounded to 250,000 cells; generated names and output extents are validated. Generated values follow the [pivot precision policy](docs/value-safety.md): unsupported exact integer results fail, while computed floats use declared standard-writer precision.
 
 ## Practical Usage Notes
 

@@ -7,6 +7,24 @@ MAX_EXCEL_COLUMN = 16_384
 CELL_REFERENCE_RE = re.compile(r"^\$?([A-Za-z]{1,3})\$?([0-9]+)$")
 
 
+def validate_grid_bounds(min_row: int, min_col: int, max_row: int, max_col: int) -> None:
+    if not (1 <= min_row <= max_row <= MAX_EXCEL_ROW and 1 <= min_col <= max_col <= MAX_EXCEL_COLUMN):
+        raise ValueError("Mutation must stay inside Excel's A1:XFD1048576 grid")
+
+
+def validate_sheet_title(title: str, existing: list[str], *, current: str | None = None) -> None:
+    try:
+        units = len(title.encode("utf-16-le")) // 2 if isinstance(title, str) else 0
+    except UnicodeEncodeError:
+        units = 0
+    if (not isinstance(title, str) or not title.strip() or not 1 <= units <= 31
+            or any(ord(character) < 32 for character in title)
+            or re.search(r"[\\/*?:\[\]]", title) or title.startswith("'") or title.endswith("'")):
+        raise ValueError("Worksheet name must be 1-31 characters without \\ / * ? : [ ] or surrounding apostrophes")
+    if any(name != current and name.casefold() == title.casefold() for name in existing):
+        raise ValueError(f"Worksheet '{title}' already exists (names are case-insensitive)")
+
+
 def _parse_cell_reference(cell_ref: str) -> tuple[int, int]:
     match = CELL_REFERENCE_RE.fullmatch(str(cell_ref).strip())
     if not match:

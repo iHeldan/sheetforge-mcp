@@ -60,6 +60,8 @@ def validate_cell_value(value: Any) -> None:
             raise DataError("Text contains an unsupported Unicode scalar") from None
         if units > 32767:
             raise DataError("Cell text is limited to 32767 UTF-16 code units; no truncation was applied")
+        if isinstance(value, str) and value.startswith("=") and units > 8192:
+            raise DataError("Excel formulas are limited to 8192 UTF-16 code units; no truncation was applied")
         if "\r" in text:
             raise DataError("Standard writes cannot preserve carriage returns; use LF text or preserving mode")
         if any((ord(ch) < 32 and ch not in "\t\n") or ord(ch) in {0xFFFE, 0xFFFF} for ch in text):

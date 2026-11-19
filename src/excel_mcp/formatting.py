@@ -748,7 +748,7 @@ def format_range(
         Dictionary with operation status
     """
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             sheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -807,7 +807,7 @@ def format_ranges(
         if not ranges:
             raise FormattingError("At least one format operation must be provided")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             sheet = require_worksheet(
                 wb,
                 sheet_name,

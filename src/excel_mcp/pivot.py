@@ -6,11 +6,12 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.styles import Font
 
-from .data import read_excel_range
-from .cell_utils import parse_cell_range
+from .cell_utils import parse_cell_range, validate_grid_bounds, validate_sheet_title
 from .exceptions import PreconditionFailedError, ValidationError, PivotError
-from .workbook import safe_workbook
-from .values import cell_values_equal, value_key
+from .workbook import require_worksheet, safe_workbook
+from .values import cell_values_equal, value_key, validate_cell_value, verify_cell_writes
+from .mutation import preflight_response
+from openpyxl.compat.strings import safe_string
 from .query import _compute_metric
 
 logger = logging.getLogger(__name__)
@@ -136,48 +137,65 @@ def create_pivot_table(
         # Create range string
         data_range_str = f"{get_column_letter(start_col)}{start_row}:{get_column_letter(end_col)}{end_row}"
 
-        # Read source data and convert to list of dicts
-        try:
-            data_as_list = read_excel_range(filepath, sheet_name, start_cell, end_cell)
-            if not data_as_list or len(data_as_list) < 2:
-                raise PivotError("Source data must have a header row and at least one data row.")
+        validate_grid_bounds(start_row, start_col, end_row, end_col)
+        if (end_row - start_row + 1) * (end_col - start_col + 1) > 250_000:
+            raise ValidationError("Pivot source is limited to 250000 cells")
+        expected_writes = {}
 
-            headers = [str(h) for h in data_as_list[0]]
-            data = [dict(zip(headers, row)) for row in data_as_list[1:]]
+        def check_candidate(baseline, candidate):
+            with safe_workbook(str(candidate)) as saved:
+                verify_cell_writes(saved, expected_writes)
+            preflight_response(result)
 
-            if not data:
-                raise PivotError("No data rows found after header.")
+        with safe_workbook(filepath, save=True, candidate_check=check_candidate) as wb:
+            # Read source data and convert to list of dicts
+            try:
+                source_ws = require_worksheet(wb, sheet_name, error_cls=ValidationError, operation="creating pivot summaries")
+                data_as_list = [
+                    [getattr(source_ws._cells.get((row, col)), "value", None) for col in range(start_col, end_col + 1)]
+                    for row in range(start_row, end_row + 1)
+                ]
+                data_as_list = [row for row in data_as_list if any(value is not None for value in row)]
+                if not data_as_list or len(data_as_list) < 2:
+                    raise PivotError("Source data must have a header row and at least one data row.")
 
-        except Exception as e:
-            raise PivotError(f"Failed to read or process source data: {str(e)}")
+                headers = [str(h) for h in data_as_list[0]]
+                data = [dict(zip(headers, row)) for row in data_as_list[1:]]
 
-        if isinstance(replace_existing, bool) is False:
-            raise ValidationError("replace_existing must be a boolean")
+                if not data:
+                    raise PivotError("No data rows found after header.")
 
-        # Validate aggregation function
-        valid_agg_funcs = ["sum", "average", "count", "min", "max"]
-        if agg_func.lower() not in valid_agg_funcs:
-            raise ValidationError(
-                f"Invalid aggregation function. Must be one of: {', '.join(valid_agg_funcs)}"
-            )
+            except Exception as e:
+                raise PivotError(f"Failed to read or process source data: {str(e)}")
 
-        # Validate field names exist in data
-        if data:
-            available_fields_raw = list(data[0].keys())
-            resolved_rows = _resolve_field_names(rows, available_fields_raw, "row")
-            resolved_values = _resolve_field_names(values, available_fields_raw, "value")
-            resolved_columns = _resolve_field_names(columns or [], available_fields_raw, "column")
-        else:
-            resolved_rows = rows
-            resolved_values = values
-            resolved_columns = columns or []
+            if isinstance(replace_existing, bool) is False:
+                raise ValidationError("replace_existing must be a boolean")
 
-        with safe_workbook(filepath, save=True) as wb:
+            # Validate aggregation function
+            agg_func = agg_func.lower()
+            valid_agg_funcs = ["sum", "average", "count", "min", "max"]
+            if agg_func not in valid_agg_funcs:
+                raise ValidationError(
+                    f"Invalid aggregation function. Must be one of: {', '.join(valid_agg_funcs)}"
+                )
+
+            # Validate field names exist in data
+            if data:
+                available_fields_raw = list(data[0].keys())
+                resolved_rows = _resolve_field_names(rows, available_fields_raw, "row")
+                resolved_values = _resolve_field_names(values, available_fields_raw, "value")
+                resolved_columns = _resolve_field_names(columns or [], available_fields_raw, "column")
+            else:
+                resolved_rows = rows
+                resolved_values = values
+                resolved_columns = columns or []
+
             if sheet_name not in wb.sheetnames:
                 raise ValidationError(f"Sheet '{sheet_name}' not found")
 
             # Create pivot sheet
             pivot_sheet_name = f"{sheet_name}_pivot"
+            validate_sheet_title(pivot_sheet_name, wb.sheetnames, current=pivot_sheet_name)
             replaced_existing_sheet = False
             if pivot_sheet_name in wb.sheetnames:
                 if not replace_existing:
@@ -189,19 +207,29 @@ def create_pivot_table(
                 replaced_existing_sheet = True
             pivot_ws = wb.create_sheet(pivot_sheet_name)
 
+            def put(row, column, value):
+                validate_cell_value(value)
+                expected_writes[(pivot_sheet_name, row, column)] = value
+                return pivot_ws.cell(row=row, column=column, value=value)
+
             # Write headers
             current_row = 1
             current_col = 1
 
             # Write row field headers
             for field in resolved_rows:
-                cell = pivot_ws.cell(row=current_row, column=current_col, value=field)
+                cell = put(current_row, current_col, field)
                 cell.font = Font(bold=True)
                 current_col += 1
 
             # Only emit row/column combinations that actually exist in the source data.
             row_combinations = _get_present_combinations(data, resolved_rows)
             column_combinations = _get_present_combinations(data, resolved_columns)
+            total_rows = len(row_combinations) + 1
+            total_cols = len(resolved_rows) + len(column_combinations) * len(resolved_values)
+            validate_grid_bounds(1, 1, total_rows, total_cols)
+            if total_rows * total_cols > 250_000:
+                raise ValidationError("Pivot output is limited to 250000 cells")
 
             include_value_field = len(resolved_values) > 1 or len(resolved_columns) > 1
 
@@ -214,7 +242,7 @@ def create_pivot_table(
                         agg_func,
                         include_value_field=include_value_field,
                     )
-                    cell = pivot_ws.cell(row=current_row, column=current_col, value=header)
+                    cell = put(current_row, current_col, header)
                     cell.font = Font(bold=True)
                     current_col += 1
 
@@ -224,16 +252,12 @@ def create_pivot_table(
             # Recalculate after header writing
             current_row = 2
 
-            # Calculate table dimensions for formatting
-            total_rows = len(row_combinations) + 1  # +1 for header
-            total_cols = len(resolved_rows) + (len(column_combinations) * len(resolved_values))
-
             # Write data rows
             for combo in row_combinations:
                 # Write row field values
                 col = 1
                 for field in resolved_rows:
-                    pivot_ws.cell(row=current_row, column=col, value=combo[field])
+                    put(current_row, col, combo[field])
                     col += 1
 
                 # Calculate and write aggregated values for each column combination
@@ -242,7 +266,7 @@ def create_pivot_table(
                     for value_field in resolved_values:
                         try:
                             value = _aggregate_values(filtered_data, value_field, agg_func)
-                            pivot_ws.cell(row=current_row, column=col, value=value)
+                            put(current_row, col, value)
                         except Exception as e:
                             raise PivotError(
                                 f"Failed to aggregate values for field '{value_field}': {str(e)}"
@@ -270,18 +294,19 @@ def create_pivot_table(
             except Exception as e:
                 raise PivotError(f"Failed to create pivot table formatting: {str(e)}")
 
-        return {
-            "message": "Summary table created successfully",
-            "details": {
-                "source_range": data_range_str,
-                "pivot_sheet": pivot_sheet_name,
-                "rows": resolved_rows,
-                "columns": resolved_columns,
-                "values": resolved_values,
-                "aggregation": agg_func,
-                "replaced_existing_sheet": replaced_existing_sheet,
+            result = {
+                "message": "Summary table created successfully",
+                "details": {
+                    "source_range": data_range_str,
+                    "pivot_sheet": pivot_sheet_name,
+                    "rows": resolved_rows,
+                    "columns": resolved_columns,
+                    "values": resolved_values,
+                    "aggregation": agg_func,
+                    "replaced_existing_sheet": replaced_existing_sheet,
+                },
             }
-        }
+        return result
 
     except (ValidationError, PivotError) as e:
         logger.error(str(e))
@@ -333,4 +358,6 @@ def _aggregate_values(data: list[dict], field: str, agg_func: str) -> float:
         {"op": operator, "column_index": 0, "as": field, "resolved_header": field},
         [[value] for value in present_values],
     )
+    if isinstance(result, float):
+        result = float(safe_string(result))
     return 0 if result is None else result

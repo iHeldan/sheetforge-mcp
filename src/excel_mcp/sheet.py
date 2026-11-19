@@ -11,10 +11,13 @@ from openpyxl.utils import get_column_letter, column_index_from_string, range_bo
 from openpyxl.styles import Font, Border, PatternFill, Side
 from openpyxl.formula.translate import Translator, TranslatorError
 
-from .cell_utils import parse_cell_range, validate_cell_reference
+from .cell_utils import MAX_EXCEL_ROW, parse_cell_range, validate_cell_reference, validate_grid_bounds, validate_sheet_title
 from .exceptions import PreconditionFailedError, SheetError, ValidationError
+from .values import cell_values_equal, validate_cell_value, verify_cell_writes
+from .mutation import preflight_response
 from .workbook import (
     _iter_defined_name_entries,
+    _iter_recorded_formula_cells,
     _normalize_sheet_reference_name,
     _rewrite_sheet_references_in_text,
     _update_defined_name_sheet_references,
@@ -50,6 +53,7 @@ CELL_REFERENCE_PATTERN = re.compile(
 ROW_REFERENCE_PATTERN = re.compile(r"^(?P<row_abs>\$?)(?P<row>\d+)$")
 COLUMN_REFERENCE_PATTERN = re.compile(r"^(?P<col_abs>\$?)(?P<col>[A-Za-z]{1,3})$")
 MAX_EXCEL_COLUMN = 16384
+MAX_RANGE_MUTATION_CELLS = 250_000
 
 
 def _should_include_changes(dry_run: bool, include_changes: Optional[bool]) -> bool:
@@ -86,8 +90,10 @@ def _translated_copy_value(
         return value
     try:
         return Translator(value, origin=source_coordinate).translate_formula(target_coordinate)
-    except TranslatorError:
-        return value
+    except TranslatorError as exc:
+        raise ValidationError(
+            f"Cannot translate formula from {source_coordinate} to {target_coordinate}; no changes were saved"
+        ) from exc
 
 
 def _rewrite_sheet_reference_formula(
@@ -453,6 +459,12 @@ def _rewrite_local_reference_for_structure_change(
             return "#REF!"
         start_endpoint["column"], end_endpoint["column"] = shifted_interval
 
+    if kind == "cell":
+        validate_grid_bounds(start_endpoint["row"], start_endpoint["column"], end_endpoint["row"], end_endpoint["column"])
+    elif kind == "row":
+        validate_grid_bounds(start_endpoint["row"], 1, end_endpoint["row"], 1)
+    else:
+        validate_grid_bounds(1, start_endpoint["column"], 1, end_endpoint["column"])
     if parsed["had_range"]:
         return f"{_format_reference_endpoint(start_endpoint)}:{_format_reference_endpoint(end_endpoint)}"
     return _format_reference_endpoint(start_endpoint)
@@ -466,6 +478,7 @@ def _rewrite_reference_token_for_structure_change(
     operation: str,
     start_index: int,
     count: int,
+    partial_span: tuple[int, int] | None = None,
 ) -> Any:
     if not isinstance(token_value, str):
         return token_value
@@ -474,10 +487,31 @@ def _rewrite_reference_token_for_structure_change(
     local_reference = token_value
     if "!" in token_value:
         raw_sheet_prefix, local_reference = token_value.rsplit("!", 1)
+        if partial_span is not None and ":" in raw_sheet_prefix and "[" not in raw_sheet_prefix:
+            raise ValidationError("Partial deletion cannot safely update 3D references")
         if _normalize_sheet_reference_name(raw_sheet_prefix).casefold() != target_sheet_name.casefold():
             return token_value
-    elif formula_sheet_name is None or formula_sheet_name.casefold() != target_sheet_name.casefold():
+    elif formula_sheet_name is None:
+        if partial_span is not None and _parse_reference_token(local_reference) is not None:
+            raise ValidationError("Partial deletion cannot resolve an unqualified global reference; qualify its sheet first")
         return token_value
+    elif formula_sheet_name.casefold() != target_sheet_name.casefold():
+        return token_value
+
+    if partial_span is not None:
+        parsed = _parse_reference_token(local_reference)
+        if parsed is not None:
+            first, last = parsed["start"], parsed["end"]
+            row_axis = operation == "delete_rows"
+            along = "row" if row_axis else "column"
+            across = "column" if row_axis else "row"
+            along_max = MAX_EXCEL_ROW if row_axis else MAX_EXCEL_COLUMN
+            across_max = MAX_EXCEL_COLUMN if row_axis else MAX_EXCEL_ROW
+            lo, hi = first.get(across, 1), last.get(across, across_max)
+            if hi < partial_span[0] or lo > partial_span[1] or last.get(along, along_max) < start_index:
+                return token_value
+            if lo < partial_span[0] or hi > partial_span[1]:
+                raise ValidationError("Reference straddles a partial deletion; use a reviewed full-row/column operation instead")
 
     rewritten_local_reference = _rewrite_local_reference_for_structure_change(
         local_reference,
@@ -502,6 +536,7 @@ def _rewrite_formula_like_text_for_structure_change(
     operation: str,
     start_index: int,
     count: int,
+    partial_span: tuple[int, int] | None = None,
 ) -> Any:
     if not isinstance(text, str) or not text.strip():
         return text
@@ -512,11 +547,15 @@ def _rewrite_formula_like_text_for_structure_change(
     try:
         tokenizer = Tokenizer(normalized_formula)
     except Exception:
+        if partial_span is not None:
+            raise ValidationError("Partial deletion cannot verify an unsupported formula") from None
         return text
 
     rewritten_tokens: list[str] = []
     changed = False
     for token in tokenizer.items:
+        if partial_span is not None and token.type == "FUNC" and token.value.rsplit(".", 1)[-1].upper() in {"INDIRECT(", "OFFSET("}:
+            raise ValidationError("Partial deletion cannot verify dynamic INDIRECT/OFFSET references")
         rewritten_value = token.value
         if token.type == "OPERAND" and token.subtype == "RANGE":
             rewritten_value = _rewrite_reference_token_for_structure_change(
@@ -526,6 +565,7 @@ def _rewrite_formula_like_text_for_structure_change(
                 operation=operation,
                 start_index=start_index,
                 count=count,
+                partial_span=partial_span,
             )
         rewritten_tokens.append(rewritten_value)
         if rewritten_value != token.value:
@@ -548,6 +588,7 @@ def _update_formula_container_structure_references(
     operation: str,
     start_index: int,
     count: int,
+    partial_span: tuple[int, int] | None = None,
 ) -> int:
     if container is None:
         return 0
@@ -563,6 +604,7 @@ def _update_formula_container_structure_references(
             operation=operation,
             start_index=start_index,
             count=count,
+            partial_span=partial_span,
         )
         if updated_formula == formula:
             continue
@@ -580,6 +622,7 @@ def _update_chart_structure_references(
     operation: str,
     start_index: int,
     count: int,
+    partial_span: tuple[int, int] | None = None,
 ) -> int:
     updated_count = 0
 
@@ -591,6 +634,7 @@ def _update_chart_structure_references(
         operation=operation,
         start_index=start_index,
         count=count,
+        partial_span=partial_span,
     )
 
     series_items = getattr(chart, "ser", None) or list(getattr(chart, "series", []))
@@ -602,6 +646,7 @@ def _update_chart_structure_references(
             operation=operation,
             start_index=start_index,
             count=count,
+            partial_span=partial_span,
         )
         for attr_name in ("cat", "val", "xVal", "yVal"):
             updated_count += _update_formula_container_structure_references(
@@ -611,6 +656,7 @@ def _update_chart_structure_references(
                 operation=operation,
                 start_index=start_index,
                 count=count,
+                partial_span=partial_span,
             )
 
     return updated_count
@@ -839,6 +885,7 @@ def _update_workbook_structure_references(
     operation: str,
     start_index: int,
     count: int,
+    partial_span: tuple[int, int] | None = None,
 ) -> dict[str, int]:
     updated_counts = {
         "formula_updates": 0,
@@ -853,20 +900,17 @@ def _update_workbook_structure_references(
     }
 
     for worksheet in getattr(workbook, "worksheets", []):
-        for row in worksheet.iter_rows():
-            for cell in row:
-                if not isinstance(cell.value, str) or not cell.value.startswith("="):
-                    continue
-                updated_value = _rewrite_formula_like_text_for_structure_change(
-                    cell.value,
-                    target_sheet_name=target_sheet_name,
-                    formula_sheet_name=worksheet.title,
-                    operation=operation,
-                    start_index=start_index,
-                    count=count,
-                )
-                if updated_value == cell.value:
-                    continue
+        for cell in _iter_recorded_formula_cells(worksheet):
+            updated_value = _rewrite_formula_like_text_for_structure_change(
+                cell.value,
+                target_sheet_name=target_sheet_name,
+                formula_sheet_name=worksheet.title,
+                operation=operation,
+                start_index=start_index,
+                count=count,
+                partial_span=partial_span,
+            )
+            if updated_value != cell.value:
                 cell.value = updated_value
                 updated_counts["formula_updates"] += 1
 
@@ -880,6 +924,7 @@ def _update_workbook_structure_references(
                     operation=operation,
                     start_index=start_index,
                     count=count,
+                    partial_span=partial_span,
                 )
                 if updated_formula == formula:
                     continue
@@ -901,6 +946,7 @@ def _update_workbook_structure_references(
                         operation=operation,
                         start_index=start_index,
                         count=count,
+                        partial_span=partial_span,
                     )
                     updated_formulas.append(updated_formula)
                     if updated_formula != formula:
@@ -911,6 +957,21 @@ def _update_workbook_structure_references(
                 updated_counts["conditional_format_formula_updates"] += rule_updates
 
     seen_defined_name_ids: set[int] = set()
+    for worksheet in workbook.worksheets:
+        for table in worksheet.tables.values():
+            for column in table.tableColumns:
+                for attribute in ("calculatedColumnFormula", "totalsRowFormula"):
+                    formula = getattr(column, attribute, None)
+                    if formula is None:
+                        continue
+                    updated = _rewrite_formula_like_text_for_structure_change(
+                        formula.text, target_sheet_name=target_sheet_name,
+                        formula_sheet_name=worksheet.title, operation=operation,
+                        start_index=start_index, count=count, partial_span=partial_span,
+                    )
+                    if updated != formula.text:
+                        formula.text = updated
+                        updated_counts["formula_updates"] += 1
     for _, defined_name, scope_sheet_name in _iter_defined_name_entries(workbook):
         defined_name_id = id(defined_name)
         if defined_name_id in seen_defined_name_ids:
@@ -928,6 +989,7 @@ def _update_workbook_structure_references(
             operation=operation,
             start_index=start_index,
             count=count,
+            partial_span=partial_span,
         )
         if updated_text == original_text:
             continue
@@ -944,8 +1006,11 @@ def _update_workbook_structure_references(
                 operation=operation,
                 start_index=start_index,
                 count=count,
+                partial_span=partial_span,
             )
 
+    if partial_span is not None:
+        return updated_counts
     target_worksheet = workbook[target_sheet_name]
     range_updates = _update_worksheet_structural_ranges(
         target_worksheet,
@@ -956,6 +1021,14 @@ def _update_workbook_structure_references(
     updated_counts.update(range_updates)
 
     return updated_counts
+
+
+def _temporary_sheet_title(workbook: Any) -> str:
+    index = 1
+    names = {name.casefold() for name in workbook.sheetnames}
+    while f"SheetForgeRename{index}".casefold() in names:
+        index += 1
+    return f"SheetForgeRename{index}"
 
 
 def _rename_generated_pivot_sheet(
@@ -976,7 +1049,7 @@ def _rename_generated_pivot_sheet(
             "skipped_reason": None,
         }
 
-    if new_pivot_name in workbook.sheetnames:
+    if any(name.casefold() == new_pivot_name.casefold() and name != old_pivot_name for name in workbook.sheetnames):
         return {
             "attempted": True,
             "renamed": False,
@@ -985,7 +1058,11 @@ def _rename_generated_pivot_sheet(
             "skipped_reason": "target_exists",
         }
 
-    workbook[old_pivot_name].title = new_pivot_name
+    validate_sheet_title(new_pivot_name, workbook.sheetnames, current=old_pivot_name)
+    pivot_sheet = workbook[old_pivot_name]
+    if old_pivot_name.casefold() == new_pivot_name.casefold():
+        pivot_sheet.title = _temporary_sheet_title(workbook)
+    pivot_sheet.title = new_pivot_name
     return {
         "attempted": True,
         "renamed": True,
@@ -1274,6 +1351,7 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
     """Copy a worksheet within the same workbook."""
     try:
         with safe_workbook(filepath, save=True) as wb:
+            validate_sheet_title(target_sheet, wb.sheetnames)
             if target_sheet in wb.sheetnames:
                 raise SheetError(f"Target sheet '{target_sheet}' already exists")
 
@@ -1382,10 +1460,13 @@ def rename_sheet(filepath: str, old_name: str, new_name: str) -> Dict[str, Any]:
             if old_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{old_name}' not found")
 
-            if new_name in wb.sheetnames:
+            if new_name == old_name:
                 raise SheetError(f"Sheet '{new_name}' already exists")
+            validate_sheet_title(new_name, wb.sheetnames, current=old_name)
 
             sheet = wb[old_name]
+            if old_name.casefold() == new_name.casefold():
+                sheet.title = _temporary_sheet_title(wb)
             sheet.title = new_name
             updated_named_range_count = _update_defined_name_sheet_references(
                 wb,
@@ -1457,7 +1538,7 @@ def set_sheet_visibility(
                 "Must be one of: visible, hidden, veryHidden"
             )
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             if sheet_name not in wb.sheetnames:
                 raise SheetError(f"Sheet '{sheet_name}' not found")
 
@@ -1650,7 +1731,7 @@ def set_sheet_protection(
                 if not isinstance(value, bool):
                     raise ValidationError(f"Protection option '{key}' must be true or false")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -1776,7 +1857,7 @@ def set_print_area(
             _normalize_print_area(range_ref) if range_ref is not None else None
         )
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -1837,7 +1918,7 @@ def set_print_titles(
             else columns
         )
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -1917,7 +1998,7 @@ def set_column_widths(
                 width_value, f"Width for column {column_letter}"
             )
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -1981,7 +2062,7 @@ def set_row_heights(
                 height_value, f"Height for row {row_number}"
             )
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2040,7 +2121,7 @@ def autofit_columns(
             if max_width_value < min_width_value:
                 raise ValidationError("Maximum width must be greater than or equal to minimum width")
 
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2218,11 +2299,58 @@ def _snapshot_cell_values(
     max_row: int,
     max_col: int,
 ) -> dict[tuple[int, int], Any]:
-    snapshot: dict[tuple[int, int], Any] = {}
-    for row in range(min_row, max_row + 1):
-        for col in range(min_col, max_col + 1):
-            snapshot[(row, col)] = worksheet.cell(row=row, column=col).value
-    return snapshot
+    return {
+        (row, col): cell.value for (row, col), cell in worksheet._cells.items()
+        if min_row <= row <= max_row and min_col <= col <= max_col
+    }
+
+
+def _relocate_cell(cell: Any, row: int, column: int) -> None:
+    cell.row, cell.column = row, column
+    hyperlink = getattr(cell, "hyperlink", None)
+    if hyperlink is not None:
+        hyperlink.ref = cell.coordinate
+
+
+def _move_stored_structure(ws: Worksheet, *, axis: int, start: int, count: int, delete: bool = False) -> None:
+    limit = MAX_EXCEL_ROW if axis == 0 else MAX_EXCEL_COLUMN
+    if not 1 <= start <= start + count - 1 <= limit:
+        raise ValidationError("Structural mutation exceeds Excel's grid")
+    moved = []
+    for position, cell in ws._cells.items():
+        index = position[axis]
+        if index >= start and getattr(cell, "data_type", None) == "f" and not isinstance(cell.value, str):
+            raise ValidationError("Structural edits of array/data-table formulas are not supported")
+        if delete and start <= index < start + count:
+            continue
+        target = list(position)
+        if index >= start:
+            target[axis] += -count if delete else count
+        validate_grid_bounds(*target, *target)
+        moved.append((tuple(target), cell))
+    ws._cells = dict(moved)
+    for (row, column), cell in moved:
+        _relocate_cell(cell, row, column)
+    ws._current_row = max((row for row, _ in ws._cells), default=0)
+
+
+def _guard_partial_layout(ws: Worksheet, bounds: tuple[int, int, int, int]) -> None:
+    r1, c1, r2, c2 = bounds
+    references = [str(item) for item in ws.merged_cells.ranges]
+    references.extend(table.ref for table in ws.tables.values())
+    references.extend(str(item) for rule in ws.data_validations.dataValidation for item in rule.sqref.ranges)
+    references.extend(str(item) for rule in ws.conditional_formatting for item in rule.sqref.ranges)
+    references.extend(str(item) for item in ws._print_area.ranges)
+    if ws.auto_filter.ref:
+        references.append(ws.auto_filter.ref)
+    if ws.freeze_panes:
+        references.append(str(ws.freeze_panes))
+    if ws._charts or ws._images:
+        raise ValidationError("Partial deletion on a sheet with drawings is not supported; no changes were saved")
+    for reference in references:
+        a, b, c, d = range_boundaries(reference)
+        if r1 <= d and b <= r2 and c1 <= c and a <= c2:
+            raise ValidationError("Partial deletion intersects layout/table/rule metadata; no changes were saved")
 
 
 def _cell_value_changes(
@@ -2232,10 +2360,10 @@ def _cell_value_changes(
     sheet_name: str,
 ) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
-    for row, col in sorted(before.keys()):
-        old_value = before[(row, col)]
-        new_value = after[(row, col)]
-        if old_value == new_value:
+    for row, col in sorted(before.keys() | after.keys()):
+        old_value = before.get((row, col))
+        new_value = after.get((row, col))
+        if cell_values_equal(old_value, new_value):
             continue
         changes.append(
             {
@@ -2259,7 +2387,7 @@ def merge_range(
 ) -> Dict[str, Any]:
     """Merge a range of cells."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             start_row, start_col, end_row, end_col = parse_cell_range(start_cell, end_cell)
 
             if end_row is None or end_col is None:
@@ -2302,7 +2430,7 @@ def unmerge_range(
 ) -> Dict[str, Any]:
     """Unmerge a range of cells."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2374,7 +2502,7 @@ def set_freeze_panes(
 ) -> Dict[str, Any]:
     """Set or clear worksheet freeze panes."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2427,7 +2555,7 @@ def set_auto_filter(
 ) -> Dict[str, Any]:
     """Set worksheet autofilter for an explicit or inferred range."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2482,7 +2610,14 @@ def copy_range_operation(
 ) -> Dict:
     """Copy a range of cells to another location."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        expected_writes = {}
+
+        def check_candidate(baseline, candidate):
+            with safe_workbook(str(candidate)) as saved:
+                verify_cell_writes(saved, expected_writes)
+            preflight_response(result)
+
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run, candidate_check=check_candidate) as wb:
             source_ws = require_worksheet(
                 wb,
                 sheet_name,
@@ -2506,8 +2641,10 @@ def copy_range_operation(
 
             # Parse target starting point
             try:
-                target_row = int(''.join(filter(str.isdigit, target_start)))
-                target_col = column_index_from_string(''.join(filter(str.isalpha, target_start)))
+                target_row, target_col, target_end_row, _ = parse_cell_range(target_start)
+                if target_end_row is not None:
+                    raise ValueError("target_start must be a single cell")
+                validate_grid_bounds(target_row, target_col, target_row + end_row - start_row, target_col + end_col - start_col)
             except ValueError as e:
                 logger.error(f"Invalid target cell: {e}")
                 raise ValidationError(f"Invalid target cell: {str(e)}")
@@ -2517,34 +2654,46 @@ def copy_range_operation(
             col_offset = target_col - start_col
             changes = []
             source_cells = []
-
-            for i in range(start_row, end_row + 1):
-                for j in range(start_col, end_col + 1):
-                    source_cell = source_ws.cell(row=i, column=j)
-                    source_cells.append(
-                        {
-                            "source_row": i,
-                            "source_col": j,
-                            "value": source_cell.value,
-                            "has_style": source_cell.has_style,
-                            "style": copy(source_cell._style) if source_cell.has_style else None,
-                        }
-                    )
+            target_end_row = target_row + end_row - start_row
+            target_end_col = target_col + end_col - start_col
+            if (end_row - start_row + 1) * (end_col - start_col + 1) > MAX_RANGE_MUTATION_CELLS:
+                raise ValidationError(f"Range copy is limited to {MAX_RANGE_MUTATION_CELLS} cells")
+            for ws, bounds in [(source_ws, (start_row, start_col, end_row, end_col)),
+                               (target_ws, (target_row, target_col, target_end_row, target_end_col))]:
+                if any(bounds[0] <= merged.max_row and merged.min_row <= bounds[2]
+                       and bounds[1] <= merged.max_col and merged.min_col <= bounds[3]
+                       for merged in ws.merged_cells.ranges):
+                    raise ValidationError("Range copy overlapping merged cells is not supported; no changes were saved")
+            positions = {
+                (r, c) for r, c in source_ws._cells
+                if start_row <= r <= end_row and start_col <= c <= end_col
+            }
+            positions.update(
+                (r - row_offset, c - col_offset) for r, c in target_ws._cells
+                if target_row <= r <= target_end_row and target_col <= c <= target_end_col
+            )
+            for i, j in sorted(positions):
+                source_cell = source_ws._cells.get((i, j))
+                source_cells.append({
+                    "source_row": i, "source_col": j,
+                    "value": source_cell.value if source_cell is not None else None,
+                    "style": copy(source_cell._style) if source_cell is not None else None,
+                })
 
             for source_entry in source_cells:
                 i = source_entry["source_row"]
                 j = source_entry["source_col"]
                 source_value = source_entry["value"]
                 source_style = source_entry["style"]
-                source_has_style = bool(source_entry["has_style"])
-                source_cell = source_ws.cell(row=i, column=j)
                 target_cell = target_ws.cell(row=i + row_offset, column=j + col_offset)
                 translated_value = _translated_copy_value(
                     source_value,
-                    source_coordinate=source_cell.coordinate,
+                    source_coordinate=f"{get_column_letter(j)}{i}",
                     target_coordinate=target_cell.coordinate,
                 )
-                if target_cell.value != translated_value:
+                validate_cell_value(translated_value)
+                expected_writes[(resolved_target_sheet, i + row_offset, j + col_offset)] = translated_value
+                if not cell_values_equal(target_cell.value, translated_value):
                     changes.append({
                         "sheet_name": resolved_target_sheet,
                         "cell": f"{get_column_letter(j + col_offset)}{i + row_offset}",
@@ -2555,17 +2704,17 @@ def copy_range_operation(
                         "source_cell": f"{get_column_letter(j)}{i}",
                     })
                 target_cell.value = translated_value
-                if source_has_style and source_style is not None:
-                    target_cell._style = copy(source_style)
+                target_cell._style = copy(source_style)
 
-        return {
-            "message": f"{'Previewed' if dry_run else 'Copied'} range successfully",
-            "source_range": f"{source_start}:{source_end}",
-            "target_sheet": resolved_target_sheet,
-            "target_start": target_start,
-            "dry_run": dry_run,
-            "changes": changes,
-        }
+            result = {
+                "message": f"{'Previewed' if dry_run else 'Copied'} range successfully",
+                "source_range": f"{source_start}:{source_end}",
+                "target_sheet": resolved_target_sheet,
+                "target_start": target_start,
+                "dry_run": dry_run,
+                "changes": changes,
+            }
+        return result
 
     except (ValidationError, SheetError):
         raise
@@ -2585,7 +2734,7 @@ def delete_range_operation(
 ) -> Dict[str, Any]:
     """Delete a range of cells and shift remaining cells."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2617,87 +2766,54 @@ def delete_range_operation(
             range_height = normalized_end_row - start_row + 1
             range_width = normalized_end_col - start_col + 1
 
-            # Shift cells if needed
-            if shift_direction == "up":
-                _raise_table_structure_guard(
-                    operation=f"delete range {range_string} with upward shift",
-                    impacts=_table_row_operation_impacts(worksheet, start_row=start_row),
-                )
-                impact_bounds = {
-                    "min_row": start_row,
-                    "min_col": start_col,
-                    "max_row": worksheet.max_row,
-                    "max_col": normalized_end_col,
-                }
-                before_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
-
-                if normalized_end_row < worksheet.max_row:
-                    worksheet.move_range(
-                        format_range_string(
-                            normalized_end_row + 1,
-                            start_col,
-                            worksheet.max_row,
-                            normalized_end_col,
-                        ),
-                        rows=-range_height,
-                        cols=0,
-                        translate=True,
-                    )
-
-                vacated_start_row = max(worksheet.max_row - range_height + 1, start_row)
-                delete_range(
-                    worksheet,
-                    f"{get_column_letter(start_col)}{vacated_start_row}",
-                    f"{get_column_letter(normalized_end_col)}{worksheet.max_row}",
-                )
-                after_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
-            elif shift_direction == "left":
-                _raise_table_structure_guard(
-                    operation=f"delete range {range_string} with left shift",
-                    impacts=_table_column_operation_impacts(worksheet, start_col=start_col),
-                )
-                impact_bounds = {
-                    "min_row": start_row,
-                    "min_col": start_col,
-                    "max_row": normalized_end_row,
-                    "max_col": worksheet.max_column,
-                }
-                before_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
-
-                if normalized_end_col < worksheet.max_column:
-                    worksheet.move_range(
-                        format_range_string(
-                            start_row,
-                            normalized_end_col + 1,
-                            normalized_end_row,
-                            worksheet.max_column,
-                        ),
-                        rows=0,
-                        cols=-range_width,
-                        translate=True,
-                    )
-
-                vacated_start_col = max(worksheet.max_column - range_width + 1, start_col)
-                delete_range(
-                    worksheet,
-                    f"{get_column_letter(vacated_start_col)}{start_row}",
-                    f"{get_column_letter(worksheet.max_column)}{normalized_end_row}",
-                )
-                after_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
-
+            upward = shift_direction == "up"
+            _raise_table_structure_guard(
+                operation=f"delete range {range_string} with {shift_direction} shift",
+                impacts=(_table_row_operation_impacts(worksheet, start_row=start_row) if upward
+                         else _table_column_operation_impacts(worksheet, start_col=start_col)),
+            )
+            max_row = worksheet.max_row if upward else normalized_end_row
+            max_col = normalized_end_col if upward else worksheet.max_column
+            impact_bounds = {"min_row": start_row, "min_col": start_col, "max_row": max_row, "max_col": max_col}
+            _guard_partial_layout(worksheet, (start_row, start_col, max_row, max_col))
+            for ws in wb.worksheets:
+                if any(cell.data_type == "f" and not isinstance(cell.value, str) for cell in ws._cells.values()):
+                    raise ValidationError("Partial deletion cannot verify array/data-table formulas")
+            before_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
+            affected = [(position, cell) for position, cell in worksheet._cells.items()
+                        if start_row <= position[0] <= max_row and start_col <= position[1] <= max_col]
+            for position, _ in affected:
+                del worksheet._cells[position]
+            for (row, column), cell in affected:
+                if row <= normalized_end_row and column <= normalized_end_col:
+                    continue
+                row -= range_height if upward else 0
+                column -= 0 if upward else range_width
+                _relocate_cell(cell, row, column)
+                worksheet._cells[(row, column)] = cell
+            worksheet._current_row = max((row for row, _ in worksheet._cells), default=0)
+            reference_updates = _update_workbook_structure_references(
+                wb, target_sheet_name=sheet_name, operation="delete_rows" if upward else "delete_cols",
+                start_index=start_row if upward else start_col, count=range_height if upward else range_width,
+                partial_span=(start_col, normalized_end_col) if upward else (start_row, normalized_end_row),
+            )
+            after_snapshot = _snapshot_cell_values(worksheet, **impact_bounds)
             changes = _cell_value_changes(
                 before=before_snapshot,
                 after=after_snapshot,
                 sheet_name=sheet_name,
             )
 
-        return {
-            "message": f"{'Previewed' if dry_run else 'Deleted'} range {range_string} successfully",
-            "range": range_string,
-            "shift_direction": shift_direction,
-            "dry_run": dry_run,
-            "changes": changes,
-        }
+            result = {
+                "message": f"{'Previewed' if dry_run else 'Deleted'} range {range_string} successfully",
+                "range": range_string,
+                "shift_direction": shift_direction,
+                "dry_run": dry_run,
+                "changes": changes,
+                "reference_updates": reference_updates,
+            }
+            preflight_response(result)
+        return result
     except (ValidationError, SheetError) as e:
         logger.error(str(e))
         raise
@@ -2716,7 +2832,7 @@ def insert_row(
 ) -> Dict[str, Any]:
     """Insert one or more rows starting at the specified row."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2732,7 +2848,7 @@ def insert_row(
                 operation=f"insert rows starting at row {start_row}",
                 impacts=_table_row_operation_impacts(worksheet, start_row=start_row),
             )
-            worksheet.insert_rows(start_row, count)
+            _move_stored_structure(worksheet, axis=0, start=start_row, count=count)
             reference_updates = _update_workbook_structure_references(
                 wb,
                 target_sheet_name=sheet_name,
@@ -2773,7 +2889,7 @@ def insert_cols(
 ) -> Dict[str, Any]:
     """Insert one or more columns starting at the specified column."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2789,7 +2905,7 @@ def insert_cols(
                 operation=f"insert columns starting at column {start_col}",
                 impacts=_table_column_operation_impacts(worksheet, start_col=start_col),
             )
-            worksheet.insert_cols(start_col, count)
+            _move_stored_structure(worksheet, axis=1, start=start_col, count=count)
             reference_updates = _update_workbook_structure_references(
                 wb,
                 target_sheet_name=sheet_name,
@@ -2830,7 +2946,7 @@ def delete_rows(
 ) -> Dict[str, Any]:
     """Delete one or more rows starting at the specified row."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2848,7 +2964,7 @@ def delete_rows(
                 operation=f"delete rows starting at row {start_row}",
                 impacts=_table_row_operation_impacts(worksheet, start_row=start_row),
             )
-            worksheet.delete_rows(start_row, count)
+            _move_stored_structure(worksheet, axis=0, start=start_row, count=count, delete=True)
             reference_updates = _update_workbook_structure_references(
                 wb,
                 target_sheet_name=sheet_name,
@@ -2889,7 +3005,7 @@ def delete_cols(
 ) -> Dict[str, Any]:
     """Delete one or more columns starting at the specified column."""
     try:
-        with safe_workbook(filepath, save=not dry_run) as wb:
+        with safe_workbook(filepath, save=not dry_run, preview=dry_run) as wb:
             worksheet = require_worksheet(
                 wb,
                 sheet_name,
@@ -2907,7 +3023,7 @@ def delete_cols(
                 operation=f"delete columns starting at column {start_col}",
                 impacts=_table_column_operation_impacts(worksheet, start_col=start_col),
             )
-            worksheet.delete_cols(start_col, count)
+            _move_stored_structure(worksheet, axis=1, start=start_col, count=count, delete=True)
             reference_updates = _update_workbook_structure_references(
                 wb,
                 target_sheet_name=sheet_name,

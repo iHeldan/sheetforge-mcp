@@ -610,7 +610,7 @@ def test_delete_range_operation_translates_moved_formulas_on_upward_shift(tmp_pa
     wb = load_workbook(filepath)
     ws = wb["Sheet1"]
     assert ws["B2"].value == "=B3"
-    assert ws["B3"].value is None
+    assert ws["B3"].value == 5
     wb.close()
 
 
@@ -632,7 +632,7 @@ def test_delete_range_operation_translates_moved_formulas_on_left_shift(tmp_path
     wb = load_workbook(filepath)
     ws = wb["Sheet1"]
     assert ws["A2"].value == "=B2"
-    assert ws["B2"].value is None
+    assert ws["B2"].value == 99
     wb.close()
 
 

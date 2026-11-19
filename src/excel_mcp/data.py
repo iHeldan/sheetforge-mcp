@@ -14,7 +14,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 
 from .exceptions import DataError, PreconditionFailedError, ResponseTooLargeError
-from .cell_utils import parse_cell_range
+from .cell_utils import parse_cell_range, validate_grid_bounds, validate_sheet_title
 from .cell_validation import get_data_validation_for_cell
 from .package_fidelity import inspect_package_fidelity
 from .values import cell_values_equal, validate_cell_value, value_key, verify_cell_writes
@@ -1819,6 +1819,7 @@ def _write_data(
         with safe_workbook(
             filepath, save=not dry_run,
             candidate_check=check_candidate,
+            check_package=False,
         ) as wb:
             # If no sheet specified, use active sheet
             if not sheet_name:
@@ -1859,6 +1860,7 @@ def _write_data(
                 max_cols = max(len(row) for row in data)
                 end_row = start_row + len(data) - 1
                 end_col = start_col + max_cols - 1
+                validate_grid_bounds(start_row, start_col, end_row, end_col)
                 target_range = _range_string(start_row, start_col, end_row, end_col)
             else:
                 target_range = start_cell
@@ -1884,6 +1886,7 @@ def _write_data(
 
             if len(data) > 0:
                 if sheet_created:
+                    validate_sheet_title(sheet_name, wb.sheetnames)
                     ws = wb.create_sheet(sheet_name)
                 else:
                     ws = existing_ws
