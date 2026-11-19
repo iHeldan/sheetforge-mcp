@@ -1,4 +1,3 @@
-from .exceptions import PreconditionFailedError
 import json
 import logging
 import re
@@ -24,7 +23,7 @@ from .workbook import (
     safe_workbook,
 )
 from .cell_utils import parse_cell_range, validate_cell_reference
-from .exceptions import ValidationError, FormattingError
+from .exceptions import PreconditionFailedError, ValidationError, FormattingError
 
 logger = logging.getLogger(__name__)
 HEX_COLOR_RE = re.compile(r"^[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")

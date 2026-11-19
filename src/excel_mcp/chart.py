@@ -1,4 +1,3 @@
-from .exceptions import PreconditionFailedError
 from enum import Enum
 import logging
 import math
@@ -21,7 +20,7 @@ from openpyxl.utils.units import EMU_to_cm
 from openpyxl.utils.cell import range_boundaries
 
 from .cell_utils import parse_cell_range
-from .exceptions import ValidationError, ChartError
+from .exceptions import PreconditionFailedError, ValidationError, ChartError
 from .workbook import _normalize_sheet_reference_name, require_worksheet, safe_workbook
 
 logger = logging.getLogger(__name__)

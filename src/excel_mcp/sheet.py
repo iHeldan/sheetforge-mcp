@@ -1,4 +1,3 @@
-from .exceptions import PreconditionFailedError
 import logging
 from collections import OrderedDict
 from copy import copy, deepcopy
@@ -13,7 +12,7 @@ from openpyxl.styles import Font, Border, PatternFill, Side
 from openpyxl.formula.translate import Translator, TranslatorError
 
 from .cell_utils import parse_cell_range, validate_cell_reference
-from .exceptions import SheetError, ValidationError
+from .exceptions import PreconditionFailedError, SheetError, ValidationError
 from .workbook import (
     _iter_defined_name_entries,
     _normalize_sheet_reference_name,

@@ -1,4 +1,3 @@
-from .exceptions import PreconditionFailedError
 from collections import Counter
 from typing import Any
 import logging
@@ -7,7 +6,7 @@ from openpyxl.formula.tokenizer import Tokenizer
 from openpyxl.utils import range_boundaries
 from .workbook import require_worksheet, safe_workbook
 from .cell_utils import validate_cell_reference
-from .exceptions import ValidationError, CalculationError
+from .exceptions import PreconditionFailedError, ValidationError, CalculationError
 from .validation import UNSAFE_FORMULA_FUNCTIONS, validate_formula
 
 logger = logging.getLogger(__name__)

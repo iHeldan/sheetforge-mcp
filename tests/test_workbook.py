@@ -379,6 +379,87 @@ def test_audit_workbook_handles_sparse_maximum_coordinates_without_densifying(
     assert path.read_bytes() == original_bytes
 
 
+def test_formula_readers_handle_maximum_sparse_ranges_without_blank_allocation(tmp_path, monkeypatch):
+    from excel_mcp.workbook import detect_circular_dependencies
+
+    path = tmp_path / "sparse-formulas.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sparse"
+    ws["A1"] = 1
+    ws["B1"] = "=A1"
+    ws["XFD1048576"] = "=SUM(A1:XFD1048575)"
+    wb.save(path)
+    wb.close()
+    original_bytes = path.read_bytes()
+    get_cell = Worksheet._get_cell
+
+    def existing_only(self, row, column):
+        assert (row, column) in self._cells, "Reader must not materialize a blank cell"
+        return get_cell(self, row, column)
+
+    def no_rectangle(*args, **kwargs):
+        raise AssertionError("Reader must not iterate a sparse used-range rectangle")
+
+    monkeypatch.setattr(Worksheet, "_get_cell", existing_only)
+    monkeypatch.setattr(Worksheet, "iter_rows", no_rectangle)
+    cycles = detect_circular_dependencies(str(path))
+    assert cycles["summary"]["formula_cell_count"] == 2
+    assert cycles["summary"]["dependency_edge_count"] == 1
+    assert cycles["summary"]["cycle_count"] == 0
+    impact = analyze_range_impact(str(path), "Sparse", "A1:A1")
+    assert impact["dependent_formulas"]["count"] == 2
+    full = analyze_range_impact(str(path), "Sparse", "A1:XFD1048576")
+    assert full["formula_cells"]["sample"] == ["B1", "XFD1048576"]
+    explained = explain_formula_cell(str(path), "Sparse", "XFD1048576")
+    assert explained["direct_formula_precedent_count"] == 1
+    assert explained["direct_formula_precedents"][0]["cell"] == "B1"
+    assert path.read_bytes() == original_bytes
+
+
+def test_diff_is_sparse_type_aware_and_keeps_sample_order(tmp_path, monkeypatch):
+    before = tmp_path / "before-sparse.xlsx"
+    after = tmp_path / "after-sparse.xlsx"
+    wb = Workbook()
+    wb.active["A1"] = 1
+    wb.active["XFD1048576"] = 9
+    wb.save(before)
+    wb.active["A1"] = True
+    wb.active["XFD1048576"] = None
+    wb.active["B4"] = 2
+    wb.save(after)
+    wb.close()
+    original_bytes = (before.read_bytes(), after.read_bytes())
+    get_cell = Worksheet._get_cell
+
+    def existing_only(self, row, column):
+        assert (row, column) in self._cells, "Diff must not materialize a blank cell"
+        return get_cell(self, row, column)
+
+    monkeypatch.setattr(Worksheet, "_get_cell", existing_only)
+    result = diff_workbooks(str(before), str(after), sample_limit=2)
+    assert result["cell_changes"] == {
+        "count": 3, "truncated": True,
+        "sample": [
+            {"sheet_name": "Sheet", "cell": "A1", "before": 1, "after": True},
+            {"sheet_name": "Sheet", "cell": "B4", "before": None, "after": 2},
+        ],
+    }
+    assert (before.read_bytes(), after.read_bytes()) == original_bytes
+
+
+@pytest.mark.parametrize("before,after", [(1, True), (True, 1), (0, False), (False, 0), (1, 1.0)])
+def test_diff_boolean_numeric_equality_policy(tmp_path, before, after):
+    from excel_mcp.workbook import _diff_workbook_cell_values
+
+    first, second = Workbook(), Workbook()
+    first.active["A1"], second.active["A1"] = before, after
+    result = _diff_workbook_cell_values(first, second, sample_limit=2)
+    assert result["count"] == int(isinstance(before, bool) != isinstance(after, bool))
+    first.close()
+    second.close()
+
+
 def test_audit_workbook_reports_high_signal_findings(tmp_path):
     filepath = str(tmp_path / "audit.xlsx")
     wb = Workbook()
@@ -925,6 +1006,24 @@ def test_rename_updates_both_native_table_formula_metadata_fields(tmp_path):
     assert column.calculatedColumnFormula.text == "'Sales'!A1"
     assert column.totalsRowFormula.text == 'SUM(\'Sales\'!A1)&"Data!A1"'
     wb.close()
+
+
+@pytest.mark.parametrize("formula,expected", [
+    ('=SUM(Table1[Data!A1])', '=SUM(Table1[Data!A1])'),
+    ('=SUM(Table1[Other Data!A1])', '=SUM(Table1[Other Data!A1])'),
+    ('=Data!Table1[Data!A1]', "='Sales'!Table1[Data!A1]"),
+    ('=Data!A1:data!B2', "='Sales'!A1:'Sales'!B2"),
+    ('=SUM(data:Other!A1)', "=SUM('Sales:Other'!A1)"),
+    ("=SUM('data:Other'!A1)", "=SUM('Sales:Other'!A1)"),
+    ("=SUM('data':'Other'!A1)", "=SUM('Sales:Other'!A1)"),
+    ('=[Book.xlsx]Data!A1', '=[Book.xlsx]Data!A1'),
+])
+def test_sheet_reference_rewriter_changes_only_real_qualifiers(formula, expected):
+    from excel_mcp.workbook import _rewrite_sheet_references_in_text
+
+    assert _rewrite_sheet_references_in_text(
+        formula, old_sheet_name="Data", new_sheet_name="Sales",
+    ) == expected
 
 
 def test_copy_sheet_duplicates_local_named_ranges_for_target_sheet(tmp_path):

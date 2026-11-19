@@ -63,7 +63,9 @@ _STRUCTURED_REFERENCE_COLUMN_RANGE_RE = re.compile(
 _STRUCTURED_REFERENCE_FLAG_ONLY_RE = re.compile(r"^\[(?P<flag>#[^\]]+)\]$")
 _STRUCTURED_REFERENCE_THIS_ROW_COLUMN_RE = re.compile(r"^\[@(?P<column>[^\]]+)\]$")
 _STRUCTURED_REFERENCE_COLUMN_RE = re.compile(r"^\[(?P<column>[^\]]+)\]$")
-_SHEET_REFERENCE_TOKEN_RE = re.compile(r"(?<![\w.\]'])(?P<sheet>'(?:[^']|'')+'|[\w.]+)!")
+_SHEET_REFERENCE_TOKEN_RE = re.compile(
+    r"^(?P<sheet>'(?:[^']|'')+'|[\w.]+)(?::(?P<end_sheet>'(?:[^']|'')+'|[\w.]+))?!"
+)
 
 
 def _get_sheet_usage(ws) -> tuple[int, int, str | None, bool]:
@@ -101,12 +103,25 @@ def _rewrite_sheet_references_in_text(
     if not isinstance(text, str) or "!" not in text:
         return text
 
-    quoted_new_sheet = quote_sheetname(new_sheet_name)
-
-    def _replace(match: re.Match[str]) -> str:
-        if _normalize_sheet_reference_name(match.group("sheet")).casefold() != old_sheet_name.casefold():
-            return match.group(0)
-        return f"{quoted_new_sheet}!"
+    def rewrite_operand(value: str) -> str:
+        match = _SHEET_REFERENCE_TOKEN_RE.match(value)
+        if match is None:
+            return value
+        names = _normalize_sheet_reference_name(match["sheet"]).split(":")
+        if match["end_sheet"] is not None:
+            names.append(_normalize_sheet_reference_name(match["end_sheet"]))
+        if any("[" in name or "]" in name for name in names):
+            return value
+        updated = [new_sheet_name if name.casefold() == old_sheet_name.casefold() else name
+                   for name in names]
+        prefix = quote_sheetname(":".join(updated)) + "!" if updated != names else match[0]
+        reference = value[match.end():]
+        # A second qualified A1 endpoint is a reference too, but punctuation
+        # inside a structured column label must never be interpreted as one.
+        endpoints = re.fullmatch(r"(\$?[A-Za-z]+\$?\d+|\$?[A-Za-z]+|\$?\d+):(.+)", reference)
+        if endpoints is not None:
+            reference = f"{endpoints[1]}:{rewrite_operand(endpoints[2])}"
+        return prefix + reference
 
     had_equals = text.startswith("=")
     try:
@@ -118,16 +133,7 @@ def _rewrite_sheet_references_in_text(
     for token in tokens:
         value = token.value
         if token.type == "OPERAND" and token.subtype == "RANGE" and "!" in value:
-            qualifier, reference = value.split("!", 1)
-            sheet_names = _normalize_sheet_reference_name(qualifier)
-            if ":" in sheet_names and "[" not in sheet_names:
-                names = sheet_names.split(":")
-                names = [new_sheet_name if name.casefold() == old_sheet_name.casefold() else name
-                         for name in names]
-                if ":".join(names) != sheet_names:
-                    value = f"{quote_sheetname(':'.join(names))}!{reference}"
-            else:
-                value = _SHEET_REFERENCE_TOKEN_RE.sub(_replace, value)
+            value = rewrite_operand(value)
         changed |= value != token.value
         rewritten.append(value)
     if not changed:
@@ -982,57 +988,54 @@ def _extract_formula_dependencies(
         if _sheet_type(formula_ws) == "chartsheet":
             continue
 
-        for row in formula_ws.iter_rows():
-            for cell in row:
-                if not isinstance(cell.value, str) or not cell.value.startswith("="):
+        for cell in _iter_recorded_formula_cells(formula_ws):
+            if _cell_is_within_bounds(
+                formula_sheet_name,
+                cell.row,
+                cell.column,
+                target_sheet,
+                target_bounds,
+            ):
+                continue
+
+            matched_references: list[dict[str, Any]] = []
+            try:
+                tokenizer = Tokenizer(cell.value)
+            except Exception:
+                continue
+
+            token_values: list[str] = []
+            for token in tokenizer.items:
+                if token.type != "OPERAND" or token.subtype != "RANGE":
                     continue
-                if _cell_is_within_bounds(
-                    formula_sheet_name,
-                    cell.row,
-                    cell.column,
-                    target_sheet,
-                    target_bounds,
-                ):
+
+                token_value = str(token.value).strip()
+                if not token_value:
                     continue
 
-                matched_references: list[dict[str, Any]] = []
-                try:
-                    tokenizer = Tokenizer(cell.value)
-                except Exception:
-                    continue
-
-                token_values: list[str] = []
-                for token in tokenizer.items:
-                    if token.type != "OPERAND" or token.subtype != "RANGE":
-                        continue
-
-                    token_value = str(token.value).strip()
-                    if not token_value:
-                        continue
-
-                    token_values.append(token_value)
-                    matched_references.extend(
-                        _resolve_formula_token_references(
-                            wb,
-                            token_value=token_value,
-                            formula_sheet_name=formula_sheet_name,
-                            formula_row=cell.row,
-                            target_sheet=target_sheet,
-                            target_bounds=target_bounds,
-                        )
+                token_values.append(token_value)
+                matched_references.extend(
+                    _resolve_formula_token_references(
+                        wb,
+                        token_value=token_value,
+                        formula_sheet_name=formula_sheet_name,
+                        formula_row=cell.row,
+                        target_sheet=target_sheet,
+                        target_bounds=target_bounds,
                     )
-
-                formula_entries.append(
-                    {
-                        "sheet_name": formula_sheet_name,
-                        "cell": cell.coordinate,
-                        "row": cell.row,
-                        "column": cell.column,
-                        "formula": cell.value,
-                        "token_values": token_values,
-                        "direct_references": _dedupe_reference_matches(matched_references),
-                    }
                 )
+
+            formula_entries.append(
+                {
+                    "sheet_name": formula_sheet_name,
+                    "cell": cell.coordinate,
+                    "row": cell.row,
+                    "column": cell.column,
+                    "formula": cell.value,
+                    "token_values": token_values,
+                    "direct_references": _dedupe_reference_matches(matched_references),
+                }
+            )
 
     dependencies: list[dict[str, Any]] = []
     formula_entry_lookup = {
@@ -1190,6 +1193,16 @@ def _formula_token_values(formula_text: Any) -> list[str]:
     return token_values
 
 
+def _iter_recorded_formula_cells(ws: Any, bounds: tuple[int, int, int, int] | None = None):
+    for (row, column), cell in sorted(ws._cells.items()):
+        if bounds is not None and not (
+            bounds[0] <= row <= bounds[2] and bounds[1] <= column <= bounds[3]
+        ):
+            continue
+        if isinstance(cell.value, str) and cell.value.startswith("="):
+            yield cell
+
+
 def _iter_formula_cells(wb: Any) -> list[dict[str, Any]]:
     formula_entries: list[dict[str, Any]] = []
     for formula_sheet_name in wb.sheetnames:
@@ -1197,24 +1210,21 @@ def _iter_formula_cells(wb: Any) -> list[dict[str, Any]]:
         if _sheet_type(formula_ws) == "chartsheet":
             continue
 
-        for row in formula_ws.iter_rows():
-            for cell in row:
-                if not isinstance(cell.value, str) or not cell.value.startswith("="):
-                    continue
-                try:
-                    token_values = _formula_token_values(cell.value)
-                except Exception:
-                    token_values = []
-                formula_entries.append(
-                    {
-                        "sheet_name": formula_sheet_name,
-                        "cell": cell.coordinate,
-                        "row": cell.row,
-                        "column": cell.column,
-                        "formula": cell.value,
-                        "token_values": token_values,
-                    }
-                )
+        for cell in _iter_recorded_formula_cells(formula_ws):
+            try:
+                token_values = _formula_token_values(cell.value)
+            except Exception:
+                token_values = []
+            formula_entries.append(
+                {
+                    "sheet_name": formula_sheet_name,
+                    "cell": cell.coordinate,
+                    "row": cell.row,
+                    "column": cell.column,
+                    "formula": cell.value,
+                    "token_values": token_values,
+                }
+            )
     return formula_entries
 
 
@@ -1259,18 +1269,10 @@ def _formula_dependency_graph(
                 except WorkbookError:
                     continue
 
-                for row in target_ws.iter_rows(
-                    min_row=target_bounds[0],
-                    max_row=target_bounds[2],
-                    min_col=target_bounds[1],
-                    max_col=target_bounds[3],
-                ):
-                    for precedent_cell in row:
-                        if not isinstance(precedent_cell.value, str) or not precedent_cell.value.startswith("="):
-                            continue
-                        graph[entry_key].add(
-                            (target_sheet_name, precedent_cell.coordinate)
-                        )
+                for precedent_cell in _iter_recorded_formula_cells(target_ws, target_bounds):
+                    graph[entry_key].add(
+                        (target_sheet_name, precedent_cell.coordinate)
+                    )
 
     return graph
 
@@ -1319,27 +1321,19 @@ def _collect_formula_precedent_entries(
                 expected_sheet=target_sheet_name,
                 error_cls=WorkbookError,
             )
-            for row in target_ws.iter_rows(
-                min_row=target_bounds[0],
-                max_row=target_bounds[2],
-                min_col=target_bounds[1],
-                max_col=target_bounds[3],
-            ):
-                for precedent_cell in row:
-                    if not isinstance(precedent_cell.value, str) or not precedent_cell.value.startswith("="):
-                        continue
-                    precedent_key = (target_sheet_name, precedent_cell.coordinate)
-                    if precedent_key in seen_formula_cells:
-                        continue
-                    seen_formula_cells.add(precedent_key)
-                    formula_precedents.append(
-                        {
-                            "sheet_name": target_sheet_name,
-                            "cell": precedent_cell.coordinate,
-                            "formula": precedent_cell.value,
-                            "reached_via": target["reference"],
-                        }
-                    )
+            for precedent_cell in _iter_recorded_formula_cells(target_ws, target_bounds):
+                precedent_key = (target_sheet_name, precedent_cell.coordinate)
+                if precedent_key in seen_formula_cells:
+                    continue
+                seen_formula_cells.add(precedent_key)
+                formula_precedents.append(
+                    {
+                        "sheet_name": target_sheet_name,
+                        "cell": precedent_cell.coordinate,
+                        "formula": precedent_cell.value,
+                        "reached_via": target["reference"],
+                    }
+                )
 
     return formula_precedents
 
@@ -4480,16 +4474,9 @@ def analyze_range_impact(filepath: str, sheet_name: str, range_ref: str) -> dict
                     }
                 )
 
-            formula_cells = []
-            for row in ws.iter_rows(
-                min_row=target_bounds[0],
-                max_row=target_bounds[2],
-                min_col=target_bounds[1],
-                max_col=target_bounds[3],
-            ):
-                for cell in row:
-                    if isinstance(cell.value, str) and cell.value.startswith("="):
-                        formula_cells.append(cell.coordinate)
+            formula_cells = [
+                cell.coordinate for cell in _iter_recorded_formula_cells(ws, target_bounds)
+            ]
 
             dependent_formulas = _extract_formula_dependencies(
                 wb,
@@ -5361,37 +5348,25 @@ def _diff_workbook_cell_values(
         if _sheet_type(before_ws) == "chartsheet" or _sheet_type(after_ws) == "chartsheet":
             continue
 
-        before_rows, before_cols, _, _ = _get_sheet_usage(before_ws)
-        after_rows, after_cols, _, _ = _get_sheet_usage(after_ws)
-        max_row = max(before_rows, after_rows)
-        max_col = max(before_cols, after_cols)
-        if max_row == 0 or max_col == 0:
-            continue
-
-        for row_index in range(1, max_row + 1):
-            for column_index in range(1, max_col + 1):
-                before_value = (
-                    before_ws.cell(row=row_index, column=column_index).value
-                    if row_index <= before_ws.max_row and column_index <= before_ws.max_column
-                    else None
+        coordinates = sorted(set(before_ws._cells) | set(after_ws._cells))
+        for row_index, column_index in coordinates:
+            before_cell = before_ws._cells.get((row_index, column_index))
+            after_cell = after_ws._cells.get((row_index, column_index))
+            before_value = before_cell.value if before_cell is not None else None
+            after_value = after_cell.value if after_cell is not None else None
+            same_boolean_type = isinstance(before_value, bool) == isinstance(after_value, bool)
+            if same_boolean_type and before_value == after_value:
+                continue
+            change_count += 1
+            if len(cell_changes) < sample_limit:
+                cell_changes.append(
+                    {
+                        "sheet_name": sheet_name,
+                        "cell": f"{get_column_letter(column_index)}{row_index}",
+                        "before": before_value,
+                        "after": after_value,
+                    }
                 )
-                after_value = (
-                    after_ws.cell(row=row_index, column=column_index).value
-                    if row_index <= after_ws.max_row and column_index <= after_ws.max_column
-                    else None
-                )
-                if before_value == after_value:
-                    continue
-                change_count += 1
-                if len(cell_changes) < sample_limit:
-                    cell_changes.append(
-                        {
-                            "sheet_name": sheet_name,
-                            "cell": f"{get_column_letter(column_index)}{row_index}",
-                            "before": before_value,
-                            "after": after_value,
-                        }
-                    )
 
     return {
         "count": change_count,
