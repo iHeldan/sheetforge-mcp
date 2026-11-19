@@ -46,6 +46,21 @@ def test_release_versions_stay_in_sync():
     assert f"Published package release: <strong>{version}</strong>" in landing_page
 
 
+def test_mcp_dependency_excludes_incompatible_v2_sdk():
+    from packaging.requirements import Requirement
+
+    root = Path(__file__).resolve().parents[1]
+    text = (root / "pyproject.toml").read_text()
+    match = re.search(r'^    "(mcp\[cli\][^"]+)"', text, re.MULTILINE)
+    assert match is not None
+    dependency = Requirement(match[1])
+    assert "1.10.1" in dependency.specifier
+    assert "1.99.0" in dependency.specifier
+    assert "1.10.0" not in dependency.specifier
+    assert "2.0.0" not in dependency.specifier
+    assert "2.3.0" not in dependency.specifier
+
+
 def test_tracked_bundle_matches_package_version():
     root = Path(__file__).resolve().parents[1]
     version = _package_version(root)

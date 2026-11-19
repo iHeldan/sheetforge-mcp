@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Package metadata now restricts the MCP Python SDK to the supported 1.x series. A fresh unconstrained install could otherwise select MCP 2.x, which removed the server API used here and prevented startup.
 - Formula dependency, range-impact, explanation, and cell-diff scans visit recorded cells instead of materializing sparse rectangles, including large formula-reference ranges. Workbook diffs now report numeric-to-boolean changes while preserving numeric equality and row-major samples.
 - Multi-workbook alignment uses distinct real headers rather than position-dependent generated aliases. Ambiguous aliases and duplicate headers fail explicitly. Disabling provenance preserves same-named user columns; generated output-name collisions are rejected rather than shadowing values. Lookup and union deduplication distinguish boolean, numeric, text, and date keys while keeping equal numeric values equivalent.
 - Sheet renaming rewrites actual sheet qualifiers rather than quoted formula text or structured column labels, follows case-insensitive sheet references, and updates native-table calculated-column and totals formulas. Row and column edits also recognize case-variant sheet qualifiers.

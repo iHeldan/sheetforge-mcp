@@ -176,6 +176,57 @@ def test_create_never_replaces_a_concurrently_created_file(tmp_path, monkeypatch
     _assert_no_sheetforge_artifacts(path)
 
 
+def test_direct_rollback_rechecks_source_after_copying_recovery_candidate(tmp_workbook, monkeypatch):
+    original_copy = workbook_module.shutil.copy2
+    original_verify = workbook_module._verify_saved_workbook
+
+    def fail_after_replace(filepath):
+        if Path(filepath) == Path(tmp_workbook):
+            raise OSError("injected verification failure")
+        original_verify(filepath)
+
+    def change_during_recovery(source, destination, *args, **kwargs):
+        result = original_copy(source, destination, *args, **kwargs)
+        if ".sheetforge-backup-" in Path(source).name:
+            outside = load_workbook(tmp_workbook)
+            outside["Sheet1"]["E1"] = "outside during rollback"
+            outside.save(tmp_workbook)
+            outside.close()
+        return result
+
+    monkeypatch.setattr(workbook_module, "_verify_saved_workbook", fail_after_replace)
+    monkeypatch.setattr(workbook_module.shutil, "copy2", change_during_recovery)
+    with pytest.raises(PreconditionFailedError) as error:
+        with safe_workbook(tmp_workbook, save=True) as wb:
+            wb["Sheet1"]["D1"] = "attempt"
+    assert error.value.code == "write_recovery_required"
+    assert Path(error.value.details["recovery_backup"]).is_file()
+    with safe_workbook(tmp_workbook) as wb:
+        assert wb["Sheet1"]["E1"].value == "outside during rollback"
+
+
+def test_direct_save_recovery_details_reach_mcp_error_envelope(tmp_workbook, monkeypatch):
+    import json
+    from excel_mcp.server import format_range
+
+    original_verify = workbook_module._verify_saved_workbook
+
+    def change_after_replace(filepath):
+        if Path(filepath) == Path(tmp_workbook):
+            outside = load_workbook(filepath)
+            outside["Sheet1"]["E1"] = "outside"
+            outside.save(filepath)
+            outside.close()
+        original_verify(filepath)
+
+    monkeypatch.setattr(workbook_module, "_verify_saved_workbook", change_after_replace)
+    payload = json.loads(format_range(tmp_workbook, "Sheet1", "A1", bold=True))
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "write_recovery_required"
+    assert payload["error"]["details"]["retry_safe"] is False
+    assert Path(payload["error"]["details"]["recovery_backup"]).is_file()
+
+
 def test_safe_workbook_atomic_save_leaves_no_temp_artifacts(tmp_workbook):
     workbook_path = Path(tmp_workbook)
 

@@ -56,6 +56,7 @@ Verified Rebase and Verified Scenarios v1 are included in `0.13.0`: intent-prese
 ## Requirements
 
 - Python `3.10+`
+- MCP Python SDK `>=1.10.1,<2.0.0` (installed automatically). The current server uses the 1.x API; MCP 2.x requires a separate migration.
 - `.xlsx` workbooks
 - either `uvx` or a local package install
 
