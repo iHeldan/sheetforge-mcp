@@ -9,7 +9,6 @@ import struct
 from zipfile import BadZipFile, ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 from openpyxl import load_workbook as _load_workbook
-from openpyxl.reader.excel import SUPPORTED_FORMATS
 
 from .exceptions import PreconditionFailedError, WorkbookError
 
@@ -54,40 +53,52 @@ def input_limits() -> InputLimits:
 def _directory(stream, size, limits):
     stream.seek(max(0, size - 65_557))
     tail = stream.read(65_557)
-    offset = len(tail)
-    while True:
-        offset = tail.rfind(b"PK\x05\x06", 0, offset)
-        if offset < 0:
-            _fail("invalid_zip_directory")
-        if offset + 22 <= len(tail) and offset + 22 + struct.unpack_from("<H", tail, offset + 20)[0] == len(tail):
-            break
+    # Use ZipFile's EOCD selection, not an earlier record hidden by a comment.
+    if len(tail) >= 22 and tail[-22:-18] == b"PK\x05\x06" and tail[-2:] == b"\0\0":
+        offset = len(tail) - 22
+    else:
+        offset = tail.rfind(b"PK\x05\x06")
+    if (offset < 0 or offset + 22 > len(tail)
+            or offset + 22 + struct.unpack_from("<H", tail, offset + 20)[0] != len(tail)):
+        _fail("invalid_zip_directory")
     _, disk, cd_disk, disk_count, count, cd_size, cd_offset, _ = struct.unpack_from("<4s4H2LH", tail, offset)
     end = size - len(tail) + offset
     if disk or cd_disk or disk_count != count:
         _fail("unsupported_multidisk_zip")
-    if count == 0xFFFF or cd_size == 0xFFFFFFFF or cd_offset == 0xFFFFFFFF:
+    needs_zip64 = count == 0xFFFF or cd_size == 0xFFFFFFFF or cd_offset == 0xFFFFFFFF
+    locator = b""
+    if end >= 20:
         stream.seek(max(0, end - 20))
         locator = stream.read(20)
+    has_zip64 = locator.startswith(b"PK\x06\x07")
+    if needs_zip64 and not has_zip64:
+        _fail("invalid_zip64_directory")
+    if has_zip64:
         if len(locator) != 20:
             _fail("invalid_zip64_directory")
         signature, disk, position, disks = struct.unpack("<4sLQL", locator)
-        if signature != b"PK\x06\x07" or disk or disks != 1 or position + 56 > end - 20:
+        if disk or disks != 1 or position + 56 != end - 20:
             _fail("invalid_zip64_directory")
         stream.seek(position)
         header = stream.read(56)
         if len(header) != 56:
             _fail("invalid_zip64_directory")
+        classic_count, classic_size, classic_offset = count, cd_size, cd_offset
         signature, record_size, _, _, disk, cd_disk, disk_count, count, cd_size, cd_offset = struct.unpack("<4sQ2H2L4Q", header)
-        if signature != b"PK\x06\x06" or record_size < 44 or position + 12 + record_size != end - 20:
+        if signature != b"PK\x06\x06" or record_size != 44:
             _fail("invalid_zip64_directory")
         if disk or cd_disk or disk_count != count:
             _fail("unsupported_multidisk_zip")
+        if (classic_count not in {0xFFFF, count}
+                or classic_size not in {0xFFFFFFFF, cd_size}
+                or classic_offset not in {0xFFFFFFFF, cd_offset}):
+            _fail("inconsistent_zip64_directory")
         end = position
     if count > limits.members:
         _fail("member_count", observed=count, limit=limits.members)
     if cd_size > limits.directory_bytes:
         _fail("directory_bytes", observed=cd_size, limit=limits.directory_bytes)
-    if cd_offset + cd_size > end:
+    if cd_offset + cd_size != end:
         _fail("invalid_zip_directory")
 
     # Count actual records before ZipFile constructs its per-entry Python objects;
@@ -144,6 +155,8 @@ def _inspect(stream, limits):
 
 def _open_checked(path):
     path = Path(path).resolve(strict=True)
+    if path.suffix.lower() != ".xlsx":
+        _fail("unsupported_extension")
     if not path.is_file():
         _fail("not_regular_file")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -165,7 +178,7 @@ def inspect_xlsx(path):
 
 
 def load_workbook_checked(filename, **kwargs):
-    if Path(filename).suffix.lower() not in SUPPORTED_FORMATS:
+    if Path(filename).suffix.lower() != ".xlsx":
         _fail("unsupported_extension")
     stream, stamp = _open_checked(filename)
     book = None

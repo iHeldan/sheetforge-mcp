@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from .cell_utils import validate_grid_bounds
 from .data import (
     _assert_expected_structure_token,
     _attach_dataset_identity,
@@ -161,6 +162,21 @@ def _table_data_bounds(table: Table) -> tuple[int, int, int, int, int, int]:
     return min_col, min_row, max_col, max_row, data_start_row, data_end_row
 
 
+def _validate_table_placement(ws: Any, range_ref: str, *, excluding: Table | None = None) -> None:
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(range_ref)
+        validate_grid_bounds(min_row, min_col, max_row, max_col)
+        for other in ws.tables.values():
+            if other is excluding:
+                continue
+            c1, r1, c2, r2 = range_boundaries(other.ref)
+            validate_grid_bounds(r1, c1, r2, c2)
+            if min_col <= c2 and c1 <= max_col and min_row <= r2 and r1 <= max_row:
+                raise DataError(f"Table range {range_ref} overlaps native table '{other.displayName}' ({other.ref}); no changes were saved")
+    except (TypeError, ValueError) as error:
+        raise DataError("Table ranges must stay inside Excel's A1:XFD1048576 grid") from error
+
+
 def _ensure_table_append_space_clear(
     ws: Any,
     *,
@@ -168,7 +184,13 @@ def _ensure_table_append_space_clear(
     row_count: int,
     min_col: int,
     max_col: int,
+    table: Table,
 ) -> None:
+    min_row = range_boundaries(table.ref)[1]
+    _validate_table_placement(
+        ws, _range_from_bounds(min_col, min_row, max_col, start_row + row_count - 1),
+        excluding=table,
+    )
     for row_index in range(start_row, start_row + row_count):
         for column_index in range(min_col, max_col + 1):
             if ws.cell(row=row_index, column=column_index).value is not None:
@@ -267,6 +289,8 @@ def create_excel_table(
             # Check if table name already exists
             if table_name in ws.parent.defined_names:
                 raise DataError(f"Table name '{table_name}' already exists.")
+
+            _validate_table_placement(ws, data_range)
 
             # Create the table
             table = Table(displayName=table_name, ref=data_range)
@@ -593,6 +617,7 @@ def upsert_excel_table_rows(
                     row_count=len(append_rows),
                     min_col=min_col,
                     max_col=max_col,
+                    table=table,
                 )
 
             ordered_columns = sorted(header_map.items(), key=lambda item: item[1])
@@ -774,6 +799,7 @@ def append_excel_table_rows(
                 row_count=len(rows),
                 min_col=min_col,
                 max_col=max_col,
+                table=table,
             )
 
             changes: list[dict[str, Any]] = []

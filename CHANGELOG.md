@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- Range copies retain and verify the source cell type as well as its value and style. Literal `=` text and error-looking text stay text; only actual formulas are translated or rewritten during copy, rename and structural edits. Formula introspection no longer treats literal strings as active formulas.
+- Shared workbook loading refuses non-`.xlsx` extensions before openpyxl runs, rather than accepting macro/template formats that standard saves cannot preserve.
+- ChangeSet snapshot paths must identify a separate file. Case/Unicode aliases, symlinks resolving to the source and hardlinks to it are rejected before preview or commit.
+- Full-axis structural edits check the complete array/data-table formula extent, not just its anchor, and reject affected non-scalar input references or unverifiable cross-sheet array dependencies. Range copies cannot overwrite array extents; sheet rename/copy refuses unsupported array dependency rewriting.
+- Native-table creation and append/upsert expansion validate Excel grid bounds and reject intersections with other native tables, including empty headerless reserved tables.
+- ZIP preinspection handles ZIP64 locators even without classic sentinel fields and rejects conflicting directories, ambiguous end records and rebased archive layouts before entry-object allocation. Conventional matching ZIP64 directories remain supported within the configured budgets.
+- Isolated ChangeSet operations defer standalone response sizing to the final bounded/sampled transaction result. Larger valid writes and Recipe outputs no longer fail solely because internal per-cell evidence exceeds the external response limit. Work limits, final response checks and standalone-write checks remain enforced.
+- Named-range, validation/conditional-rule removal and workbook-repair previews serialize the proposed changes for fidelity checks. Repair diffs now describe that preview, with explicit `diff_basis`; preview `audit_after` still describes the unchanged file and is labeled `audit_after_basis="unchanged_source"`. Broken-name repairs target the exact scope instead of stopping on a healthy same-named local/global definition.
+
 ## 0.15.1 - 2026-11-20
 
 ### Compatibility Notes

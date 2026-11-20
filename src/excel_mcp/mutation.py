@@ -12,6 +12,7 @@ from .exceptions import ResponseTooLargeError
 
 RESPONSE_RESERVE = 512
 _ACTIVE = ContextVar("mutation_response", default=None)
+_STAGED = ContextVar("staged_mutation_response", default=False)
 
 
 @dataclass
@@ -44,7 +45,19 @@ def record_verified_commit(path: Path, sha256: str) -> None:
         state.committed_sha256 = sha256
 
 
+@contextmanager
+def _staged_response_scope():
+    """Only isolated ChangeSet writes defer budgeting to the final sampled result."""
+    token = _STAGED.set(True)
+    try:
+        yield
+    finally:
+        _STAGED.reset(token)
+
+
 def preflight_response(result: dict) -> None:
+    if _STAGED.get():
+        return
     state = _ACTIVE.get()
     if state is not None:
         state.check(result)

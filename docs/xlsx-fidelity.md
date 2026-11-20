@@ -84,6 +84,10 @@ writer. An external change after a check remains possible.
   refusal. `diff_workbooks` is read-only and does not perform this comparison.
 - ChangeSet intermediate saves defer the package comparison to its final
   original-versus-candidate check; they do not weaken that final check.
+- Named-range, validation/conditional-rule removal and repair previews apply proposed changes in their isolated
+  in-memory workbook before serializing it. Repair `diff_basis="dry_run_preview"`
+  describes that proposal; `audit_after_basis="unchanged_source"` identifies the
+  still-on-disk audit. An actual repair labels both as `saved_source`.
 - Editable mutation loads, including standard ChangeSet staging, use openpyxl's
   [rich-text preservation](https://openpyxl.readthedocs.io/en/3.1/rich_text.html).
   Ordinary text writes that repeat the same non-formula text leave existing

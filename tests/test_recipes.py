@@ -70,6 +70,34 @@ def test_recipe_aggregates_without_model_data_roundtrip(source_book, recipe):
     assert "checks" not in recipe
 
 
+def test_recipe_with_400_groups_uses_compact_staged_output_and_commits(source_book, recipe):
+    book = load_workbook(source_book)
+    sheet = book["Data"]
+    sheet.delete_rows(2, 3)
+    for index in range(400):
+        sheet.append([index, f"Region-{index:04d}", index + 1])
+    sheet.tables["Sales"].ref = "A1:C401"
+    book.create_sheet("Report")
+    book.save(source_book)
+    book.close()
+    recipe["output"]["range_ref"] = "A1:B401"
+    before = source_book.read_bytes()
+    preview = run_workbook_recipe(str(source_book), recipe)
+    assert preview["ready_to_commit"] and preview["output_row_count"] == 400
+    assert len(preview["rows_sample"]) == 5 and preview["truncated"]
+    assert source_book.read_bytes() == before
+    committed = _commit(source_book, recipe, preview)
+    assert committed["persisted"]
+    book = load_workbook(source_book)
+    try:
+        assert list(book["Report"].values) == [
+            ("Region", "Revenue"), *[(f"Region-{index:04d}", index + 1) for index in range(400)],
+        ]
+        assert book["Data"].tables["Sales"].ref == "A1:C401"
+    finally:
+        book.close()
+
+
 def test_recipe_invariance_probes_do_not_hide_cancellation_error(source_book, recipe):
     def cancellation(wb):
         for row, value in enumerate([1e16, 1, -1e16], start=2):

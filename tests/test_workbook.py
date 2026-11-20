@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from excel_mcp import workbook as workbook_module
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
@@ -792,6 +793,38 @@ def test_create_named_range_supports_workbook_and_sheet_scope(tmp_path):
     assert payload["data"]["named_range"]["name"] == "ToolRange"
 
 
+@pytest.mark.parametrize("scope_sheet", [None, "Data"])
+@pytest.mark.parametrize("replace", [False, True])
+def test_named_range_preview_serializes_the_same_proposed_definition(tmp_path, monkeypatch, scope_sheet, replace):
+    filepath = tmp_path / "name-candidate.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active["A1"], book.active["B1"] = 1, 2
+    if replace:
+        names = book.defined_names if scope_sheet is None else book[scope_sheet].defined_names
+        names.add(DefinedName("Window", attr_text="'Data'!$A$1"))
+    book.save(filepath)
+    book.close()
+    before = filepath.read_bytes()
+    original, inspected = workbook_module.inspect_package_fidelity, []
+
+    def inspect(baseline, candidate, **kwargs):
+        book = load_workbook(candidate)
+        try:
+            names = book.defined_names if scope_sheet is None else book[scope_sheet].defined_names
+            inspected.append(names["Window"].attr_text)
+        finally:
+            book.close()
+        return original(baseline, candidate, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "inspect_package_fidelity", inspect)
+    for dry_run in (True, False):
+        create_named_range(str(filepath), "Window", "B1", sheet_name="Data", scope_sheet=scope_sheet, replace=replace, dry_run=dry_run)
+        if dry_run:
+            assert filepath.read_bytes() == before
+    assert inspected == ["'Data'!$B$1"] * 2
+
+
 def test_create_named_range_supports_dry_run_and_replace(tmp_path):
     filepath = str(tmp_path / "named-range-create-dry-run.xlsx")
     wb = Workbook()
@@ -1215,6 +1248,60 @@ def test_inspect_and_remove_broken_validation_rules(tmp_path):
     assert payload["dry_run"] is True
 
 
+@pytest.mark.parametrize("kind", ["validation", "conditional_format"])
+def test_rule_removal_previews_inspect_the_changed_candidate_without_saving(tmp_path, monkeypatch, kind):
+    path = tmp_path / "rules-preview.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    if kind == "validation":
+        book.active.add_data_validation(DataValidation(type="whole", formula1="1", sqref="A1:A3"))
+    else:
+        book.active.conditional_formatting.add("A1:A3", FormulaRule(formula=["A1>0"]))
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    original, inspected = workbook_module.inspect_package_fidelity, []
+
+    def inspect(baseline, candidate, **kwargs):
+        book = load_workbook(candidate)
+        try:
+            inspected.append((len(book["Data"].data_validations.dataValidation), len(book["Data"].conditional_formatting)))
+        finally:
+            book.close()
+        return original(baseline, candidate, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "inspect_package_fidelity", inspect)
+    action = remove_data_validation_rules if kind == "validation" else remove_conditional_format_rules
+    for dry_run in (True, False):
+        result = action(str(path), "Data", rule_indexes=[1], dry_run=dry_run)
+        assert result["removed_count"] == 1 and result["remaining_rule_count"] == 0
+        if dry_run:
+            assert path.read_bytes() == before
+    assert inspected == [(0, 0)] * 2
+
+
+@pytest.mark.parametrize("broken_scope", ["global", "local"])
+def test_repairs_remove_only_the_broken_named_range_scope(tmp_path, broken_scope):
+    path = tmp_path / "scoped-repair.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active["A1"] = 1
+    healthy, broken = "'Data'!$A$1", "Missing!$A$1"
+    book.defined_names.add(DefinedName("Shared", attr_text=broken if broken_scope == "global" else healthy))
+    book.active.defined_names.add(DefinedName("Shared", attr_text=broken if broken_scope == "local" else healthy))
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    for dry_run in (True, False):
+        result = apply_workbook_repairs(str(path), repair_types=["remove_broken_named_ranges"], dry_run=dry_run)
+        assert result["action_count"] == 1
+        if dry_run:
+            assert path.read_bytes() == before
+    assert [(item["name"], item["local_sheet"], item["value"]) for item in list_named_ranges(str(path))] == [
+        ("Shared", "Data" if broken_scope == "global" else None, healthy),
+    ]
+
+
 def test_inspect_and_remove_broken_conditional_format_rules(tmp_path):
     filepath = str(tmp_path / "conditional-rules.xlsx")
     wb = Workbook()
@@ -1323,7 +1410,7 @@ def test_plan_workbook_repairs_does_not_lose_repair_classes_when_audit_sample_is
     assert result["step_count"] == 4
 
 
-def test_apply_workbook_repairs_dry_run_and_apply(tmp_path):
+def test_apply_workbook_repairs_dry_run_and_apply(tmp_path, monkeypatch):
     filepath = str(tmp_path / "apply-repairs.xlsx")
     wb = Workbook()
     ws = wb.active
@@ -1344,6 +1431,22 @@ def test_apply_workbook_repairs_dry_run_and_apply(tmp_path):
     )
     wb.save(filepath)
     wb.close()
+    before = Path(filepath).read_bytes()
+    original, inspected = workbook_module.inspect_package_fidelity, []
+
+    def inspect(baseline, candidate, **kwargs):
+        book = load_workbook(candidate)
+        try:
+            inspected.append((
+                book["Hidden"].sheet_state, len(book.defined_names),
+                len(book["Data"].data_validations.dataValidation),
+                len(book["Data"].conditional_formatting),
+            ))
+        finally:
+            book.close()
+        return original(baseline, candidate, **kwargs)
+
+    monkeypatch.setattr(workbook_module, "inspect_package_fidelity", inspect)
 
     repair_types = [
         "remove_broken_named_ranges",
@@ -1360,7 +1463,11 @@ def test_apply_workbook_repairs_dry_run_and_apply(tmp_path):
     assert preview["action_count"] == 4
     assert preview["audit_before"]["hidden_sheet_count"] == 1
     assert preview["audit_after"]["hidden_sheet_count"] == 1
-    assert preview["diff"]["summary"]["named_range_change_count"] == 0
+    assert preview["diff"]["summary"]["named_range_change_count"] == 1
+    assert preview["diff_basis"] == "dry_run_preview"
+    assert preview["audit_after_basis"] == "unchanged_source"
+    assert inspected == [("visible", 0, 0, 0)]
+    assert Path(filepath).read_bytes() == before
 
     applied = apply_workbook_repairs(
         filepath,
@@ -1377,6 +1484,9 @@ def test_apply_workbook_repairs_dry_run_and_apply(tmp_path):
     assert applied["diff"]["summary"]["validation_rule_change_count"] == 1
     assert applied["diff"]["summary"]["conditional_format_rule_change_count"] == 1
     assert applied["diff"]["summary"]["sheet_property_change_count"] == 1
+    assert applied["diff"] == preview["diff"]
+    assert applied["diff_basis"] == applied["audit_after_basis"] == "saved_source"
+    assert inspected == [("visible", 0, 0, 0)] * 2
 
     assert list_named_ranges(filepath) == []
     assert inspect_data_validation_rules(filepath, "Data")["rule_count"] == 0

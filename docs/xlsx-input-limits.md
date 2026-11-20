@@ -5,6 +5,13 @@ allocates archive-entry objects or expands XML. The same checked file descriptor
 is used for loading, avoiding a separate unchecked path reopen. Read-only
 workbooks retain that descriptor until closed.
 
+Unreleased hardening admits only `.xlsx` filename extensions (case-insensitive)
+through the shared workbook loader. Macro/template and legacy extensions such
+as `.xlsm`, `.xltm`, `.xltx` and `.xls` are refused, including in previews;
+they are not silently converted or claimed to be preserved by the standard save.
+Both the supplied filename and its resolved target must have the supported
+extension. The extension check is not a guarantee of complete package-feature preservation.
+
 | Server environment setting | Default |
 | --- | --- |
 | `SHEETFORGE_XLSX_MAX_FILE_BYTES` | 134217728 (128 MiB compressed file) |
@@ -26,6 +33,13 @@ the same budgets. Duplicate members, unsafe member paths, encrypted entries,
 unsupported compression (anything except stored/deflated), multidisk archives
 and inconsistent directory metadata are refused before expansion. Invalid ZIP
 variants that the Python ZIP reader cannot handle are refused too.
+
+The directory check recognizes ZIP64 locators with or without classic sentinel
+fields. Classic and ZIP64 metadata must agree, and the physical central directory
+must end immediately before the end records. Ambiguous end-record comments,
+prepended/rebased layouts and ZIP64 extensible end records are refused rather
+than allowing preinspection and `ZipFile` to count different entries. Conventional
+fixed-size ZIP64 end records remain supported within all the same budgets.
 
 Checks apply to source loads and serialized candidates. ChangeSet assertions
 and ordinary save verification use the checked loader. Preserving mode also

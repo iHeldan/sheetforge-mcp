@@ -3,15 +3,115 @@
 import json
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Font
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import TableFormula
+from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 from openpyxl.workbook.defined_name import DefinedName
 
 from excel_mcp import server, sheet
 from tests.test_mutation_guards import make_book
+
+
+@pytest.mark.parametrize("formula_type", [ArrayFormula, DataTableFormula])
+@pytest.mark.parametrize("operation", ["insert_rows", "delete_sheet_rows", "insert_columns", "delete_sheet_columns"])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_full_axis_edit_refuses_array_extent_even_when_anchor_precedes_edit(tmp_path, formula_type, operation, dry_run):
+    path = tmp_path / "array.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    formula = (ArrayFormula(ref="A1:C5", text="=ROW(A1:C5)") if formula_type is ArrayFormula
+               else DataTableFormula(ref="A1:C5", r1="D1"))
+    book.active["A1"] = formula
+    book.active["C5"] = 5
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    payload = json.loads(getattr(server, operation)(str(path), "Data", 3, dry_run=dry_run))
+    assert not payload["ok"] and "array/data-table" in payload["error"]["message"], payload
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation,index", [("insert_rows", 6), ("delete_sheet_rows", 6), ("insert_columns", 4), ("delete_sheet_columns", 4)])
+def test_full_axis_edit_after_array_extent_remains_supported(tmp_path, operation, index):
+    path = tmp_path / "after-array.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active["A1"] = ArrayFormula(ref="A1:C5", text="=ROW(A1:C5)")
+    book.active["F8"] = 8
+    book.save(path)
+    book.close()
+    payload = json.loads(getattr(server, operation)(str(path), "Data", index))
+    assert payload["ok"], payload
+    book = load_workbook(path)
+    assert book["Data"]["A1"].value.ref == "A1:C5"
+    book.close()
+
+
+@pytest.mark.parametrize("operation", ["insert_rows", "delete_sheet_rows", "insert_columns", "delete_sheet_columns", "rename"])
+def test_unsupported_cross_sheet_array_dependencies_fail_closed(tmp_path, operation):
+    path = tmp_path / "external-array.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active["D5"] = 5
+    book.create_sheet("Other")["A1"] = ArrayFormula(ref="A1:A5", text="=Data!D5:D9*2")
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    payload = json.loads(server.rename_worksheet(str(path), "Data", "Renamed") if operation == "rename"
+                         else getattr(server, operation)(str(path), "Data", 3))
+    assert not payload["ok"] and "array/data-table" in payload["error"]["message"], payload
+    assert path.read_bytes() == before
+
+
+def test_copy_worksheet_refuses_unverifiable_array_formula_rewriting(tmp_path):
+    path = tmp_path / "copy-array.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active["A1"] = ArrayFormula(ref="A1:A5", text="=Data!B1:B5*2")
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    payload = json.loads(server.copy_worksheet(str(path), "Data", "Copy"))
+    assert not payload["ok"] and "array/data-table" in payload["error"]["message"], payload
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("formula_type", [ArrayFormula, DataTableFormula])
+@pytest.mark.parametrize("operation,index", [("insert_rows", 6), ("delete_sheet_rows", 6), ("insert_columns", 4), ("delete_sheet_columns", 4)])
+def test_edits_outside_array_extent_refuse_changed_array_input_references(tmp_path, formula_type, operation, index):
+    path = tmp_path / "array-inputs.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active["A1"] = (ArrayFormula(ref="A1:C5", text="=E8:E12*2") if formula_type is ArrayFormula
+                         else DataTableFormula(ref="A1:C5", r1="E8"))
+    book.active["E8"] = 8
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    payload = json.loads(getattr(server, operation)(str(path), "Data", index))
+    assert not payload["ok"] and "array/data-table" in payload["error"]["message"], payload
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("target,allowed", [("C1", False), ("C2", False), ("D1", True)])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_range_copy_respects_complete_target_array_extent(tmp_path, target, allowed, dry_run):
+    path = tmp_path / "array-target.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    book.active["A2"] = 20
+    book.active["C1"] = ArrayFormula(ref="C1:C3", text="=ROW(C1:C3)")
+    book.active["C3"] = 3
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    payload = json.loads(server.copy_range(str(path), "Data", "A2", "A2", target, dry_run=dry_run))
+    assert payload["ok"] is allowed, payload
+    if not allowed or dry_run:
+        assert path.read_bytes() == before
 
 
 def test_case_only_rename_uses_exact_title_for_every_reference_family(tmp_path):

@@ -173,6 +173,11 @@ preview. There is no cross-workbook transaction or exactly-once retry service.
 ChangeSet's 2 MB compiled-plan and 40,000-character pre-commit response budgets
 also apply. Counts include JSON escaping so non-ASCII text cannot bypass the wire
 budget. Exceeding a bound fails before replacement; no partial result is committed.
+Isolated staging keeps complete bounded cell evidence internally, but sizes the
+final sampled ChangeSet response rather than treating that internal list as a
+standalone MCP response. This does not relax plan, cell, assertion or final wire
+budgets. A custom snapshot path must be an independent file; aliases and hardlinks
+to the source are refused even when their current bytes match.
 The implementation loads the bounded workbook with openpyxl; these table limits
 do not imply streaming or a memory bound for unrelated content in a very large file.
 

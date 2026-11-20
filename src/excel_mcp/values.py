@@ -32,7 +32,7 @@ def cell_values_equal(left: Any, right: Any) -> bool:
     return value_key(left) == value_key(right)
 
 
-def validate_cell_value(value: Any) -> None:
+def validate_cell_value(value: Any, *, data_type: str | None = None) -> None:
     """Reject values the standard XLSX writer cannot faithfully round-trip."""
     if value is None or isinstance(value, bool):
         return
@@ -60,7 +60,7 @@ def validate_cell_value(value: Any) -> None:
             raise DataError("Text contains an unsupported Unicode scalar") from None
         if units > 32767:
             raise DataError("Cell text is limited to 32767 UTF-16 code units; no truncation was applied")
-        if isinstance(value, str) and value.startswith("=") and units > 8192:
+        if data_type != "s" and isinstance(value, str) and value.startswith("=") and units > 8192:
             raise DataError("Excel formulas are limited to 8192 UTF-16 code units; no truncation was applied")
         if "\r" in text:
             raise DataError("Standard writes cannot preserve carriage returns; use LF text or preserving mode")
@@ -74,12 +74,22 @@ def validate_cell_value(value: Any) -> None:
     raise DataError("Unsupported cell value type; use text, finite numbers, booleans, null or naive dates/times")
 
 
-def verify_cell_writes(book: Any, writes: dict[tuple[str, int, int], Any]) -> None:
+def verify_cell_writes(
+    book: Any,
+    writes: dict[tuple[str, int, int], Any],
+    *,
+    data_types: dict[tuple[str, int, int], str] | None = None,
+) -> None:
     for (sheet, row, column), expected in writes.items():
         if isinstance(expected, date) and not isinstance(expected, datetime):
             expected = datetime.combine(expected, time())
         cell = book[sheet]._cells.get((row, column))
         actual = cell.value if cell is not None else None
+        expected_type = (data_types or {}).get((sheet, row, column))
+        if expected_type is not None and getattr(cell, "data_type", None) != expected_type:
+            raise DataError(
+                f"Serialized cell type at {sheet}!{row},{column} differs from the source; no changes were saved"
+            )
         numeric = (int, float, Decimal)
         equal = cell_values_equal(expected, actual)
         if isinstance(expected, numeric) and isinstance(actual, numeric) and not (

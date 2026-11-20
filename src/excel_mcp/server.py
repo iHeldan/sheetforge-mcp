@@ -1535,7 +1535,7 @@ def create_table(
     table_name: Optional[str] = None,
     table_style: str = "TableStyleMedium9"
 ) -> str:
-    """Creates a native Excel table from a specified range of data."""
+    """Create a native Excel table inside Excel's grid, refusing overlap with other tables."""
     return _run_tool(
         "create_table",
         lambda: create_table_impl(
@@ -1816,7 +1816,11 @@ def apply_workbook_repairs(
     sample_limit: int = 25,
     dry_run: bool = True,
 ) -> str:
-    """Apply safe workbook repair actions with dry-run planning and before/after diff output."""
+    """Apply safe repairs or inspect an isolated proposed candidate with dry_run.
+
+    Preview diff_basis is dry_run_preview; audit_after_basis is unchanged_source.
+    Real repairs label both as saved_source.
+    """
     return _run_tool(
         "apply_workbook_repairs",
         lambda: apply_workbook_repairs_impl(
@@ -1860,6 +1864,7 @@ def apply_workbook_changeset(
 
     Call preview first. Commit the identical plan with expected_workbook_sha256 and
     changeset_token from that preview. Snapshot creation defaults to enabled.
+    A custom snapshot must be a separate file, not an alias or hardlink of filepath.
     Inspect package_fidelity: custom XML or untouched formula-cache loss blocks
     commit. The check is targeted, not a guarantee of full Excel round-trip fidelity.
     save_mode="preserve" patches only literal cell writes in a restricted XLSX.
@@ -2596,6 +2601,8 @@ def copy_range(
     Limit 250000 source cells; the full target must fit Excel's grid. Merged-cell
     intersections and failed relative-formula translations are refused. dry_run
     checks an isolated candidate, including targeted XLSX preservation.
+    Source cell types are retained and checked: literal '=' or error-looking text
+    stays text; only genuine formula cells undergo relative translation.
     """
     def action() -> Any:
         from excel_mcp.sheet import copy_range_operation

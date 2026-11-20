@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from .xlsx_input import load_workbook_checked as load_workbook
 from .values import cell_values_equal
+from .mutation import _staged_response_scope
 from openpyxl.utils import get_column_letter, range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 
@@ -927,6 +928,7 @@ def _dispatch_operation(candidate: Path, operation: dict[str, Any]) -> dict[str,
 
 
 @workbook_module._preserve_rich_text_in_staging()
+@_staged_response_scope()
 def _apply_operations(
     candidate: Path,
     operations: list[dict[str, Any]],
@@ -1573,8 +1575,11 @@ def _validate_snapshot_request(
         raise ValidationError("snapshot_filepath must end with .xlsx")
     if requested == source:
         raise ValidationError("snapshot_filepath must be different from filepath")
-    if requested.exists() and requested.resolve(strict=True) == source:
-        raise ValidationError("snapshot_filepath must be different from filepath")
+    try:
+        if requested.exists() and requested.samefile(source):
+            raise ValidationError("snapshot_filepath must be an independent file, not an alias or hardlink of filepath")
+    except OSError as error:
+        raise ValidationError("Cannot verify that snapshot_filepath is independent of filepath") from error
     return create_snapshot, requested
 
 

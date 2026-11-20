@@ -1,8 +1,10 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import threading
+import unicodedata
 
 from openpyxl import load_workbook
 import pytest
@@ -31,6 +33,80 @@ def _assert_no_changeset_artifacts(path: str | Path) -> None:
         )
     )
     assert leftovers == []
+
+
+@pytest.mark.parametrize("alias_kind", ["case", "unicode", "symlink", "hardlink"])
+def test_snapshot_source_aliases_are_rejected_before_preview_and_commit(tmp_workbook, tmp_path, alias_kind):
+    source = tmp_path / ("l\u00e4hde.xlsx" if alias_kind == "unicode" else "Book.xlsx")
+    source.write_bytes(Path(tmp_workbook).read_bytes())
+    if alias_kind in {"symlink", "hardlink"}:
+        alias = tmp_path / "alias.xlsx"
+        try:
+            if alias_kind == "symlink":
+                alias.symlink_to(source)
+            else:
+                os.link(source, alias)
+        except OSError:
+            pytest.skip("Filesystem does not support this alias")
+    else:
+        alias = source.with_name("BOOK.xlsx" if alias_kind == "case" else unicodedata.normalize("NFD", source.name))
+        if not alias.exists() or not alias.samefile(source):
+            pytest.skip("Filesystem distinguishes these path spellings")
+    before = source.read_bytes()
+    operations = [{"tool": "write_data_to_excel", "args": {"sheet_name": "Sheet1", "start_cell": "D1", "data": [[2]]}}]
+    preview = apply_workbook_changeset(str(source), operations)
+    for mode in ("preview", "commit"):
+        with pytest.raises(ValidationError, match="independent|different"):
+            apply_workbook_changeset(
+                str(source), operations, mode=mode, snapshot_filepath=str(alias),
+                expected_workbook_sha256=preview["expected_workbook_sha256"],
+                changeset_token=preview["changeset_token"],
+            )
+        assert source.read_bytes() == alias.read_bytes() == before
+    _assert_no_changeset_artifacts(source)
+
+
+@pytest.mark.parametrize("data", [
+    [[row * 20 + col for col in range(20)] for row in range(40)],
+    [["\u00e4" * 9000]],
+], ids=["800-cells", "unicode-cell"])
+def test_compact_changeset_budgets_final_sample_not_internal_full_changes(tmp_workbook, data):
+    before = Path(tmp_workbook).read_bytes()
+    operations = [{"tool": "write_data_to_excel", "args": {"sheet_name": "Sheet1", "start_cell": "D1", "data": data}}]
+    preview = json.loads(server_module.apply_workbook_changeset(tmp_workbook, operations, create_snapshot=False))
+    assert preview["ok"] and preview["data"]["ready_to_commit"], preview
+    assert len(json.dumps(preview)) <= server_module.MCP_RESPONSE_CHAR_LIMIT
+    assert Path(tmp_workbook).read_bytes() == before
+    committed = json.loads(server_module.apply_workbook_changeset(
+        tmp_workbook, operations, create_snapshot=False, mode="commit",
+        expected_workbook_sha256=preview["data"]["expected_workbook_sha256"],
+        changeset_token=preview["data"]["changeset_token"],
+    ))
+    assert committed["ok"] and committed["data"]["persisted"], committed
+    book = load_workbook(tmp_workbook)
+    try:
+        for row_index, row in enumerate(data, 1):
+            assert [book["Sheet1"].cell(row_index, column + 4).value for column in range(len(row))] == row
+    finally:
+        book.close()
+    _assert_no_changeset_artifacts(tmp_workbook)
+
+
+@pytest.mark.parametrize("fail_stage", [False, True])
+def test_staging_response_budget_scope_never_leaks_to_later_standalone_write(tmp_workbook, monkeypatch, fail_stage):
+    operations = [{"tool": "write_data_to_excel", "args": {"sheet_name": "Sheet1", "start_cell": "D1", "data": [[2]]}}]
+    if fail_stage:
+        def fail(*args, **kwargs):
+            raise ValidationError("synthetic staging failure")
+        monkeypatch.setattr(changeset_module, "_dispatch_operation", fail)
+    before = Path(tmp_workbook).read_bytes()
+    preview = json.loads(server_module.apply_workbook_changeset(tmp_workbook, operations, create_snapshot=False))
+    assert preview["ok"] is not fail_stage
+    response = json.loads(server_module.write_data_to_excel(
+        tmp_workbook, "Sheet1", [["a" * 30000, "b" * 30000]], "D1", include_changes=True,
+    ))
+    assert not response["ok"] and response["error"]["type"] == "ResponseTooLargeError", response
+    assert Path(tmp_workbook).read_bytes() == before
 
 
 def test_changeset_preview_is_non_mutating_and_returns_commit_credentials(tmp_workbook):

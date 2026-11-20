@@ -1204,7 +1204,7 @@ def _iter_recorded_formula_cells(ws: Any, bounds: tuple[int, int, int, int] | No
             bounds[0] <= row <= bounds[2] and bounds[1] <= column <= bounds[3]
         ):
             continue
-        if isinstance(cell.value, str) and cell.value.startswith("="):
+        if cell.data_type == "f" and isinstance(cell.value, str) and cell.value.startswith("="):
             yield cell
 
 
@@ -1659,7 +1659,7 @@ def _cells_with_broken_formula_references(
 ) -> list[str]:
     cells: list[str] = []
     for _, cell in sorted(ws._cells.items()):
-        if not isinstance(cell.value, str) or not cell.value.startswith("="):
+        if cell.data_type != "f" or not isinstance(cell.value, str) or not cell.value.startswith("="):
             continue
         if _formula_text_has_broken_reference(
             wb,
@@ -2417,16 +2417,15 @@ def create_named_range(
                 matches=existing_matches,
             ) if existing_matches else []
 
-            if not dry_run:
-                defined_name = DefinedName(
-                    normalized_name,
-                    attr_text=full_reference,
-                    hidden=hidden,
-                )
-                if normalized_scope_sheet is None:
-                    wb.defined_names[normalized_name] = defined_name
-                else:
-                    wb[normalized_scope_sheet].defined_names.add(defined_name)
+            defined_name = DefinedName(
+                normalized_name,
+                attr_text=full_reference,
+                hidden=hidden,
+            )
+            if normalized_scope_sheet is None:
+                wb.defined_names[normalized_name] = defined_name
+            else:
+                wb[normalized_scope_sheet].defined_names.add(defined_name)
 
             created = {
                 "name": normalized_name,
@@ -2773,7 +2772,7 @@ def safe_workbook(
             original_formulas = {
                 (ws.title, cell.coordinate): ((cell.row, cell.column), cell.value)
                 for ws in wb.worksheets for cell in ws._cells.values()
-                if writing and isinstance(cell.value, str) and cell.value.startswith("=")
+                if writing and cell.data_type == "f" and isinstance(cell.value, str) and cell.value.startswith("=")
             } if writing else {}
             yield wb
         except Exception:
@@ -4845,20 +4844,12 @@ def remove_data_validation_rules(
                 ws=ws,
                 sheet_name=sheet_name,
             )
-            if dry_run:
-                removed = [
-                    rule
-                    for rule in before_rules
-                    if (rule["rule_index"] in normalized_indexes)
-                    or (broken_only and rule["broken_reference"])
-                ]
-            else:
-                removed = _remove_validation_rules(
-                    wb,
-                    ws,
-                    rule_indexes=normalized_indexes,
-                    broken_only=broken_only,
-                )
+            removed = _remove_validation_rules(
+                wb,
+                ws,
+                rule_indexes=normalized_indexes,
+                broken_only=broken_only,
+            )
             return {
                 "message": (
                     f"{'Previewed removal of' if dry_run else 'Removed'} "
@@ -4917,20 +4908,12 @@ def remove_conditional_format_rules(
                 ws=ws,
                 sheet_name=sheet_name,
             )
-            if dry_run:
-                removed = [
-                    rule
-                    for rule in before_rules
-                    if (rule["rule_index"] in normalized_indexes)
-                    or (broken_only and rule["broken_reference"])
-                ]
-            else:
-                removed = _remove_conditional_format_rules(
-                    wb,
-                    ws,
-                    rule_indexes=normalized_indexes,
-                    broken_only=broken_only,
-                )
+            removed = _remove_conditional_format_rules(
+                wb,
+                ws,
+                rule_indexes=normalized_indexes,
+                broken_only=broken_only,
+            )
             return {
                 "message": (
                     f"{'Previewed removal of' if dry_run else 'Removed'} "
@@ -5508,12 +5491,13 @@ def apply_workbook_repairs(
                             "status": "planned" if dry_run else "applied",
                         }
                     )
-                    if not dry_run:
-                        _remove_named_range_sources(
-                            wb,
-                            name=named_range["name"],
+                    _remove_named_range_scope_matches(
+                        wb,
+                        matches=_matching_named_range_sources_for_scope(
+                            wb, name=named_range["name"],
                             scope_sheet=named_range.get("local_sheet"),
-                        )
+                        ),
+                    )
 
             for sheet_name in wb.sheetnames:
                 if sheet_name_filter and sheet_name not in sheet_name_filter:
@@ -5533,8 +5517,7 @@ def apply_workbook_repairs(
                                 "status": "planned" if dry_run else "applied",
                             }
                         )
-                        if not dry_run:
-                            ws.sheet_state = "visible"
+                        ws.sheet_state = "visible"
 
                 if _sheet_type(ws) == "chartsheet":
                     continue
@@ -5555,12 +5538,11 @@ def apply_workbook_repairs(
                                 "status": "planned" if dry_run else "applied",
                             }
                         )
-                        if not dry_run:
-                            _remove_validation_rules(
-                                wb,
-                                ws,
-                                broken_only=True,
-                            )
+                        _remove_validation_rules(
+                            wb,
+                            ws,
+                            broken_only=True,
+                        )
 
                 if "remove_broken_conditional_formats" in normalized_repair_types:
                     broken_conditional_formats = _broken_conditional_format_rules(
@@ -5578,14 +5560,13 @@ def apply_workbook_repairs(
                                 "status": "planned" if dry_run else "applied",
                             }
                         )
-                        if not dry_run:
-                            _remove_conditional_format_rules(
-                                wb,
-                                ws,
-                                broken_only=True,
-                            )
+                        _remove_conditional_format_rules(
+                            wb,
+                            ws,
+                            broken_only=True,
+                        )
 
-            after_snapshot = before_snapshot if dry_run else _snapshot_workbook_state(wb)
+            after_snapshot = _snapshot_workbook_state(wb)
 
         audit_after = audit_before if dry_run else audit_workbook(
             filepath,
@@ -5602,6 +5583,8 @@ def apply_workbook_repairs(
             "truncated": len(actions) > sample_limit,
             "audit_before": audit_before["summary"],
             "audit_after": audit_after["summary"],
+            "audit_after_basis": "unchanged_source" if dry_run else "saved_source",
+            "diff_basis": "dry_run_preview" if dry_run else "saved_source",
             "diff": _diff_workbook_snapshots(
                 before_snapshot,
                 after_snapshot,
@@ -5688,7 +5671,7 @@ def explain_formula_cell(
                 operation="formula explanation",
             )
             formula_cell = ws[cell]
-            if not isinstance(formula_cell.value, str) or not formula_cell.value.startswith("="):
+            if formula_cell.data_type != "f" or not isinstance(formula_cell.value, str) or not formula_cell.value.startswith("="):
                 raise WorkbookError(f"Cell '{cell}' does not contain a formula")
 
             tokenizer = Tokenizer(formula_cell.value)

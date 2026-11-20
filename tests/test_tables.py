@@ -30,6 +30,81 @@ def _load_tool_payload(raw: str) -> dict:
     return payload
 
 
+@pytest.mark.parametrize("range_ref", ["A1:B2", "B3:C4", "XFE1:XFE2", "A1048577:B1048578", "A:B", "B3:A1"])
+def test_table_creation_refuses_overlaps_and_invalid_grid_extents(tmp_path, range_ref):
+    path = tmp_path / "placement.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    for row in [("Id", "Value"), (1, 10), (2, 20)]:
+        book.active.append(row)
+    book.active.add_table(Table(displayName="Records", ref="A1:B3"))
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    with pytest.raises(DataError, match="overlaps|grid"):
+        create_excel_table(str(path), "Data", range_ref, "Other")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["append", "upsert"])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_native_table_expansion_respects_empty_reserved_table_extents(tmp_path, kind, dry_run):
+    path = tmp_path / "reserved.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    for row in [("Id", "Value"), (1, 10), (2, 20)]:
+        book.active.append(row)
+    book.active.add_table(Table(displayName="Records", ref="A1:B3"))
+    book.active.add_table(Table(displayName="Reserved", ref="A4:B6", headerRowCount=0))
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    with pytest.raises(DataError, match="overlaps native table 'Reserved'"):
+        if kind == "append":
+            append_excel_table_rows(str(path), "Records", [{"Id": 3, "Value": 30}], dry_run=dry_run)
+        else:
+            upsert_excel_table_rows(str(path), "Records", "Id", [
+                {"Id": 1, "Value": 99}, {"Id": 3, "Value": 30},
+            ], dry_run=dry_run)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_native_table_expansion_cannot_cross_last_excel_row(tmp_path, dry_run):
+    path = tmp_path / "edge.xlsx"
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Data"
+    for row, values in [(1048575, ["Id", "Value"]), (1048576, [1, 10])]:
+        for col, value in enumerate(values, 1):
+            sheet.cell(row, col, value)
+    sheet.add_table(Table(displayName="Records", ref="A1048575:B1048576"))
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    with pytest.raises(DataError, match="grid"):
+        append_excel_table_rows(str(path), "Records", [{"Id": 2, "Value": 20}], dry_run=dry_run)
+    assert path.read_bytes() == before
+
+
+def test_adjacent_nonoverlapping_tables_still_allow_creation_and_append(tmp_path):
+    path = tmp_path / "adjacent.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    for row in [("Id", "Value", "Other"), (1, 10, "a"), (2, 20, "b")]:
+        book.active.append(row)
+    book.save(path)
+    book.close()
+    create_excel_table(str(path), "Data", "A1:B3", "Records")
+    create_excel_table(str(path), "Data", "C1:C3", "Other")
+    append_excel_table_rows(str(path), "Records", [{"Id": 3, "Value": 30}])
+    book = load_workbook(path)
+    assert book["Data"].tables["Records"].ref == "A1:B4"
+    assert book["Data"].tables["Other"].ref == "C1:C3"
+    assert book["Data"]["C3"].value == "b"
+    book.close()
+
+
 def _create_workbook_with_table_and_chartsheet(tmp_path) -> str:
     filepath = str(tmp_path / "table-and-chart-sheet.xlsx")
     wb = Workbook()

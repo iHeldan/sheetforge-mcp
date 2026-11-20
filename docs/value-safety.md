@@ -31,9 +31,17 @@ cell values, not complete XLSX feature fidelity or calculated formula results.
   text is retained when repeating its plain text.
 
 Range copies transfer the source style, including the default General style,
-and check saved values. Copies refuse malformed/out-of-grid targets, intersecting
+and check saved values. Unreleased hardening also retains and checks the explicit
+source cell type: a literal `=A2` or `#N/A` string stays text rather than becoming
+a formula or error. Only real formula cells are translated or rewritten by
+copy, rename and structural edits. Literal text retains the 32767-unit text
+limit, not the shorter formula limit. Copies refuse malformed/out-of-grid targets, intersecting
 merged cells and failed relative-formula translation rather than saving an
 untranslated formula. The source rectangle is limited to 250,000 cells.
+Copy targets cannot intersect array/data-table formula extents. Sheet rename
+and copying an array-bearing sheet refuse unsupported non-scalar dependency
+rewriting. Full-axis edits refuse unverifiable cross-sheet non-scalar formulas
+and local array inputs that would need rewriting, as well as affected extents.
 
 Pivot summaries validate and read back generated labels and aggregates too.
 Exact integer results that cannot round-trip are refused, never implicitly

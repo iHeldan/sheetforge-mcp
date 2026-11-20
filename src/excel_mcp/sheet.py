@@ -80,13 +80,27 @@ def _validate_positive_integer(value: Any, *, argument_name: str) -> int:
     return value
 
 
+def _has_non_scalar_formulas(ws: Worksheet) -> bool:
+    return any(cell.data_type == "f" and not isinstance(cell.value, str) for cell in ws._cells.values())
+
+
+def _non_scalar_formula_bounds(value: Any) -> tuple[int, int, int, int]:
+    try:
+        c1, r1, c2, r2 = range_boundaries(value.ref)
+        validate_grid_bounds(r1, c1, r2, c2)
+        return r1, c1, r2, c2
+    except (AttributeError, TypeError, ValueError) as error:
+        raise ValidationError("Cannot verify the extent of an array/data-table formula; no changes were saved") from error
+
+
 def _translated_copy_value(
     value: Any,
     *,
+    data_type: str,
     source_coordinate: str,
     target_coordinate: str,
 ) -> Any:
-    if not isinstance(value, str) or not value.startswith("="):
+    if data_type != "f" or not isinstance(value, str) or not value.startswith("="):
         return value
     try:
         return Translator(value, origin=source_coordinate).translate_formula(target_coordinate)
@@ -194,7 +208,7 @@ def _update_workbook_formula_sheet_references(
 
     for worksheet in getattr(workbook, "worksheets", []):
         for cell in list(worksheet._cells.values()):
-            if not isinstance(cell.value, str) or not cell.value.startswith("="):
+            if cell.data_type != "f" or not isinstance(cell.value, str) or not cell.value.startswith("="):
                 continue
             updated_value = _rewrite_sheet_reference_formula(
                 cell.value,
@@ -900,6 +914,18 @@ def _update_workbook_structure_references(
     }
 
     for worksheet in getattr(workbook, "worksheets", []):
+        if worksheet.title != target_sheet_name and _has_non_scalar_formulas(worksheet):
+            raise ValidationError("Cannot verify cross-sheet array/data-table dependencies for structural edits; no changes were saved")
+        for cell in worksheet._cells.values():
+            if cell.data_type != "f" or isinstance(cell.value, str):
+                continue
+            for field in ("text", "r1", "r2"):
+                text = getattr(cell.value, field, None)
+                if isinstance(text, str) and text != _rewrite_formula_like_text_for_structure_change(
+                    text, target_sheet_name=target_sheet_name, formula_sheet_name=worksheet.title,
+                    operation=operation, start_index=start_index, count=count, partial_span=partial_span,
+                ):
+                    raise ValidationError("Structural edits requiring array/data-table formula rewrites are not supported; no changes were saved")
         for cell in _iter_recorded_formula_cells(worksheet):
             updated_value = _rewrite_formula_like_text_for_structure_change(
                 cell.value,
@@ -1332,7 +1358,7 @@ def _rewrite_copied_cell_formulas(
 ) -> int:
     updated_count = 0
     for cell in target_sheet._cells.values():
-        if not isinstance(cell.value, str) or not cell.value.startswith("="):
+        if cell.data_type != "f" or not isinstance(cell.value, str) or not cell.value.startswith("="):
             continue
         rewritten = _rewrite_copied_formula_text(
             cell.value,
@@ -1361,6 +1387,8 @@ def copy_sheet(filepath: str, source_sheet: str, target_sheet: str) -> Dict[str,
                 error_cls=SheetError,
                 operation="copying worksheets",
             )
+            if _has_non_scalar_formulas(source):
+                raise ValidationError("Cannot verify copied array/data-table formulas; no changes were saved")
             target = wb.copy_worksheet(source)
             target.title = target_sheet
             copied_tables, table_formula_updates = _copy_native_tables(wb, source, target)
@@ -1463,6 +1491,8 @@ def rename_sheet(filepath: str, old_name: str, new_name: str) -> Dict[str, Any]:
             if new_name == old_name:
                 raise SheetError(f"Sheet '{new_name}' already exists")
             validate_sheet_title(new_name, wb.sheetnames, current=old_name)
+            if any(_has_non_scalar_formulas(ws) for ws in wb.worksheets):
+                raise ValidationError("Cannot verify array/data-table dependencies when renaming sheets; no changes were saved")
 
             sheet = wb[old_name]
             if old_name.casefold() == new_name.casefold():
@@ -2319,8 +2349,10 @@ def _move_stored_structure(ws: Worksheet, *, axis: int, start: int, count: int, 
     moved = []
     for position, cell in ws._cells.items():
         index = position[axis]
-        if index >= start and getattr(cell, "data_type", None) == "f" and not isinstance(cell.value, str):
-            raise ValidationError("Structural edits of array/data-table formulas are not supported")
+        if getattr(cell, "data_type", None) == "f" and not isinstance(cell.value, str):
+            r1, c1, r2, c2 = _non_scalar_formula_bounds(cell.value)
+            if index >= start or (r2 if axis == 0 else c2) >= start:
+                raise ValidationError("Structural edits of array/data-table formulas are not supported")
         if delete and start <= index < start + count:
             continue
         target = list(position)
@@ -2611,10 +2643,11 @@ def copy_range_operation(
     """Copy a range of cells to another location."""
     try:
         expected_writes = {}
+        expected_types = {}
 
         def check_candidate(baseline, candidate):
             with safe_workbook(str(candidate)) as saved:
-                verify_cell_writes(saved, expected_writes)
+                verify_cell_writes(saved, expected_writes, data_types=expected_types)
             preflight_response(result)
 
         with safe_workbook(filepath, save=not dry_run, preview=dry_run, candidate_check=check_candidate) as wb:
@@ -2658,6 +2691,11 @@ def copy_range_operation(
             target_end_col = target_col + end_col - start_col
             if (end_row - start_row + 1) * (end_col - start_col + 1) > MAX_RANGE_MUTATION_CELLS:
                 raise ValidationError(f"Range copy is limited to {MAX_RANGE_MUTATION_CELLS} cells")
+            for cell in target_ws._cells.values():
+                if cell.data_type == "f" and not isinstance(cell.value, str):
+                    r1, c1, r2, c2 = _non_scalar_formula_bounds(cell.value)
+                    if target_row <= r2 and r1 <= target_end_row and target_col <= c2 and c1 <= target_end_col:
+                        raise ValidationError("Range copy cannot overwrite array/data-table formula extents; no changes were saved")
             for ws, bounds in [(source_ws, (start_row, start_col, end_row, end_col)),
                                (target_ws, (target_row, target_col, target_end_row, target_end_col))]:
                 if any(bounds[0] <= merged.max_row and merged.min_row <= bounds[2]
@@ -2677,6 +2715,7 @@ def copy_range_operation(
                 source_cells.append({
                     "source_row": i, "source_col": j,
                     "value": source_cell.value if source_cell is not None else None,
+                    "data_type": source_cell.data_type if source_cell is not None else "n",
                     "style": copy(source_cell._style) if source_cell is not None else None,
                 })
 
@@ -2685,15 +2724,21 @@ def copy_range_operation(
                 j = source_entry["source_col"]
                 source_value = source_entry["value"]
                 source_style = source_entry["style"]
+                source_type = source_entry["data_type"]
                 target_cell = target_ws.cell(row=i + row_offset, column=j + col_offset)
                 translated_value = _translated_copy_value(
                     source_value,
+                    data_type=source_type,
                     source_coordinate=f"{get_column_letter(j)}{i}",
                     target_coordinate=target_cell.coordinate,
                 )
-                validate_cell_value(translated_value)
-                expected_writes[(resolved_target_sheet, i + row_offset, j + col_offset)] = translated_value
-                if not cell_values_equal(target_cell.value, translated_value):
+                validate_cell_value(translated_value, data_type=source_type)
+                key = (resolved_target_sheet, i + row_offset, j + col_offset)
+                expected_writes[key] = translated_value
+                if translated_value is not None:
+                    expected_types[key] = source_type
+                if (not cell_values_equal(target_cell.value, translated_value)
+                        or (translated_value is not None and target_cell.data_type != source_type)):
                     changes.append({
                         "sheet_name": resolved_target_sheet,
                         "cell": f"{get_column_letter(j + col_offset)}{i + row_offset}",
@@ -2703,7 +2748,11 @@ def copy_range_operation(
                         "new_value": translated_value,
                         "source_cell": f"{get_column_letter(j)}{i}",
                     })
+                    if cell_values_equal(target_cell.value, translated_value):
+                        changes[-1].update(old_data_type=target_cell.data_type, new_data_type=source_type)
                 target_cell.value = translated_value
+                if translated_value is not None:
+                    target_cell.data_type = source_type
                 target_cell._style = copy(source_style)
 
             result = {

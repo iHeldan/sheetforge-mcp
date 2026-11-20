@@ -133,11 +133,15 @@ def test_agent_workflow_repair_preview_apply_and_verify(tmp_path):
     preview_payload = _load_tool_payload(apply_workbook_repairs(filepath, dry_run=True))
     assert preview_payload["dry_run"] is True
     assert preview_payload["data"]["action_count"] == 3
-    assert preview_payload["data"]["diff"]["summary"]["named_range_change_count"] == 0
+    assert preview_payload["data"]["diff"]["summary"]["named_range_change_count"] == 1
+    assert preview_payload["data"]["diff_basis"] == "dry_run_preview"
+    assert preview_payload["data"]["audit_after_basis"] == "unchanged_source"
+    assert preview_payload["data"]["audit_after"] == preview_payload["data"]["audit_before"]
 
     apply_payload = _load_tool_payload(apply_workbook_repairs(filepath, dry_run=False))
     assert apply_payload["dry_run"] is False
     assert apply_payload["data"]["action_count"] == 3
+    assert apply_payload["data"]["diff"] == preview_payload["data"]["diff"]
     assert apply_payload["data"]["audit_after"]["risk_level"] == "low"
 
     after_payload = _load_tool_payload(audit_workbook(filepath))

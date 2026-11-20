@@ -10,6 +10,7 @@ This file documents the public MCP tool surface exposed by `src/excel_mcp/server
 - HTTP/SSE paths, including absolute paths, must remain inside `EXCEL_FILES_PATH`; traversal and symlink escapes are rejected.
 - HTTP/SSE binds are loopback-only unless `SHEETFORGE_ALLOW_REMOTE=true` is set explicitly. That opt-in does not add authentication.
 - Destructive tools update the workbook on disk in place unless `dry_run=True`.
+- The shared loader accepts `.xlsx` filename extensions only (case-insensitive); macro/template and legacy extensions are refused before loading, not silently converted.
 - Workbook mutations are serialized per canonical workbook path on the same host with a bounded wait and persisted via verified atomic replace. If post-save verification and automatic rollback both fail, the recovery backup is retained and identified in the error.
 - `apply_workbook_changeset` adds exact-file optimistic concurrency for a bounded multi-operation plan. Its token is an integrity fingerprint, not an authentication credential or distributed cloud lock.
 - Every tool returns a JSON envelope with `ok`, `operation`, `message`, and `data`.
@@ -190,6 +191,7 @@ Returns matches under `data.matches`:
   Turns workbook audit findings into prioritized next steps. The response includes ordered repair/inspection steps, suggested SheetForge tool calls, and a `quick_wins` list for issues that can be advanced entirely inside SheetForge.
 - `apply_workbook_repairs(filepath: str, repair_types: Optional[List[str]] = None, sheet_names: Optional[List[str]] = None, header_row: int = 1, sample_limit: int = 25, dry_run: bool = True) -> str`
   Dry-runs or applies the safe workbook-repair subset currently supported inside SheetForge: broken named ranges, broken data validation rules, broken conditional formatting rules, and optional hidden-sheet reveals. The response includes planned/applied actions, audit summary before and after, and a structural diff.
+  Dry runs serialize the proposed repaired candidate and label its diff `diff_basis="dry_run_preview"`. Their `audit_after` still describes the unchanged on-disk file (`audit_after_basis="unchanged_source"`); committed repairs label both as `saved_source`.
 - `apply_workbook_changeset(filepath: str, operations: List[Dict[str, Any]], assertions: Optional[List[Dict[str, Any]]] = None, mode: str = "preview", expected_workbook_sha256: Optional[str] = None, changeset_token: Optional[str] = None, create_snapshot: bool = True, snapshot_filepath: Optional[str] = None, sample_limit: int = 25, save_mode: str = "standard") -> str`
   Previews or commits a bounded, assertion-backed group of workbook edits. `mode="preview"` copies the exact source into an isolated candidate, runs every operation, checks every assertion, and returns `ready_to_commit`, `expected_workbook_sha256`, `changeset_token`, a structural diff, and sampled cell changes without changing the source. `mode="commit"` requires the same operations and assertions plus both identifiers returned by preview. It repeats the plan while holding the same-host workbook lock, rechecks the live source hash immediately before replacement, creates or reuses an exact matching verified snapshot by default, and replaces the source only after all preconditions pass. It checks the reopened source against the inspected candidate's exact hash after assertions. On verification failure, exact-byte rollback is attempted only while the live source still matches that candidate. Observed external changes produce `changeset_recovery_required`, with `recovery_baseline`, `rollback_status` and `retry_safe=false` in error details: inspect the current file and retained baseline before retrying. These checks detect observed drift, not every possible external race. If commit stops before replacement, SheetForge makes a verified best-effort removal of a newly created unchanged snapshot and reports cleanup failure; snapshots that predated the attempt or changed concurrently are never deleted.
 
@@ -252,7 +254,7 @@ Returns matches under `data.matches`:
   }
   ```
 
-  ChangeSet limits are 50 operations, 50 assertions, 50,000 written cells, 250,000 formatted cells, and 10,000 cells per range assertion. `sample_limit` is capped at 100. The server also validates response size before replace so a commit cannot succeed and then be reported as failed merely because its result was too large. The same-host lock serializes SheetForge writers; non-cooperating desktop or cloud editors are detected optimistically by source revalidation but are not governed by a distributed lock.
+  ChangeSet limits are 50 operations, 50 assertions, 50,000 written cells, 250,000 formatted cells, and 10,000 cells per range assertion. `sample_limit` is capped at 100. Complete internal staged changes are not charged as a standalone MCP response; the final sampled transaction response is budgeted before replacement. Snapshot destinations must be separate files: source aliases (including case/Unicode variants on insensitive filesystems) and hardlinks are refused. The same-host lock serializes SheetForge writers; non-cooperating desktop or cloud editors are detected optimistically by source revalidation but are not governed by a distributed lock.
 - `inspect_workbook_contract(filepath: str, contract: Dict[str, Any], sample_limit: int = 3) -> str`
   Workbook Contracts v1, available since `0.14.0`. Read-only stable capture of one explicit native table, with exact approved header aliases and full bounded key/type/null/enum/range checks before filters. Returns `valid`, `unresolved`, or `violated`, logical-to-physical `bindings`, explicit `recipe_input_fields`, `next_action`, complete row counts and bounded failing row examples. Use binding keys (logical names), not physical header values, in contract-backed Recipes. `declared` contains user-supplied grain/meanings, never verified business facts. `sample_limit` defaults to 3; the MCP schema allows only 1-5, not Recipe's 10. Invalid MCP arguments produce SDK validation errors; malformed/unsupported function inputs return normal tool errors. See [the contract grammar and recovery examples](docs/workbook-contracts.md). Inspection alone does not guard other calls.
 
@@ -459,7 +461,7 @@ references accordingly. Standalone saves and their previews also apply the
 - `set_worksheet_protection(filepath: str, sheet_name: str, enabled: bool = True, password: Optional[str] = None, options: Optional[Dict[str, bool]] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Enables or disables worksheet protection and optionally overrides supported protection flags in one call. Committed writes stay compact unless `include_changes=True`.
 - `copy_range(filepath: str, sheet_name: str, source_start: str, source_end: str, target_start: str, target_sheet: Optional[str] = None, dry_run: bool = False) -> str`
-  Copies a range to another location, optionally on a different sheet, and supports preview mode. Since `0.15.1`, bounded to 250,000 source cells; the full destination must fit `A1:XFD1048576`. Transfers default styles too, checks saved values, and refuses merged-cell intersections and failed formula translations without saving.
+  Copies a range to another location, optionally on a different sheet, and supports preview mode. Since `0.15.1`, bounded to 250,000 source cells; the full destination must fit `A1:XFD1048576`. Transfers default styles too, checks saved values and source cell types, and refuses merged-cell intersections and failed formula translations without saving. Literal `=` and error-looking strings stay text; only genuine formulas are translated. Type-only changes appear in `changes` with `old_data_type` and `new_data_type`.
 - `delete_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str, shift_direction: str = "up", dry_run: bool = False) -> str`
   Deletes a range and shifts remaining cells up or left. Supports preview mode. Since `0.15.1`, updates supported local/cross-sheet formulas, names and chart/rule references and returns `reference_updates`. Refuses straddling rectangular references, ambiguous unqualified global references, dynamic `INDIRECT`/`OFFSET`, 3D and array/data-table formulas, and affected layout metadata. Target sheets with drawings are refused. No guessed translation or nonrectangular reference union is emitted.
 - `insert_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1, dry_run: bool = False) -> str`
@@ -475,12 +477,18 @@ Since `0.15.1`, structural movement and dependency scans visit recorded cells,
 including sparse formatting-only tails, instead of materializing the used-range
 rectangle. Insertions that push recorded cells or supported references outside
 Excel's grid are refused. Native-table structural guardrails remain in force.
+Edits intersecting array/data-table formula extents are refused even when the
+formula's anchor precedes the insertion/deletion point.
+Full-axis edits also refuse unverifiable cross-sheet non-scalar dependencies
+and affected local array input references. Copy targets cannot intersect array
+extents. Sheet rename and copying an array-bearing sheet refuse unsupported
+dependency rewriting rather than silently leaving stale formula objects.
 These tools are not a complete emulation of Excel's structural editing engine.
 
 ## Table, Chart, And Pivot Tools
 
 - `create_table(filepath: str, sheet_name: str, data_range: str, table_name: Optional[str] = None, table_style: str = "TableStyleMedium9") -> str`
-  Creates a native Excel table from an existing range. Requires a worksheet target; chart sheets cannot host native Excel tables.
+  Creates a native Excel table from an existing range inside `A1:XFD1048576`, refusing overlaps with any existing native table. Requires a worksheet target; chart sheets cannot host native Excel tables. Native-table append/upsert expansion also checks other table extents, even when their cells are empty.
 - `list_charts(filepath: str, sheet_name: Optional[str] = None) -> str`
   Lists embedded charts across the workbook or for one worksheet, including chart type, anchor, titles, dimensions, occupied worksheet range, and series references.
 - `find_free_canvas(filepath: str, sheet_name: str, width: Optional[float] = None, height: Optional[float] = None, min_rows: Optional[int] = None, min_cols: Optional[int] = None, limit: int = 5, origin_cell: str = "A1", search_rows: Optional[int] = None, search_columns: Optional[int] = None, padding_rows: int = 0, padding_columns: int = 0) -> str`
