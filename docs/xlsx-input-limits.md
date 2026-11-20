@@ -5,7 +5,7 @@ allocates archive-entry objects or expands XML. The same checked file descriptor
 is used for loading, avoiding a separate unchecked path reopen. Read-only
 workbooks retain that descriptor until closed.
 
-Unreleased hardening admits only `.xlsx` filename extensions (case-insensitive)
+Since `0.15.2`, admission allows only `.xlsx` filename extensions (case-insensitive)
 through the shared workbook loader. Macro/template and legacy extensions such
 as `.xlsm`, `.xltm`, `.xltx` and `.xls` are refused, including in previews;
 they are not silently converted or claimed to be preserved by the standard save.

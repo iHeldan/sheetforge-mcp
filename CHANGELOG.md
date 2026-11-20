@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.2 - 2026-11-20
+
+### Compatibility Notes
+
+- This correction release keeps the same 83 MCP tools. Shared loads now admit `.xlsx` extensions only; unsupported macro/template inputs, snapshot aliases or hardlinks, and unverifiable array/table mutations are refused rather than silently rewritten. No general macro/array support, cloud locking or automatic fallback is added.
+
 ### Fixed
 
 - Workbook audit, repair planning and repair application retain complete dominant-table metadata, including headers. Worksheets fully covered by a native table no longer fail with a missing-header error; partial, headerless and multi-table layouts remain covered.

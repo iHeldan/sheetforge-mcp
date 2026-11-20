@@ -31,7 +31,7 @@ cell values, not complete XLSX feature fidelity or calculated formula results.
   text is retained when repeating its plain text.
 
 Range copies transfer the source style, including the default General style,
-and check saved values. Unreleased hardening also retains and checks the explicit
+and check saved values. Since `0.15.2`, copying also retains and checks the explicit
 source cell type: a literal `=A2` or `#N/A` string stays text rather than becoming
 a formula or error. Only real formula cells are translated or rewritten by
 copy, rename and structural edits. Literal text retains the 32767-unit text
