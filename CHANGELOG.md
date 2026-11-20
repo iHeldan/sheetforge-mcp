@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Workbook audit, repair planning and repair application retain complete dominant-table metadata, including headers. Worksheets fully covered by a native table no longer fail with a missing-header error; partial, headerless and multi-table layouts remain covered.
 - Range copies retain and verify the source cell type as well as its value and style. Literal `=` text and error-looking text stay text; only actual formulas are translated or rewritten during copy, rename and structural edits. Formula introspection no longer treats literal strings as active formulas.
 - Shared workbook loading refuses non-`.xlsx` extensions before openpyxl runs, rather than accepting macro/template formats that standard saves cannot preserve.
 - ChangeSet snapshot paths must identify a separate file. Case/Unicode aliases, symlinks resolving to the source and hardlinks to it are rejected before preview or commit.

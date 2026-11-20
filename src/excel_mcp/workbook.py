@@ -1801,14 +1801,7 @@ def _worksheet_audit_assessment(
     )
     dominant_table = _table_dominates_sheet(
         {
-            "native_tables": [
-                {
-                    "table_name": table["table_name"],
-                    "data_row_count": table["data_row_count"],
-                    "column_count": table["column_count"],
-                }
-                for table in native_tables
-            ],
+            "native_tables": native_tables,
             "total_rows": sample["total_rows"],
             "column_count": len(sample["headers"]),
         }

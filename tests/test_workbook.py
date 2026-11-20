@@ -563,6 +563,62 @@ def test_audit_workbook_handles_complex_workbook_orientation(complex_workbook):
     assert assessments["Data"]["recommended_read_tool"] == "read_excel_table"
 
 
+@pytest.mark.parametrize("layout", ["full", "partial", "headerless", "multiple"])
+@pytest.mark.parametrize("tool", [audit_workbook_tool, plan_workbook_repairs_tool, apply_workbook_repairs_tool])
+def test_audit_and_repair_tools_retain_complete_native_table_metadata(tmp_path, layout, tool):
+    path = tmp_path / "native-audit.xlsx"
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Data"
+    for row in [("Id", "Value"), (1, 10), (2, 20)]:
+        sheet.append(row)
+    sheet.add_table(Table(displayName="Records", ref="A1:B3", headerRowCount=0 if layout == "headerless" else 1))
+    if layout in {"partial", "multiple"}:
+        sheet["D1"], sheet["D2"], sheet["D3"] = "Other", "x", "y"
+    if layout == "multiple":
+        sheet.add_table(Table(displayName="Other", ref="D1:D3"))
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    payload = _load_tool_payload(tool(str(path)))
+    assert payload["ok"] and path.read_bytes() == before
+    with workbook_module.safe_workbook(str(path)) as book:
+        assessment = workbook_module._worksheet_audit_assessment(book["Data"], sheet_name="Data", header_row=1)
+    if layout == "multiple":
+        assert assessment["dominant_table"] is None
+        assert assessment["header_quality_scope"] == "worksheet"
+    else:
+        assert assessment["dominant_table"]["headers"] == ([] if layout == "headerless" else ["Id", "Value"])
+        assert assessment["dominant_table"]["range"] == "A1:B3"
+        assert assessment["header_quality_scope"] == "dominant_table"
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_repairs_on_fully_dominant_native_table_keep_table_and_data(tmp_path, dry_run):
+    path = tmp_path / "native-repair.xlsx"
+    book = Workbook()
+    book.active.title = "Data"
+    for row in [("Id", "Value"), (1, 10), (2, 20)]:
+        book.active.append(row)
+    book.active.add_table(Table(displayName="Records", ref="A1:B3"))
+    book.create_sheet("Hidden").sheet_state = "hidden"
+    book.save(path)
+    book.close()
+    before = path.read_bytes()
+    result = apply_workbook_repairs(str(path), repair_types=["reveal_hidden_sheets"], dry_run=dry_run)
+    assert result["action_count"] == 1
+    assert result["audit_after"]["hidden_sheet_count"] == (1 if dry_run else 0)
+    if dry_run:
+        assert path.read_bytes() == before
+    book = load_workbook(path)
+    try:
+        assert book["Data"].tables["Records"].ref == "A1:B3"
+        assert list(book["Data"].values) == [("Id", "Value"), (1, 10), (2, 20)]
+        assert book["Hidden"].sheet_state == ("hidden" if dry_run else "visible")
+    finally:
+        book.close()
+
+
 def test_audit_workbook_uses_dominant_table_headers_for_compound_sheet_quality(tmp_path):
     filepath = str(tmp_path / "audit-compound-dominant-table.xlsx")
     wb = Workbook()

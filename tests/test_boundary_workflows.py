@@ -33,6 +33,10 @@ def run_boundary_workflow(parameters, tmp_path):
         data[cell].quotePrefix = True
     book.create_sheet("Report")
     book.create_sheet("Hidden").sheet_state = "hidden"
+    native_only = book.create_sheet("NativeOnly")
+    for row in [("Id", "Value"), (1, 10), (2, 20)]:
+        native_only.append(row)
+    native_only.add_table(Table(displayName="Controls", ref="A1:B3"))
     book.save(source)
     book.close()
 
@@ -128,6 +132,8 @@ def run_boundary_workflow(parameters, tmp_path):
         assert book["Hidden"].sheet_state == "visible"
         assert book.defined_names["Window"].attr_text == "'Data'!$B$2"
         assert book["Data"].tables["Sales"].ref == "A1:C401"
+        assert book["NativeOnly"].tables["Controls"].ref == "A1:B3"
+        assert list(book["NativeOnly"].values) == [("Id", "Value"), (1, 10), (2, 20)]
         assert [(book["Report"].cell(row, 1).value, book["Report"].cell(row, 2).value) for row in range(1, 402)] == [
             ("Region", "Revenue"), *[(f"Region-{index:04d}", index + 1) for index in range(400)],
         ]
