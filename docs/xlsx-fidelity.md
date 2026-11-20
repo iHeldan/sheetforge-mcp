@@ -42,7 +42,7 @@ calls. Use ChangeSet if the commit must match a specific previewed SHA-256.
 Within ChangeSet, an omitted `sheet_name` on a cell write selects the active
 worksheet (an active chart sheet is rejected).
 
-### Post-save Recovery (Unreleased)
+### Post-save Recovery (Since 0.15.1)
 
 Standalone saves also check source identity and bytes before replacement and
 compare the reopened file with the saved candidate. An observed outside change
@@ -76,7 +76,7 @@ writer. An external change after a check remains possible.
 
 - Since `0.14.1`, the guard runs in `write_data_to_excel`,
   `apply_workbook_changeset` and ChangeSet-backed writes (Verified Recipes,
-  Rebase and Scenarios). Unreleased: it also runs on ordinary standalone
+  Rebase and Scenarios). Since `0.15.1`, it also runs on ordinary standalone
   mutations, including formatting, charts, formulas, sheet operations and
   native-table writes. Their dry runs serialize and inspect an isolated
   candidate too. Unlike direct cell previews, which return `ready_to_commit`

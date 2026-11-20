@@ -1,6 +1,6 @@
 # XLSX Input Limits
 
-Unreleased. Ordinary workbook loads now inspect ZIP metadata before openpyxl
+Available since `0.15.1`. Ordinary workbook loads inspect ZIP metadata before openpyxl
 allocates archive-entry objects or expands XML. The same checked file descriptor
 is used for loading, avoiding a separate unchecked path reopen. Read-only
 workbooks retain that descriptor until closed.

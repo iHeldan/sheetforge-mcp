@@ -1,6 +1,6 @@
 # Standard Write Value Safety
 
-Unreleased. Applies to cell writes, worksheet append/update, native-table
+Available since `0.15.1`. Applies to cell writes, worksheet append/update, native-table
 append/upsert, formula application, range copies, generated pivot cells, and
 standard ChangeSet cell operations.
 

@@ -330,7 +330,7 @@ Returns matches under `data.matches`:
 - `read_excel_table(filepath: str, table_name: str, sheet_name: Optional[str] = None, start_row: int = 1, start_col: Optional[str] = None, end_col: Optional[str] = None, max_rows: Optional[int] = None, compact: bool = False, include_headers: bool = True, row_mode: str = "arrays", infer_schema: bool = False) -> str`
   Reads rows from a native Excel table by `table_name`, preserving the table's exact range instead of inferring worksheet bounds. Use `start_row` plus `max_rows` to paginate within table data rows, `start_col` / `end_col` to narrow the table width, and `include_headers=False` for follow-up pages after the first. Requested columns must fall inside the table range. When more rows remain, the response includes `next_start_row` for the next page. Responses also include `structure_token`, `content_token`, and `snapshot_metadata`.
 
-Multi-workbook alignment (Unreleased) uses actual headers, case-insensitively,
+Multi-workbook alignment (since `0.15.1`) uses actual headers, case-insensitively,
 while preserving punctuation and surrounding spaces. Reordered `Net Sales` and
 `Net-Sales` remain distinct. Empty/duplicate headers and aliases that resolve to
 different headers across sources fail explicitly; use exact, distinct headers.
@@ -383,7 +383,7 @@ from numbers. See [standard write value safety](docs/value-safety.md).
 ## Formula And Validation Tools
 
 - `apply_formula(filepath: str, sheet_name: str, cell: str, formula: str) -> str`
-  Writes a structurally validated Excel formula into the target cell. Risky functions such as `INDIRECT`, `HYPERLINK`, `WEBSERVICE`, `DGET`, and `RTD` are rejected case-insensitively before mutation. Unreleased: lossless text checks, an 8192-UTF-16-unit formula limit, and serialized value readback apply before replacement; formulas are not calculated.
+  Writes a structurally validated Excel formula into the target cell. Risky functions such as `INDIRECT`, `HYPERLINK`, `WEBSERVICE`, `DGET`, and `RTD` are rejected case-insensitively before mutation. Since `0.15.1`, lossless text checks, an 8192-UTF-16-unit formula limit, and serialized value readback apply before replacement; formulas are not calculated.
 - `validate_formula_syntax(filepath: str, sheet_name: str, cell: str, formula: str) -> str`
   Performs structural token, operator, parenthesis, unsafe-function, and Excel-coordinate checks without changing the workbook. It does not execute or calculate the formula.
 - `inspect_formula(formula: str) -> str`
@@ -440,7 +440,7 @@ from numbers. See [standard write value safety](docs/value-safety.md).
 
 ## Worksheet And Range Mutation Tools
 
-Unreleased: new sheet titles must be valid Excel names (at most 31 UTF-16 code
+Since `0.15.1`, new sheet titles must be valid Excel names (at most 31 UTF-16 code
 units). Case-insensitive collisions are refused, not silently auto-suffixed.
 Intentional case-only renames preserve the exact requested title and update
 references accordingly. Standalone saves and their previews also apply the
@@ -459,9 +459,9 @@ references accordingly. Standalone saves and their previews also apply the
 - `set_worksheet_protection(filepath: str, sheet_name: str, enabled: bool = True, password: Optional[str] = None, options: Optional[Dict[str, bool]] = None, dry_run: bool = False, include_changes: Optional[bool] = None) -> str`
   Enables or disables worksheet protection and optionally overrides supported protection flags in one call. Committed writes stay compact unless `include_changes=True`.
 - `copy_range(filepath: str, sheet_name: str, source_start: str, source_end: str, target_start: str, target_sheet: Optional[str] = None, dry_run: bool = False) -> str`
-  Copies a range to another location, optionally on a different sheet, and supports preview mode. Unreleased: bounded to 250,000 source cells; the full destination must fit `A1:XFD1048576`. Transfers default styles too, checks saved values, and refuses merged-cell intersections and failed formula translations without saving.
+  Copies a range to another location, optionally on a different sheet, and supports preview mode. Since `0.15.1`, bounded to 250,000 source cells; the full destination must fit `A1:XFD1048576`. Transfers default styles too, checks saved values, and refuses merged-cell intersections and failed formula translations without saving.
 - `delete_range(filepath: str, sheet_name: str, start_cell: str, end_cell: str, shift_direction: str = "up", dry_run: bool = False) -> str`
-  Deletes a range and shifts remaining cells up or left. Supports preview mode. Unreleased: updates supported local/cross-sheet formulas, names and chart/rule references and returns `reference_updates`. Refuses straddling rectangular references, ambiguous unqualified global references, dynamic `INDIRECT`/`OFFSET`, 3D and array/data-table formulas, and affected layout metadata. Target sheets with drawings are refused. No guessed translation or nonrectangular reference union is emitted.
+  Deletes a range and shifts remaining cells up or left. Supports preview mode. Since `0.15.1`, updates supported local/cross-sheet formulas, names and chart/rule references and returns `reference_updates`. Refuses straddling rectangular references, ambiguous unqualified global references, dynamic `INDIRECT`/`OFFSET`, 3D and array/data-table formulas, and affected layout metadata. Target sheets with drawings are refused. No guessed translation or nonrectangular reference union is emitted.
 - `insert_rows(filepath: str, sheet_name: str, start_row: int, count: int = 1, dry_run: bool = False) -> str`
   Inserts one or more rows, supports preview mode, and keeps workbook formulas, named ranges, chart series, validations, conditional formatting, and merged ranges aligned with the structural shift.
 - `insert_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1, dry_run: bool = False) -> str`
@@ -471,7 +471,7 @@ references accordingly. Standalone saves and their previews also apply the
 - `delete_sheet_columns(filepath: str, sheet_name: str, start_col: int, count: int = 1, dry_run: bool = False) -> str`
   Deletes one or more columns, supports preview mode, and rewrites dependent workbook references instead of leaving stale formulas or range metadata behind.
 
-Unreleased: structural movement and dependency scans visit recorded cells,
+Since `0.15.1`, structural movement and dependency scans visit recorded cells,
 including sparse formatting-only tails, instead of materializing the used-range
 rectangle. Insertions that push recorded cells or supported references outside
 Excel's grid are refused. Native-table structural guardrails remain in force.
@@ -493,7 +493,7 @@ These tools are not a complete emulation of Excel's structural editing engine.
   Placement objects support `direction` (`right` or `below`), optional `padding_columns` / `padding_rows`, and `relative_to` values of `content`, `used_range`, `data_range`, `free_canvas`, `table:<name>`, or a worksheet range like `A1:C10`. `free_canvas` also accepts `origin_cell`, `search_rows`, and `search_columns`.
 - `create_pivot_table(filepath: str, sheet_name: str, data_range: str, rows: List[str], values: List[str], columns: Optional[List[str]] = None, agg_func: str = "sum", replace_existing: bool = False) -> str`
   Creates a pivot-style summary from the given data range. Supported aggregation functions: `sum`, `average`, `count`, `min`, `max`. By default SheetForge now protects any existing `<sheet_name>_pivot` worksheet instead of deleting it implicitly; pass `replace_existing=True` only when you intentionally want to overwrite that generated pivot sheet.
-  Unreleased: source capture through verified save uses one same-host write lock and refuses observed outside drift. Source and expanded output are each bounded to 250,000 cells; generated names and output extents are validated. Generated values follow the [pivot precision policy](docs/value-safety.md): unsupported exact integer results fail, while computed floats use declared standard-writer precision.
+  Since `0.15.1`, source capture through verified save uses one same-host write lock and refuses observed outside drift. Source and expanded output are each bounded to 250,000 cells; generated names and output extents are validated. Generated values follow the [pivot precision policy](docs/value-safety.md): unsupported exact integer results fail, while computed floats use declared standard-writer precision.
 
 ## Practical Usage Notes
 

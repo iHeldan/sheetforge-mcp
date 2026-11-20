@@ -239,7 +239,7 @@
           inspect formulas, and plan safer edits before writing.
         </p>
         <p>
-          Published package release: <strong>0.15.0</strong>. The repository currently
+          Published package release: <strong>0.15.1</strong>. The repository currently
           exposes <strong>83 MCP tools</strong>, including smart read-strategy suggestions,
           lightweight dataset summaries, declarative table queries, grouped aggregates,
           cross-workbook aggregation, cross-workbook filtering, cross-workbook unions, cross-workbook lookups, workbook profiling, repair
@@ -249,6 +249,12 @@
           guarded worksheet-boundary presets, compact mutation responses, grouped formatting readback, sheet-layout summaries,
           cursor-based 2D range reads, placement-aware chart authoring, workbook rename sync for formulas and default pivot sheets,
           and workbook-level impact analysis for formulas, validations, and conditional formatting.
+        </p>
+        <p>
+          Version 0.15.1 strengthens staged-save checks across mutation tools,
+          verifies written values, bounds XLSX input loading, and refuses unsafe
+          structural edits instead of silently changing unrelated data.
+          These are targeted safeguards, not a guarantee of complete Excel feature preservation.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/iHeldan/sheetforge-mcp">View Repository</a>

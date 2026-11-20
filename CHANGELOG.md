@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.1 - 2026-11-20
+
+### Compatibility Notes
+
+- This reliability update keeps the same 83 MCP tools. Standard writes and previews now refuse additional unsafe or unverifiable operations instead of reporting success after silent data loss. See the [value-safety policy](docs/value-safety.md), [XLSX fidelity guide](docs/xlsx-fidelity.md), and [operator-configured input limits](docs/xlsx-input-limits.md). Preserving mode remains opt-in with its existing restricted profile; no automatic fallback or concurrency guarantee against outside writers is added.
+
 ### Fixed
 
 - Ordinary mutation saves and their dry runs now compose the targeted custom-XML/formula-cache guard with value and response checks. Editable saves retain unrelated supported rich text; adding a caller-specific check no longer bypasses the package check. ChangeSet still compares its final candidate against the original package.
