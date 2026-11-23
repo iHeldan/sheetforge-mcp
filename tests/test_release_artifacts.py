@@ -2,6 +2,8 @@ import importlib.util
 import io
 import json
 import re
+import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -126,6 +128,50 @@ def test_every_distribution_build_workflow_runs_shared_artifact_verifier():
         assert (
             "python scripts/verify_release_artifacts.py dist" in workflow.read_text()
         ), f"{workflow.name} builds distributions without the shared artifact verifier"
+
+
+@pytest.mark.parametrize(
+    ("ref_type", "ref", "accepted"),
+    [
+        ("tag", "refs/tags/v{version}", True),
+        ("branch", "refs/heads/main", False),
+        ("branch", "refs/heads/v{version}", False),
+        ("branch", "refs/tags/v{version}", False),
+        ("tag", "refs/heads/v{version}", False),
+        ("tag", "refs/tags/v{version}.0", False),
+        ("tag", "refs/tags/{version}", False),
+        ("tag", "refs/tags/v{version}-unexpected", False),
+        (None, None, False),
+        ("tag", None, False),
+    ],
+)
+def test_publish_release_ref_guard(monkeypatch, ref_type, ref, accepted):
+    root = Path(__file__).resolve().parents[1]
+    version = _package_version(root)
+    for name, value in (("GITHUB_REF_TYPE", ref_type), ("GITHUB_REF", ref)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value.format(version=version))
+    result = subprocess.run(
+        [sys.executable, "scripts/verify_release_artifacts.py", "--check-release-ref"],
+        cwd=root, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if accepted:
+        assert "Verified release tag" in result.stdout
+    else:
+        assert "requires a release tag matching pyproject.toml" in result.stderr
+
+
+def test_publish_checks_release_ref_unconditionally_before_building():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/publish.yml").read_text()
+    guard = "      - name: Verify release tag\n        run: python scripts/verify_release_artifacts.py --check-release-ref\n\n"
+    install = workflow.index("      - name: Install hatch dependencies")
+    assert workflow[workflow.index("      - name: Verify release tag"):install] == guard
+    assert install < workflow.index("run: hatch build") < workflow.index("python scripts/verify_release_artifacts.py dist")
+    assert workflow.index("python scripts/verify_release_artifacts.py dist") < workflow.index("uses: pypa/gh-action-pypi-publish@release/v1")
 
 
 def test_ci_uses_the_audited_dependency_lock():

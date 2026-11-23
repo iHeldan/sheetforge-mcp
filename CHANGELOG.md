@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- The manual PyPI workflow rejects branch runs and tags that do not exactly match the project version before building packages. Existing artifact verification and Trusted Publisher publication remain unchanged.
+
 ## 0.15.2 - 2026-11-20
 
 ### Compatibility Notes

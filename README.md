@@ -368,6 +368,7 @@ uv build
 - Every distribution-building workflow verifies the wheel, source distribution, and tracked MCPB bundle against shared public-artifact allowlists before release or publication.
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
+- The manual PyPI workflow requires a tag named `v<pyproject.toml version>`; branch runs and mismatched tags fail before dependency installation or package building. Artifact checks still run before publication.
 
 ## Repository Layout
 

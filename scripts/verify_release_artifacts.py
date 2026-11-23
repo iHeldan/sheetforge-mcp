@@ -8,6 +8,7 @@ import stat
 import tarfile
 import zipfile
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 
@@ -145,6 +146,17 @@ def _package_version(root: Path) -> str:
     return match.group(1)
 
 
+def verify_release_ref(root: Path) -> None:
+    expected_ref = f"refs/tags/v{_package_version(root)}"
+    if (
+        os.environ.get("GITHUB_REF_TYPE") != "tag"
+        or os.environ.get("GITHUB_REF") != expected_ref
+    ):
+        raise SystemExit(
+            f"PyPI publishing requires a release tag matching pyproject.toml: {expected_ref}"
+        )
+
+
 def _verify_mcpb(bundle_path: Path, *, expected_version: str) -> None:
     with zipfile.ZipFile(bundle_path) as bundle:
         members: set[PurePosixPath] = set()
@@ -201,8 +213,12 @@ def verify_dist(dist_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    output_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
-    verify_dist(output_dir)
     repository_root = Path(__file__).resolve().parents[1]
-    verify_repository_bundle(repository_root)
-    print(f"Verified SheetForge release artifacts in {output_dir} and repository MCPB")
+    if sys.argv[1:] == ["--check-release-ref"]:
+        verify_release_ref(repository_root)
+        print("Verified release tag matches pyproject.toml")
+    else:
+        output_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
+        verify_dist(output_dir)
+        verify_repository_bundle(repository_root)
+        print(f"Verified SheetForge release artifacts in {output_dir} and repository MCPB")
