@@ -2,9 +2,15 @@
 
 ## Unreleased
 
+## 0.15.3 - 2026-11-24
+
+### Compatibility Notes
+
+- This packaging correction keeps the same 83 MCP tools and workbook behavior. The MCPB wrapper now launches its exact SheetForge package version; upgrading the runtime requires updating the extension. The published `0.15.2` artifacts are unchanged.
+
 ### Fixed
 
-- The source MCPB manifest pins its `uvx --from` package version to the manifest version for the next release. Release checks reject missing, mismatched or platform-overridden pins and duplicate archive entries that could shadow the manifest; the exact published `0.15.2` MCPB remains unchanged under a SHA-256-scoped historical exception.
+- The MCPB manifest pins its `uvx --from` package version to the manifest version. Release checks reject missing, mismatched or platform-overridden pins and duplicate archive entries that could shadow the manifest; the exact published `0.15.2` MCPB remains unchanged under a SHA-256-scoped historical exception.
 - MCPB packing uses the same explicit six-file public allowlist as artifact verification instead of relying on incomplete exclusion patterns.
 - The manual PyPI workflow rejects branch runs and tags that do not exactly match the project version before building packages. Existing artifact verification and Trusted Publisher publication remain unchanged.
 

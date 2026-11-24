@@ -239,7 +239,7 @@
           inspect formulas, and plan safer edits before writing.
         </p>
         <p>
-          Published package release: <strong>0.15.2</strong>. The repository currently
+          Published package release: <strong>0.15.3</strong>. The repository currently
           exposes <strong>83 MCP tools</strong>, including smart read-strategy suggestions,
           lightweight dataset summaries, declarative table queries, grouped aggregates,
           cross-workbook aggregation, cross-workbook filtering, cross-workbook unions, cross-workbook lookups, workbook profiling, repair
@@ -251,10 +251,10 @@
           and workbook-level impact analysis for formulas, validations, and conditional formatting.
         </p>
         <p>
-          Version 0.15.2 preserves explicit cell types during copy and reference updates,
-          strengthens XLSX, snapshot and table/array checks, and improves compact
-          ChangeSet capacity, preview accuracy and native-table audit workflows.
-          These are targeted safeguards, not a guarantee of complete Excel feature preservation.
+          Version 0.15.3 pins each new MCPB wrapper to its declared SheetForge package
+          version, limits wrapper contents to six public files, and requires a matching
+          version tag for PyPI publication. The 83-tool surface and workbook behavior
+          are unchanged; updating the pinned runtime requires updating the extension.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/iHeldan/sheetforge-mcp">View Repository</a>

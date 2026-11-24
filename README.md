@@ -10,12 +10,13 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.15.2`
+Published package release: `0.15.3`
 Repository docs track the current main-branch tool surface, which currently exposes `83` MCP tools.
 Version `0.15.0` adds [opt-in preserving XLSX saves](docs/xlsx-fidelity.md#preserving-save-mode) for literal cell edits in a restricted workbook profile. [Targeted XLSX fidelity checks](docs/xlsx-fidelity.md) still guard direct and ChangeSet-backed writes.
 Version `0.15.1` extends the targeted fidelity guard to ordinary standalone mutations and their dry runs, with checked grid boundaries, safer structural edits, verified formula/copy/pivot values, and early configurable XLSX input limits. Unsafe or unverifiable operations can now be refused before saving. See the [changelog](CHANGELOG.md#0151---2026-11-20), [value-safety policy](docs/value-safety.md), and [input-limit guide](docs/xlsx-input-limits.md).
 
 Version `0.15.2` preserves explicit cell types during copy/reference updates, rejects unsafe snapshot aliases and table/array intersections, reconciles ZIP64 directory checks, improves ChangeSet capacity and preview accuracy, and restores audit/repair workflows for fully dominant native tables. See the [correction release notes](CHANGELOG.md#0152---2026-11-20).
+Version `0.15.3` pins each new MCPB to its declared SheetForge version, restricts wrapper contents to six public files, and requires a matching version tag for PyPI publication. The 83-tool surface and workbook behavior are unchanged. See [runtime versioning](#mcpb-runtime-versioning) and the [release notes](CHANGELOG.md#0153---2026-11-24).
 Workbook Contracts v1 is included in `0.14.0`: explicit bindings and full bounded data checks can guard Recipe preview/commit, with logical-field, file-path and worksheet-versus-table recovery guidance.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.
@@ -370,10 +371,11 @@ uv build
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
 - The manual PyPI workflow requires a tag named `v<pyproject.toml version>`; branch runs and mismatched tags fail before dependency installation or package building. Artifact checks still run before publication.
+- Publish and verify the PyPI package before making its pinned MCPB publicly available.
 
 ### MCPB Runtime Versioning
 
-The next MCPB release will use `uvx --from sheetforge-mcp==<manifest version> sheetforge-mcp stdio`. The checked-in manifest already uses this form; the published `0.15.2` MCPB is unchanged and remains unpinned. Only that exact historical archive is exempted by SHA-256, not a rebuilt `0.15.2` archive or a later version. Advance the release version before repacking; the verifier rejects replacement of the tracked `0.15.2` archive. Duplicate archive entries are refused so a second manifest cannot shadow the checked launch command.
+Starting with `0.15.3`, MCPBs use `uvx --from sheetforge-mcp==<manifest version> sheetforge-mcp stdio`. The published `0.15.2` MCPB is unchanged and remains unpinned. Only that exact historical archive is exempted by SHA-256, not a rebuilt `0.15.2` archive or a later version. Advance the release version before repacking; the verifier rejects replacement of the tracked `0.15.2` archive. Duplicate archive entries are refused so a second manifest cannot shadow the checked launch command.
 
 An installed pinned MCPB keeps the same SheetForge version when newer packages appear on PyPI. Update the extension to move to a newer runtime: Claude Desktop [updates official-directory extensions automatically by default; separately distributed MCPBs require manual installation](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop). This repository does not claim official-directory distribution. A requested version must exist on PyPI before distributing its MCPB; there is no fallback to the latest release.
 
