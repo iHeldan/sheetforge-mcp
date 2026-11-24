@@ -10,6 +10,7 @@ import zipfile
 import json
 import os
 import re
+import hashlib
 from pathlib import Path, PurePosixPath
 
 FORBIDDEN_DIRECTORY_NAMES = {".git", ".notes", ".venv", "__pycache__"}
@@ -39,6 +40,8 @@ ALLOWED_MCPB_MEMBERS = {
     PurePosixPath("icon.png"),
     PurePosixPath("manifest.json"),
 }
+# Preserve only the exact already-published unpinned wrapper, not future rebuilds.
+LEGACY_UNPINNED_MCPB_SHA256 = "17029a278e76c89075637b3e85971e08192845ef2b6e0ce6a97b331a3f877fb3"
 
 
 def _assert_safe_relative_path(relative_path: PurePosixPath, *, artifact: Path) -> None:
@@ -157,6 +160,26 @@ def verify_release_ref(root: Path) -> None:
         )
 
 
+def verify_manifest_runtime(manifest: dict, *, expected_version: str) -> None:
+    if not isinstance(manifest, dict) or manifest.get("version") != expected_version:
+        raise AssertionError(f"Manifest version does not match {expected_version}")
+    server = manifest.get("server")
+    config = server.get("mcp_config") if isinstance(server, dict) else None
+    error = f"Manifest runtime must use uvx --from sheetforge-mcp=={expected_version} sheetforge-mcp stdio"
+    if not isinstance(config, dict):
+        raise AssertionError(error)
+    overrides = config.get("platform_overrides", {})
+    if not isinstance(overrides, dict):
+        raise AssertionError(error)
+    expected_args = ["--from", f"sheetforge-mcp=={expected_version}", "sheetforge-mcp", "stdio"]
+    for override in [{}, *overrides.values()]:
+        if not isinstance(override, dict):
+            raise AssertionError(error)
+        effective = config | override
+        if effective.get("command") != "uvx" or effective.get("args") != expected_args:
+            raise AssertionError(error)
+
+
 def _verify_mcpb(bundle_path: Path, *, expected_version: str) -> None:
     with zipfile.ZipFile(bundle_path) as bundle:
         members: set[PurePosixPath] = set()
@@ -169,6 +192,8 @@ def _verify_mcpb(bundle_path: Path, *, expected_version: str) -> None:
             if stat.S_IFMT(unix_mode) == stat.S_IFLNK:
                 raise AssertionError(f"Symlink in {bundle_path.name}: {member}")
             _assert_safe_relative_path(member, artifact=bundle_path)
+            if member in members:
+                raise AssertionError(f"Duplicate MCPB entry in {bundle_path.name}: {member}")
             if len(member.parts) != 1 or member not in ALLOWED_MCPB_MEMBERS:
                 raise AssertionError(
                     f"Unexpected MCPB entry in {bundle_path.name}: {member}"
@@ -183,20 +208,32 @@ def _verify_mcpb(bundle_path: Path, *, expected_version: str) -> None:
         raise AssertionError(
             f"MCPB member mismatch in {bundle_path.name}; missing={missing}, extras={extras}"
         )
-    if manifest_payload is None or manifest_payload.get("version") != expected_version:
+    if not isinstance(manifest_payload, dict) or manifest_payload.get("version") != expected_version:
         raise AssertionError(
             f"{bundle_path.name} manifest version does not match {expected_version}"
         )
+    if (
+        expected_version == "0.15.2"
+        and hashlib.sha256(bundle_path.read_bytes()).hexdigest() == LEGACY_UNPINNED_MCPB_SHA256
+    ):
+        return
+    verify_manifest_runtime(manifest_payload, expected_version=expected_version)
 
 
 def verify_repository_bundle(root: Path) -> None:
     version = _package_version(root)
+    verify_manifest_runtime(json.loads((root / "manifest.json").read_text()), expected_version=version)
     bundles = sorted(root.glob("sheetforge-mcp-*.mcpb"))
     expected_bundle = root / f"sheetforge-mcp-{version}.mcpb"
     if bundles != [expected_bundle]:
         raise AssertionError(
             f"Expected only {expected_bundle.name}, found {[path.name for path in bundles]}"
         )
+    if (
+        version == "0.15.2"
+        and hashlib.sha256(expected_bundle.read_bytes()).hexdigest() != LEGACY_UNPINNED_MCPB_SHA256
+    ):
+        raise AssertionError("Published 0.15.2 MCPB must remain unchanged; prepare a new release version")
     _verify_mcpb(expected_bundle, expected_version=version)
 
 

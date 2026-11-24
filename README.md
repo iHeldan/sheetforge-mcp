@@ -364,11 +364,20 @@ uv build
 ## Release Flow
 
 - Update `pyproject.toml`, `manifest.json`, and the tracked `.mcpb` bundle together for each release.
+- Also update the manifest's `--from sheetforge-mcp==<version>` runtime pin to match its version. The source manifest and every new MCPB are checked for an exact pin, including platform overrides.
 - Keep the tracked bundle filename in sync with the package version, for example `sheetforge-mcp-<version>.mcpb`.
 - Every distribution-building workflow verifies the wheel, source distribution, and tracked MCPB bundle against shared public-artifact allowlists before release or publication.
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
 - The manual PyPI workflow requires a tag named `v<pyproject.toml version>`; branch runs and mismatched tags fail before dependency installation or package building. Artifact checks still run before publication.
+
+### MCPB Runtime Versioning
+
+The next MCPB release will use `uvx --from sheetforge-mcp==<manifest version> sheetforge-mcp stdio`. The checked-in manifest already uses this form; the published `0.15.2` MCPB is unchanged and remains unpinned. Only that exact historical archive is exempted by SHA-256, not a rebuilt `0.15.2` archive or a later version. Advance the release version before repacking; the verifier rejects replacement of the tracked `0.15.2` archive. Duplicate archive entries are refused so a second manifest cannot shadow the checked launch command.
+
+An installed pinned MCPB keeps the same SheetForge version when newer packages appear on PyPI. Update the extension to move to a newer runtime: Claude Desktop [updates official-directory extensions automatically by default; separately distributed MCPBs require manual installation](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop). This repository does not claim official-directory distribution. A requested version must exist on PyPI before distributing its MCPB; there is no fallback to the latest release.
+
+The existing manifest `0.3`, Python server type and `uvx`/stdio wrapper are retained. `uvx` must still be installed and available to the desktop process, and initial package retrieval needs network access. The [documented exact-version syntax](https://docs.astral.sh/uv/guides/tools/#requesting-specific-versions) changes argument strings only; it does not require the newer MCPB UV runtime. This pins the top-level package, not Python, transitive dependencies, package indexes or artifact hashes, and is not a fully reproducible/offline environment. The generic unpinned quick-start configuration above remains a separate user-managed choice.
 
 ## Repository Layout
 

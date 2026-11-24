@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import copy
 import re
 import subprocess
 import sys
@@ -40,6 +41,7 @@ def test_release_versions_stay_in_sync():
 
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["version"] == version
+    _load_release_verifier().verify_manifest_runtime(manifest, expected_version=version)
 
     readme = (root / "README.md").read_text()
     assert f"Published package release: `{version}`" in readme
@@ -112,6 +114,13 @@ def test_sdist_uses_public_allowlist_and_private_artifact_excludes():
         "/.env*",
     ):
         assert f'"{required_exclude}"' in sdist_section
+
+
+def test_mcpbignore_uses_the_same_root_file_allowlist_as_verification():
+    root = Path(__file__).resolve().parents[1]
+    patterns = [line for line in (root / ".mcpbignore").read_text().splitlines() if line and not line.startswith("#")]
+    assert patterns[0] == "*"
+    assert set(patterns[1:]) == {f"!/{member}" for member in _load_release_verifier().ALLOWED_MCPB_MEMBERS}
 
 
 def test_every_distribution_build_workflow_runs_shared_artifact_verifier():
@@ -258,3 +267,107 @@ def test_release_verifier_rejects_mcpb_manifest_version_drift(tmp_path):
 
     with pytest.raises(AssertionError, match="manifest version does not match"):
         verifier._verify_mcpb(artifact, expected_version="0.8.0")
+
+
+def _runtime_manifest(version="0.15.3"):
+    return {
+        "version": version,
+        "server": {"mcp_config": {
+            "command": "uvx",
+            "args": ["--from", f"sheetforge-mcp=={version}", "sheetforge-mcp", "stdio"],
+        }},
+    }
+
+
+def _write_runtime_bundle(path, manifest):
+    verifier = _load_release_verifier()
+    with zipfile.ZipFile(path, "w") as bundle:
+        for member in verifier.ALLOWED_MCPB_MEMBERS:
+            content = json.dumps(manifest).encode() if member.name == "manifest.json" else b"public"
+            bundle.writestr(str(member), content)
+
+
+@pytest.mark.parametrize("version", ["0.15.2", "0.15.3"])
+def test_release_verifier_accepts_exact_pinned_runtime(tmp_path, version):
+    manifest = _runtime_manifest(version)
+    artifact = tmp_path / f"sheetforge-mcp-{version}.mcpb"
+    _write_runtime_bundle(artifact, manifest)
+    _load_release_verifier()._verify_mcpb(artifact, expected_version=version)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"args": ["sheetforge-mcp", "stdio"]},
+        {"args": ["--from", "sheetforge-mcp==0.15.2", "sheetforge-mcp", "stdio"]},
+        {"args": ["--from", "sheetforge-mcp>=0.15.3", "sheetforge-mcp", "stdio"]},
+        {"args": ["sheetforge-mcp@latest", "stdio"]},
+        {"args": ["--from", "sheetforge-mcp==${version}", "sheetforge-mcp", "stdio"]},
+        {"command": "python"},
+        {"args": "--from sheetforge-mcp==0.15.3 sheetforge-mcp stdio"},
+        {"platform_overrides": {"win32": {"args": ["sheetforge-mcp", "stdio"]}}},
+        {"platform_overrides": []},
+        {"platform_overrides": {"darwin": None}},
+    ],
+)
+def test_release_verifier_rejects_runtime_drift_inside_bundle(tmp_path, change):
+    manifest = _runtime_manifest()
+    manifest["server"]["mcp_config"].update(copy.deepcopy(change))
+    artifact = tmp_path / "sheetforge-mcp-0.15.3.mcpb"
+    _write_runtime_bundle(artifact, manifest)
+    with pytest.raises(AssertionError, match="Manifest runtime must use"):
+        _load_release_verifier()._verify_mcpb(artifact, expected_version="0.15.3")
+
+
+def test_release_verifier_accepts_environment_only_platform_override():
+    manifest = _runtime_manifest()
+    manifest["server"]["mcp_config"]["platform_overrides"] = {"darwin": {"env": {"EXAMPLE": "value"}}}
+    _load_release_verifier().verify_manifest_runtime(manifest, expected_version="0.15.3")
+
+
+def test_release_verifier_checks_source_manifest_before_historical_bundle(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "0.15.2"\n')
+    manifest = _runtime_manifest("0.15.2")
+    manifest["server"]["mcp_config"]["args"] = ["sheetforge-mcp", "stdio"]
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(AssertionError, match="Manifest runtime must use"):
+        _load_release_verifier().verify_repository_bundle(tmp_path)
+
+
+def test_legacy_exception_does_not_allow_rebuilt_unpinned_0152(tmp_path):
+    manifest = _runtime_manifest("0.15.2")
+    manifest["server"]["mcp_config"]["args"] = ["sheetforge-mcp", "stdio"]
+    artifact = tmp_path / "sheetforge-mcp-0.15.2.mcpb"
+    _write_runtime_bundle(artifact, manifest)
+    with pytest.raises(AssertionError, match="Manifest runtime must use"):
+        _load_release_verifier()._verify_mcpb(artifact, expected_version="0.15.2")
+
+
+def test_repository_verifier_refuses_to_replace_published_0152_even_with_a_pin(tmp_path):
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "0.15.2"\n')
+    manifest = _runtime_manifest("0.15.2")
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    _write_runtime_bundle(tmp_path / "sheetforge-mcp-0.15.2.mcpb", manifest)
+    with pytest.raises(AssertionError, match="Published 0.15.2 MCPB must remain unchanged"):
+        _load_release_verifier().verify_repository_bundle(tmp_path)
+
+
+@pytest.mark.parametrize("unpinned_first", [True, False])
+def test_runtime_pin_cannot_be_shadowed_by_duplicate_manifests(tmp_path, unpinned_first):
+    pinned = _runtime_manifest()
+    unpinned = copy.deepcopy(pinned)
+    unpinned["server"]["mcp_config"]["args"] = ["sheetforge-mcp", "stdio"]
+    artifact = tmp_path / "sheetforge-mcp-0.15.3.mcpb"
+    _write_runtime_bundle(artifact, unpinned if unpinned_first else pinned)
+    with zipfile.ZipFile(artifact, "a") as bundle, pytest.warns(UserWarning, match="Duplicate name"):
+        bundle.writestr("manifest.json", json.dumps(pinned if unpinned_first else unpinned))
+    with pytest.raises(AssertionError, match="Duplicate MCPB entry"):
+        _load_release_verifier()._verify_mcpb(artifact, expected_version="0.15.3")
+
+
+@pytest.mark.parametrize("payload", [None, [], "not a manifest"])
+def test_bundle_manifest_must_be_a_json_object(tmp_path, payload):
+    artifact = tmp_path / "sheetforge-mcp-0.15.3.mcpb"
+    _write_runtime_bundle(artifact, payload)
+    with pytest.raises(AssertionError, match="manifest version does not match"):
+        _load_release_verifier()._verify_mcpb(artifact, expected_version="0.15.3")

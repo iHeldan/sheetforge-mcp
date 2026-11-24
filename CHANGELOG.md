@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- The source MCPB manifest pins its `uvx --from` package version to the manifest version for the next release. Release checks reject missing, mismatched or platform-overridden pins and duplicate archive entries that could shadow the manifest; the exact published `0.15.2` MCPB remains unchanged under a SHA-256-scoped historical exception.
+- MCPB packing uses the same explicit six-file public allowlist as artifact verification instead of relying on incomplete exclusion patterns.
 - The manual PyPI workflow rejects branch runs and tags that do not exactly match the project version before building packages. Existing artifact verification and Trusted Publisher publication remain unchanged.
 
 ## 0.15.2 - 2026-11-20
