@@ -1,6 +1,7 @@
 """Separate portable backend-contract checks from actual Windows acceptance."""
 
 import errno
+import hashlib
 import os
 from pathlib import Path
 import sys
@@ -9,8 +10,105 @@ from types import SimpleNamespace
 import pytest
 
 import excel_mcp.workbook as workbook_module
-from excel_mcp.exceptions import WorkbookError
+from excel_mcp.exceptions import PreconditionFailedError, WorkbookError
 from excel_mcp.workbook import safe_workbook
+
+
+def _fake_file_state_os(monkeypatch, platform, path, *, field=None, timing=None):
+    stamp = path.lstat()
+    calls = []
+    original = os.fstat
+
+    def fstat(fd):
+        info = original(fd)
+        fields = {name: getattr(info, name) for name in (
+            "st_mode", "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns",
+        )}
+        fields["st_ctime_ns"] = stamp.st_ctime_ns + (10 if platform == "nt" else 0)
+        if field is not None and len(calls) == timing:
+            fields[field] += 1
+        calls.append(fd)
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(workbook_module, "os", SimpleNamespace(**{
+        **vars(os), "name": platform, "fstat": fstat,
+    }))
+    return calls
+
+
+def test_file_state_accepts_native_stable_regular_file(tmp_path):
+    path = tmp_path / "state.bin"
+    body = b"stable native file"
+    path.write_bytes(body)
+    state = workbook_module._workbook_file_state(path)
+    assert state == (workbook_module._guarded_source_stamp(path), hashlib.sha256(body).hexdigest())
+    assert workbook_module._workbook_file_state(path) == state
+
+
+def test_file_state_separates_windows_path_and_handle_ctimes(tmp_path, monkeypatch):
+    path = tmp_path / "state.bin"
+    body = b"stable but different ctime semantics"
+    path.write_bytes(body)
+    calls = _fake_file_state_os(monkeypatch, "nt", path)
+    assert workbook_module._workbook_file_state(path) == (
+        workbook_module._guarded_source_stamp(path), hashlib.sha256(body).hexdigest(),
+    )
+    assert len(calls) == 2
+    with pytest.raises(OSError) as caught:
+        os.fstat(calls[0])
+    assert caught.value.errno == errno.EBADF
+
+
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("timing", [0, 1], ids=["opening", "reading"])
+@pytest.mark.parametrize("field", ["st_dev", "st_ino", "st_size", "st_mtime_ns"])
+def test_file_state_rejects_handle_identity_drift(tmp_path, monkeypatch, platform, timing, field):
+    path = tmp_path / "state.bin"
+    path.write_bytes(b"must detect a changed file")
+    calls = _fake_file_state_os(monkeypatch, platform, path, field=field, timing=timing)
+    with pytest.raises(PreconditionFailedError, match="changed while") as caught:
+        workbook_module._workbook_file_state(path)
+    assert caught.value.code == "stale_workbook"
+    with pytest.raises(OSError):
+        os.fstat(calls[0])
+
+
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+def test_file_state_rejects_handle_ctime_changes_during_read(tmp_path, monkeypatch, platform):
+    path = tmp_path / "state.bin"
+    path.write_bytes(b"must detect metadata drift")
+    _fake_file_state_os(monkeypatch, platform, path, field="st_ctime_ns", timing=1)
+    with pytest.raises(PreconditionFailedError, match="changed while reading"):
+        workbook_module._workbook_file_state(path)
+
+
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("field_index", range(5), ids=["device", "inode", "size", "mtime", "ctime"])
+def test_file_state_rejects_path_stamp_drift(tmp_path, monkeypatch, platform, field_index):
+    path = tmp_path / "state.bin"
+    path.write_bytes(b"must detect path substitution")
+    _fake_file_state_os(monkeypatch, platform, path)
+    original = workbook_module._guarded_source_stamp
+    calls = []
+
+    def changed(target):
+        stamp = list(original(target))
+        if calls:
+            stamp[field_index] += 1
+        calls.append(target)
+        return tuple(stamp)
+
+    monkeypatch.setattr(workbook_module, "_guarded_source_stamp", changed)
+    with pytest.raises(PreconditionFailedError, match="changed while reading"):
+        workbook_module._workbook_file_state(path)
+
+
+def test_file_state_retains_posix_cross_api_ctime_check(tmp_path, monkeypatch):
+    path = tmp_path / "state.bin"
+    path.write_bytes(b"must detect pre-open metadata drift on POSIX")
+    _fake_file_state_os(monkeypatch, "posix", path, field="st_ctime_ns", timing=0)
+    with pytest.raises(PreconditionFailedError, match="changed while opening"):
+        workbook_module._workbook_file_state(path)
 
 
 @pytest.mark.parametrize(("platform", "mode"), [("nt", "r+b"), ("posix", "rb")])

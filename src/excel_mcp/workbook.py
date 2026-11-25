@@ -2682,13 +2682,20 @@ def _workbook_file_state(path: Path) -> tuple[tuple[int, ...], str]:
     fd = os.open(path, flags)
     with os.fdopen(fd, "rb") as handle:
         opened = os.fstat(handle.fileno())
-        if not stat.S_ISREG(opened.st_mode) or (*_file_identity(opened), opened.st_ctime_ns) != before:
+        opened_stamp = (*_file_identity(opened), opened.st_ctime_ns)
+        # Windows path stat reports creation time as ctime; fstat can report
+        # change time. Compare each ctime only within its own API family.
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened_stamp[:-1] != before[:-1]
+            or (os.name != "nt" and opened_stamp[-1] != before[-1])
+        ):
             raise PreconditionFailedError("Workbook changed while opening", code="stale_workbook")
         digest = hashlib.sha256()
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
         after = os.fstat(handle.fileno())
-    if (*_file_identity(after), after.st_ctime_ns) != before or _guarded_source_stamp(path) != before:
+    if (*_file_identity(after), after.st_ctime_ns) != opened_stamp or _guarded_source_stamp(path) != before:
         raise PreconditionFailedError("Workbook changed while reading", code="stale_workbook")
     return before, digest.hexdigest()
 

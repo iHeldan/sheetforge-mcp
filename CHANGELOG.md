@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Guarded saves account for Windows Python's differing path/handle `ctime` semantics. Both timestamp streams are still checked for changes, alongside device/inode, size, modification time and content hashes; POSIX retains its stricter cross-API timestamp check.
 - Read-only Verified Explanations avoid creating an unused writable candidate, allowing read-only source workbooks on Windows. Recipe workspace cleanup handles read-only temporary copies without changing the source or masking an already committed result.
 - Durable file flushes open a write-capable handle on Windows, where the underlying flush API rejects read-only handles; POSIX behavior and propagation of flush failures are retained. Native Windows CI also exposed test portability issues: POSIX FIFO checks now run only where the API exists, while directory/symlink checks remain cross-platform, and oversized-value tests use short IDs without changing their payloads.
 

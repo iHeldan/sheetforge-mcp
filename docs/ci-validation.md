@@ -51,6 +51,10 @@ Linux installation check is not native Windows or desktop-client acceptance.
   Native file-flush tests retain `fsync` and its error propagation. Windows uses
   a write-capable handle as required by [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers);
   POSIX keeps its existing read-only flush behavior.
+  Stable-file guards compare Windows path and handle `ctime` values within their
+  respective API families, since [CPython reports different timestamp meanings](https://github.com/python/cpython/issues/157671).
+  Regressions retain both change checks, device/inode/size/mtime comparisons,
+  content hashes and the stricter POSIX cross-API timestamp check.
 - `test_path_guidance.py`, `test_server_security.py` and other existing suites
   check rooted paths, traversal, symlink escapes and refusal to auto-relocate.
   Native Windows cases also reject drive-relative and root-relative paths in
