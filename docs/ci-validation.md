@@ -7,6 +7,33 @@ builds distributions and verifies release artifacts. Windows failures are not
 optional; jobs have a ten-minute timeout and pytest reports skip reasons.
 Existing Linux check names are retained; Windows has its own distinct check name.
 
+## Installed-wheel acceptance
+
+Only the Ubuntu/Python 3.12 job adds `python tests/installed_wheel.py dist` after
+building and verifying artifacts. No additional matrix job or per-version install
+is needed. The driver creates a fresh virtual environment outside the checkout,
+installs the exact built wheel and its normal runtime dependencies from PyPI
+with `uv --no-config pip install`, and checks dependency compatibility. It does
+not use `uv sync`, the development lock, dev extras or inherited site-packages.
+
+The probe runs with isolated Python and a filtered environment, separate home
+and working directories, no checkout paths in `PATH`/`sys.path`, no `PYTHONPATH`
+or Python environment overrides, and no pytest/Ruff. It checks the installed
+package origin/version, then launches the environment's actual
+`sheetforge-mcp stdio` console script. A missing CLI fails; there is no PATH or
+`-m` fallback.
+
+The existing Contracts integration driver supplies the client workflow and a
+public JSON fixture; explicitly loading that client file does not add repository
+application code to the import path. Acceptance initializes MCP, compares exact
+tool names against the manifest (including duplicates), and exercises contract
+inspection, rejection, Recipe preview/commit and complete workbook readback.
+
+This requires network access and tests normal runtime dependency resolution, not
+the audited development lock. A failure may indicate a packaging or dependency
+compatibility problem; it must not be hidden with a source-tree fallback. This
+Linux installation check is not native Windows or desktop-client acceptance.
+
 ## Filesystem safety coverage
 
 - `test_resource_safety.py` checks thread/process serialization, OS-lock timeout
@@ -41,6 +68,7 @@ uv run ruff check src tests
 uv run pytest -q -ra
 uv build
 python scripts/verify_release_artifacts.py dist
+python tests/installed_wheel.py dist
 ```
 
 A passing macOS/Linux suite validates its native locking and save behavior, not

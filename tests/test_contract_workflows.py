@@ -13,9 +13,20 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.table import Table
 
 
-def exercise_contract_workflow(tmp_path, *, installed=False):
+def assert_tool_inventory(inventory, expected_tools=None):
+    names = [tool.name for tool in inventory]
+    assert len(names) == len(set(names)), "Server returned duplicate tool names"
+    if expected_tools is None:
+        assert len(names) == 83
+    else:
+        assert set(names) == set(expected_tools), "Installed tool names do not match manifest"
+
+
+def exercise_contract_workflow(
+    tmp_path, *, installed=False, server_parameters=None, expected_tools=None,
+):
     root = Path(__file__).resolve().parents[1]
-    contract = json.loads((root / "docs/examples/net-sales.contract.json").read_text())
+    contract = json.loads((root / "docs/examples/net-sales.contract.json").read_text(encoding="utf-8"))
     path = tmp_path / "monthly.xlsx"
     wb = Workbook()
     ws = wb.active
@@ -39,7 +50,7 @@ def exercise_contract_workflow(tmp_path, *, installed=False):
         "metrics": [{"op": "sum", "field": "net", "as": "Revenue"}],
         "output": {"sheet_name": "Report", "range_ref": "A1:B5"},
     }
-    parameters = StdioServerParameters(
+    parameters = server_parameters if server_parameters is not None else StdioServerParameters(
         command=sys.executable,
         args=["-m", "excel_mcp", "stdio"],
         cwd=tmp_path if installed else root,
@@ -53,7 +64,7 @@ def exercise_contract_workflow(tmp_path, *, installed=False):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     inventory = (await session.list_tools()).tools
-                    assert len(inventory) == 83
+                    assert_tool_inventory(inventory, expected_tools)
                     tool = next(
                         t for t in inventory if t.name == "inspect_workbook_contract"
                     )

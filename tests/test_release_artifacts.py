@@ -222,6 +222,22 @@ def test_ci_adds_one_required_windows_full_suite_without_expanding_every_python(
         assert not commands[command].get("continue-on-error", False)
 
 
+def test_ci_tests_the_built_wheel_once_after_artifact_verification():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    steps = workflow["jobs"]["lint-and-test"]["steps"]
+    matches = [step for step in steps if step.get("run") == "python tests/installed_wheel.py dist"]
+    assert len(matches) == 1
+    installed = matches[0]
+    assert installed["if"] == "matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'"
+    assert not installed.get("continue-on-error", False)
+    commands = [step.get("run") for step in steps]
+    assert commands.index("uv build") < commands.index("python scripts/verify_release_artifacts.py dist")
+    assert commands.index("python scripts/verify_release_artifacts.py dist") < steps.index(installed)
+
+
 def test_github_actions_use_node24_compatible_setup_versions():
     root = Path(__file__).resolve().parents[1]
     expected_actions = {

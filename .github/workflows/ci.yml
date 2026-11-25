@@ -44,3 +44,7 @@ jobs:
 
       - name: Verify release artifacts
         run: python scripts/verify_release_artifacts.py dist
+
+      - name: Test installed wheel
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: python tests/installed_wheel.py dist
