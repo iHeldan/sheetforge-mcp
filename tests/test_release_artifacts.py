@@ -189,6 +189,39 @@ def test_ci_uses_the_audited_dependency_lock():
     assert "uv sync --locked --extra dev" in workflow
 
 
+def test_ci_adds_one_required_windows_full_suite_without_expanding_every_python():
+    import itertools
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    job = workflow["jobs"]["lint-and-test"]
+    matrix = job["strategy"]["matrix"]
+    assert set(matrix) == {"os", "python-version", "include"}
+    combinations = list(itertools.product(matrix["os"], matrix["python-version"]))
+    combinations.extend((entry["os"], entry["python-version"]) for entry in matrix["include"])
+    assert len(combinations) == 4
+    assert set(combinations) == {
+        ("ubuntu-latest", "3.10"), ("ubuntu-latest", "3.11"),
+        ("ubuntu-latest", "3.12"), ("windows-latest", "3.12"),
+    }
+    assert job["runs-on"] == "${{ matrix.os }}"
+    assert job["name"] == "${{ matrix.name || format('Lint and test (Python {0})', matrix.python-version) }}"
+    assert matrix["include"][0]["name"] == "Lint and test (Windows, Python 3.12)"
+    assert job["timeout-minutes"] == 10
+    assert job["strategy"]["fail-fast"] is False
+    assert "if" not in job
+    assert not job.get("continue-on-error", False)
+    commands = {step.get("run"): step for step in job["steps"] if "run" in step}
+    for command in (
+        "uv sync --locked --extra dev", "uv run ruff check src tests",
+        "uv run pytest -q -ra", "uv build", "python scripts/verify_release_artifacts.py dist",
+    ):
+        assert command in commands
+        assert "if" not in commands[command]
+        assert not commands[command].get("continue-on-error", False)
+
+
 def test_github_actions_use_node24_compatible_setup_versions():
     root = Path(__file__).resolve().parents[1]
     expected_actions = {

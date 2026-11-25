@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- CI configuration adds one required Windows/Python 3.12 full-suite job alongside the existing Ubuntu/Python 3.10-3.12 jobs, with bounded job time and visible skip reasons. Regressions cover native Windows locking and open-file replacement, process lock timeouts, Unicode workbook/snapshot paths and symlink confinement. Native Windows results must be verified separately from POSIX runs or simulated backend tests; see [CI validation](docs/ci-validation.md).
+
 ## 0.15.3 - 2026-11-24
 
 ### Compatibility Notes

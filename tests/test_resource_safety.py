@@ -1,3 +1,4 @@
+import hashlib
 import os
 from multiprocessing import get_context
 from pathlib import Path
@@ -28,6 +29,14 @@ def _process_workbook_writer(
                 raise TimeoutError("writer release was not signaled")
     except BaseException as exc:  # pragma: no cover - surfaced in parent process
         errors.put(f"{type(exc).__name__}: {exc!s}")
+
+
+def _process_lock_probe(filepath: str, timeout: float, results) -> None:
+    try:
+        with workbook_module._exclusive_workbook_lock(Path(filepath), timeout=timeout):
+            results.put("acquired")
+    except WorkbookError as exc:
+        results.put("timeout" if "Timed out waiting" in str(exc) else str(exc))
 
 
 def _assert_no_sheetforge_artifacts(workbook_path: Path) -> None:
@@ -382,7 +391,10 @@ def test_safe_workbook_serializes_concurrent_mutations(tmp_workbook):
         assert wb["Sheet1"]["C1"].value == "right"
 
 
-def test_safe_workbook_serializes_mutations_across_processes(tmp_workbook):
+@pytest.mark.parametrize("filename", ["writers.xlsx", "r\u00e4portti \u4f1a\u8ba1.xlsx"])
+def test_safe_workbook_serializes_mutations_across_processes(tmp_workbook, tmp_path, filename):
+    filepath = str(tmp_path / filename)
+    Path(filepath).write_bytes(Path(tmp_workbook).read_bytes())
     context = get_context("spawn")
     first_entered = context.Event()
     release_first = context.Event()
@@ -391,37 +403,102 @@ def test_safe_workbook_serializes_mutations_across_processes(tmp_workbook):
 
     first_process = context.Process(
         target=_process_workbook_writer,
-        args=(tmp_workbook, "B1", "left", first_entered, release_first, errors),
+        args=(filepath, "B1", "left", first_entered, release_first, errors),
     )
     second_process = context.Process(
         target=_process_workbook_writer,
-        args=(tmp_workbook, "C1", "right", second_entered, None, errors),
+        args=(filepath, "C1", "right", second_entered, None, errors),
     )
 
-    first_process.start()
-    assert first_entered.wait(timeout=10)
-    second_process.start()
-    assert not second_entered.wait(timeout=0.3)
-    release_first.set()
+    processes = []
+    try:
+        first_process.start()
+        processes.append(first_process)
+        assert first_entered.wait(timeout=10)
+        second_process.start()
+        processes.append(second_process)
+        assert not second_entered.wait(timeout=0.3)
+        release_first.set()
 
-    first_process.join(timeout=15)
-    second_process.join(timeout=15)
-    assert not first_process.is_alive()
-    assert not second_process.is_alive()
-    assert first_process.exitcode == 0
-    assert second_process.exitcode == 0
+        for process in processes:
+            process.join(timeout=15)
+            assert not process.is_alive()
+            assert process.exitcode == 0
 
-    process_errors: list[str] = []
-    while True:
-        try:
-            process_errors.append(errors.get_nowait())
-        except Empty:
-            break
-    assert process_errors == []
+        process_errors: list[str] = []
+        while True:
+            try:
+                process_errors.append(errors.get_nowait())
+            except Empty:
+                break
+        assert process_errors == []
+        assert second_entered.is_set()
+    finally:
+        release_first.set()
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
+            process.close()
+        errors.close()
+        errors.join_thread()
 
-    with safe_workbook(tmp_workbook) as wb:
+    with safe_workbook(filepath) as wb:
         assert wb["Sheet1"]["B1"].value == "left"
         assert wb["Sheet1"]["C1"].value == "right"
+    _assert_no_sheetforge_artifacts(Path(filepath))
+
+
+def test_process_lock_timeout_and_reacquisition_leave_source_unchanged(tmp_workbook):
+    context = get_context("spawn")
+    path = Path(tmp_workbook).resolve()
+    before = path.read_bytes()
+
+    def probe(expected):
+        results = context.Queue()
+        process = context.Process(target=_process_lock_probe, args=(str(path), 0.2, results))
+        process.start()
+        try:
+            process.join(timeout=15)
+            assert not process.is_alive()
+            assert process.exitcode == 0
+            assert results.get(timeout=2) == expected
+        finally:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
+            process.close()
+            results.close()
+            results.join_thread()
+
+    with workbook_module._exclusive_workbook_lock(path):
+        probe("timeout")
+    probe("acquired")
+    assert path.read_bytes() == before
+    _assert_no_sheetforge_artifacts(path)
+
+
+def test_unicode_paths_preserve_save_snapshot_and_create_only_guards(tmp_path):
+    directory = tmp_path / "r\u00e4portit \u6d4b\u8bd5"
+    path = directory / "n\u00e4ytt\u00f6kerrat \u4f1a\u8ba1.xlsx"
+    snapshot = directory / "varmuuskopio \u00e4\u00f6.xlsx"
+    workbook_module.create_workbook(str(path))
+    with safe_workbook(str(path), save=True) as wb:
+        wb["Sheet1"]["A1"] = "N\u00e4ytt\u00f6kerrat"
+        wb["Sheet1"]["A2"] = 0
+    before = path.read_bytes()
+    result = create_workbook_snapshot(str(path), str(snapshot))
+    assert result["sha256"] == hashlib.sha256(before).hexdigest()
+    assert snapshot.read_bytes() == before
+    with pytest.raises(WorkbookError, match="already exists"):
+        workbook_module.create_workbook(str(path))
+    with pytest.raises(WorkbookError, match="already exists"):
+        create_workbook_snapshot(str(path), str(snapshot))
+    assert path.read_bytes() == snapshot.read_bytes() == before
+    with safe_workbook(str(snapshot)) as wb:
+        assert list(wb["Sheet1"].values) == [("N\u00e4ytt\u00f6kerrat",), (0,)]
+    _assert_no_sheetforge_artifacts(path)
+    _assert_no_sheetforge_artifacts(snapshot)
 
 
 def test_same_process_workbook_lock_honors_timeout(tmp_workbook):
@@ -450,18 +527,17 @@ def test_same_process_workbook_lock_honors_timeout(tmp_workbook):
 
 
 def test_workbook_lock_directory_rejects_symlinks(tmp_path, monkeypatch):
-    if not hasattr(os, "getuid"):
-        pytest.skip("POSIX ownership checks are not available")
-
+    monkeypatch.setattr(workbook_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    lock_root = workbook_module._workbook_lock_path(tmp_path / "report.xlsx").parent
+    lock_root.rmdir()
     real_directory = tmp_path / "redirected-locks"
     real_directory.mkdir()
-    lock_root = tmp_path / f"sheetforge-workbook-locks-{os.getuid()}"
     try:
         lock_root.symlink_to(real_directory, target_is_directory=True)
     except OSError:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            raise
         pytest.skip("Symlinks are not available on this platform")
-
-    monkeypatch.setattr(workbook_module.tempfile, "gettempdir", lambda: str(tmp_path))
 
     with pytest.raises(WorkbookError, match="must be a real directory"):
         workbook_module._workbook_lock_path(tmp_path / "report.xlsx")
@@ -473,6 +549,8 @@ def test_safe_workbook_preserves_symlink_when_saving(tmp_workbook, tmp_path):
     try:
         alias_path.symlink_to(workbook_path)
     except OSError:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            raise
         pytest.skip("Symlinks are not available on this platform")
 
     with safe_workbook(str(alias_path), save=True) as wb:

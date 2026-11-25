@@ -128,11 +128,41 @@ def test_traversal_has_recovery_but_stays_rejected(tmp_path, monkeypatch, relati
 def test_symlink_escape_is_not_repaired(tmp_path, monkeypatch):
     base = tmp_path / "root"
     base.mkdir()
-    (base / "escape").symlink_to(tmp_path, target_is_directory=True)
+    try:
+        (base / "escape").symlink_to(tmp_path, target_is_directory=True)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314 and os.environ.get("GITHUB_ACTIONS") != "true":
+            pytest.skip("Windows symlinks require Developer Mode or symlink privilege")
+        raise
     monkeypatch.setattr(server, "EXCEL_FILES_PATH", str(base))
     with pytest.raises(WorkbookPathError) as caught:
         server.get_excel_path("escape/report.xlsx")
     assert caught.value.code == "filepath_outside_root"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows path semantics")
+@pytest.mark.parametrize("filepath", ["C:report.xlsx", "\\report.xlsx"])
+def test_windows_drive_relative_paths_require_an_absolute_owner_path(monkeypatch, filepath):
+    monkeypatch.setattr(server, "EXCEL_FILES_PATH", None)
+    with pytest.raises(WorkbookPathError) as caught:
+        server.get_excel_path(filepath)
+    assert caught.value.code == "filepath_absolute_required"
+
+
+def test_rooted_unicode_workbook_path_round_trips_without_relocation(tmp_path, monkeypatch):
+    base = tmp_path / "r\u00e4portit \u4f1a\u8ba1"
+    base.mkdir()
+    monkeypatch.setattr(server, "EXCEL_FILES_PATH", str(base))
+    filename = "n\u00e4ytt\u00f6kerrat \u6d4b\u8bd5.xlsx"
+    target = base / filename
+    assert Path(server.get_excel_path(filename)) == target.resolve()
+    assert json.loads(server.create_workbook(filename))["ok"]
+    written = json.loads(server.write_data_to_excel(filename, "Sheet1", [["Value"], [0]]))
+    assert written["ok"], written
+    before = target.read_bytes()
+    read = json.loads(server.quick_read(filename))
+    assert read["ok"] and read["data"]["rows"] == [[0]], read
+    assert target.read_bytes() == before
 
 
 def test_sibling_with_same_prefix_is_not_inside_root(tmp_path, monkeypatch):
