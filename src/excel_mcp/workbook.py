@@ -2831,7 +2831,8 @@ def _verify_saved_workbook(filepath: str) -> None:
 
 
 def _fsync_file(path: Path) -> None:
-    with path.open("rb") as handle:
+    # Windows FlushFileBuffers requires a write-capable handle.
+    with path.open("r+b" if os.name == "nt" else "rb") as handle:
         os.fsync(handle.fileno())
 
 

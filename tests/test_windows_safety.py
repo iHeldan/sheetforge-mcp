@@ -13,6 +13,54 @@ from excel_mcp.exceptions import WorkbookError
 from excel_mcp.workbook import safe_workbook
 
 
+@pytest.mark.parametrize(("platform", "mode"), [("nt", "r+b"), ("posix", "rb")])
+def test_file_fsync_uses_native_handle_mode_without_truncating(tmp_path, monkeypatch, platform, mode):
+    path = tmp_path / "flush.bin"
+    original = b"must remain unchanged"
+    path.write_bytes(original)
+    modes, descriptors = [], []
+
+    class RecordedPath:
+        def open(self, value):
+            modes.append(value)
+            return path.open(value)
+
+    def fsync(fd):
+        assert os.fstat(fd).st_size == len(original)
+        descriptors.append(fd)
+
+    monkeypatch.setattr(workbook_module, "os", SimpleNamespace(name=platform, fsync=fsync))
+    workbook_module._fsync_file(RecordedPath())
+    assert modes == [mode] and len(descriptors) == 1
+    assert path.read_bytes() == original
+    with pytest.raises(OSError) as caught:
+        os.fstat(descriptors[0])
+    assert caught.value.errno == errno.EBADF
+
+
+def test_native_file_fsync_preserves_existing_bytes(tmp_path):
+    path = tmp_path / "flush.bin"
+    original = b"native durable flush"
+    path.write_bytes(original)
+    workbook_module._fsync_file(path)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("error_code", [errno.EIO, errno.EACCES])
+def test_file_fsync_failures_are_not_silenced(tmp_path, monkeypatch, error_code):
+    path = tmp_path / "flush.bin"
+    path.write_bytes(b"original")
+    expected = OSError(error_code, "injected flush failure")
+
+    def fail(fd):
+        raise expected
+
+    monkeypatch.setattr(workbook_module, "os", SimpleNamespace(name=os.name, fsync=fail))
+    with pytest.raises(OSError) as caught:
+        workbook_module._fsync_file(path)
+    assert caught.value is expected and path.read_bytes() == b"original"
+
+
 @pytest.mark.parametrize("contended", [False, True])
 def test_msvcrt_nonblocking_lock_uses_one_byte_at_offset_zero(tmp_path, monkeypatch, contended):
     calls = []

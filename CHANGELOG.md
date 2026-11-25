@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Durable file flushes open a write-capable handle on Windows, where the underlying flush API rejects read-only handles; POSIX behavior and propagation of flush failures are retained. Native Windows CI also exposed test portability issues: POSIX FIFO checks now run only where the API exists, while directory/symlink checks remain cross-platform, and oversized-value tests use short IDs without changing their payloads.
+
 ### Changed
 
 - CI configuration adds an isolated installed-wheel acceptance step only on Ubuntu/Python 3.12. It installs the exact build with runtime dependencies, launches the actual CLI outside the checkout, compares manifest tool names and reuses the Contracts/Recipe workflow with persisted workbook readback. No source-tree or development-environment fallback is allowed.

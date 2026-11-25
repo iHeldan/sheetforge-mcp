@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -474,15 +475,21 @@ def test_empty_requires_explicit_opt_in(book, contract):
 
 
 def test_non_regular_input_and_symlink(book, contract, tmp_path):
-    import os
+    directory = tmp_path / "directory.xlsx"
+    directory.mkdir()
+    with pytest.raises((WorkbookError, ValidationError)):
+        contracts.inspect_workbook_contract(str(directory), contract)
+    link = tmp_path / "alias.xlsx"
+    link.symlink_to(book)
+    assert contracts.inspect_workbook_contract(str(link), contract)["passed"]
 
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_fifo_contract_input_is_rejected(book, contract, tmp_path):
     pipe = tmp_path / "pipe.xlsx"
     os.mkfifo(pipe)
     with pytest.raises((WorkbookError, ValidationError)):
         contracts.inspect_workbook_contract(str(pipe), contract)
-    link = tmp_path / "alias.xlsx"
-    link.symlink_to(book)
-    assert contracts.inspect_workbook_contract(str(link), contract)["passed"]
 
 
 def test_docs_example_parses():
@@ -514,9 +521,8 @@ def test_sum_check_can_reference_logical_output_group(book, contract, recipe):
     ]["passed"]
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
 def test_capture_rejects_fifo_substituted_after_stat(book, tmp_path, monkeypatch):
-    import os
-
     original_open = os.open
     retained = tmp_path / "retained.xlsx"
 

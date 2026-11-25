@@ -557,6 +557,7 @@ def test_mcp_domain_errors_and_path_boundary(scenario_case, monkeypatch):
     assert not result["ok"]
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
 def test_fifo_rejected_before_open(scenario_case, tmp_path):
     path = tmp_path / "fifo.xlsx"
     os.mkfifo(path)

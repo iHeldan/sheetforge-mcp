@@ -112,7 +112,7 @@ def test_returned_tokens_describe_serialized_candidate(tmp_path, kind):
     assert result["new_structure_token"] == observed["structure_token"]
 
 
-@pytest.mark.parametrize("value", [9007199254740993, "x" * 32768])
+@pytest.mark.parametrize("value", [9007199254740993, "x" * 32768], ids=["overprecise-number", "overlong-text"])
 def test_changeset_rejects_loss_without_optional_value_assertions(tmp_path, value):
     path = make_book(tmp_path, "cells")
     before = path.read_bytes()

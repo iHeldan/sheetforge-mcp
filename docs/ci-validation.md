@@ -44,6 +44,9 @@ Linux installation check is not native Windows or desktop-client acceptance.
   a simulated backend on every platform. Native Windows tests require the real
   backend, prove contention between file handles and check that an open target
   cannot be silently replaced or damaged. Saving must work after it closes.
+  Native file-flush tests retain `fsync` and its error propagation. Windows uses
+  a write-capable handle as required by [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers);
+  POSIX keeps its existing read-only flush behavior.
 - `test_path_guidance.py`, `test_server_security.py` and other existing suites
   check rooted paths, traversal, symlink escapes and refusal to auto-relocate.
   Native Windows cases also reject drive-relative and root-relative paths in
@@ -51,6 +54,10 @@ Linux installation check is not native Windows or desktop-client acceptance.
 - The lock-directory symlink test runs on Windows too; only the POSIX ownership
   portion of the implementation is platform-specific. File and directory
   symlink creation is required in Windows CI, not silently skipped.
+
+POSIX FIFO tests are skipped only when `os.mkfifo` is unavailable; directory and
+symlink admission tests remain active. Oversized input cases use short pytest IDs
+so Windows' environment-variable limit does not prevent those payloads being tested.
 
 Windows symlinks require Developer Mode or the relevant Windows privilege.
 The path-guidance test may skip the specific missing-privilege error (1314)

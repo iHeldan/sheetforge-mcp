@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -208,6 +209,7 @@ def test_duplicate_keys_even_unselected_fail(setup_patch):
         12345678901234567,
         0.30000000000000004,
     ],
+    ids=["formula", "error-text", "empty", "control-char", "overlong-text", "large-integer", "precision-loss"],
 )
 def test_unsafe_or_lossy_outputs_fail_before_write(setup_patch, value):
     setup_patch[2]["updates"][0]["values"]["Text"] = value
@@ -500,9 +502,8 @@ def test_changed_header_set_is_not_guessed(setup_patch):
         call(setup_patch)
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
 def test_fifo_is_rejected_before_open(setup_patch, tmp_path):
-    import os
-
     fifo = tmp_path / "pipe.xlsx"
     os.mkfifo(fifo)
     with pytest.raises(ValidationError, match="regular"):
