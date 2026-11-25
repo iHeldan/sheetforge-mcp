@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sys
 
 import pytest
@@ -173,18 +174,26 @@ def _assert_no_work_artifacts(path):
     assert list(path.parent.glob(".*.sheetforge-*")) == []
 
 
+def test_recipe_workspace_removes_readonly_copies():
+    with recipes._recipe_workspace() as path:
+        readonly = path / "source.xlsx"
+        readonly.write_bytes(b"private scratch data")
+        readonly.chmod(0o444)
+    assert not path.exists()
+
+
 def test_recipe_cleanup_failure_does_not_mask_success(
     source_book, recipe, monkeypatch, caplog
 ):
     preview = run_workbook_recipe(str(source_book), recipe)
-    original = recipes.shutil.rmtree
+    original = shutil.rmtree
 
     def fail_recipe_cleanup(path, *args, **kwargs):
         original(path, *args, **kwargs)
         if Path(path).name.startswith("sheetforge-recipe-"):
             raise OSError("simulated cleanup failure")
 
-    monkeypatch.setattr(recipes.shutil, "rmtree", fail_recipe_cleanup)
+    monkeypatch.setattr(shutil, "rmtree", fail_recipe_cleanup)
     result = _commit(source_book, recipe, preview)
     assert result["persisted"]
     assert "Could not remove recipe temporary workspace" in caplog.text

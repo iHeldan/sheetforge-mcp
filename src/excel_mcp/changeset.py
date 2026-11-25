@@ -616,7 +616,7 @@ def _new_temp_workbook(parent: Path, *, source: Path, label: str) -> Path:
 
 
 def _stage_workbook(
-    source: Path, baseline: Path, candidate: Path, *, preserving: bool = False
+    source: Path, baseline: Path, candidate: Path | None, *, preserving: bool = False
 ) -> str:
     source_stat_before = source.stat()
     if not stat.S_ISREG(source_stat_before.st_mode):
@@ -657,10 +657,11 @@ def _stage_workbook(
         os.chmod(baseline, source_stat_before.st_mode)
     if not preserving:
         workbook_module._verify_saved_workbook(str(baseline))
-    shutil.copy2(baseline, candidate)
-    workbook_module._fsync_file(candidate)
-    if not preserving:
-        workbook_module._verify_saved_workbook(str(candidate))
+    if candidate is not None:
+        shutil.copy2(baseline, candidate)
+        workbook_module._fsync_file(candidate)
+        if not preserving:
+            workbook_module._verify_saved_workbook(str(candidate))
     return digest.hexdigest()
 
 

@@ -629,7 +629,7 @@ def test_result_bound_rejects_instead_of_sampling_calculations(
         _call(before, after, recipe)
 
 
-def test_readonly_sources_and_chartsheets_are_supported(books, recipe):
+def test_readonly_sources_and_chartsheets_are_supported(books, recipe, monkeypatch):
     before = books("before.xlsx", [[1, "North", 10]])
     after = books("after.xlsx", [[1, "North", 15]])
     from openpyxl.chart import BarChart, Reference
@@ -645,7 +645,26 @@ def test_readonly_sources_and_chartsheets_are_supported(books, recipe):
         wb.save(path)
         wb.close()
         path.chmod(0o444)
-    assert _call(before, after, recipe)["metrics"][0]["delta"] == "5"
+    states = {
+        path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+        for path in (before, after)
+    }
+    candidates = []
+    original = explanations.changeset._stage_workbook
+
+    def capture(source, baseline, candidate, **kwargs):
+        candidates.append(candidate)
+        return original(source, baseline, candidate, **kwargs)
+
+    monkeypatch.setattr(explanations.changeset, "_stage_workbook", capture)
+    try:
+        assert _call(before, after, recipe)["metrics"][0]["delta"] == "5"
+        assert candidates == [None, None]
+        for path, state in states.items():
+            assert (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns) == state
+    finally:
+        for path in states:
+            path.chmod(0o600)
 
 
 def test_sum_check_overflow_is_a_clear_validation_error(books, recipe):

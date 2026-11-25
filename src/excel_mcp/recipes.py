@@ -10,7 +10,6 @@ import logging
 import math
 from pathlib import Path
 import re
-import shutil
 import tempfile
 from typing import Any
 
@@ -36,14 +35,15 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def _recipe_workspace():
-    path = Path(tempfile.mkdtemp(prefix="sheetforge-recipe-"))
+    workspace = tempfile.TemporaryDirectory(prefix="sheetforge-recipe-")
+    path = Path(workspace.name)
     try:
         yield path
     finally:
         # Cleanup must not turn an already committed transaction into a reported
         # failure. The ChangeSet owns persistence and rollback, not this copy.
         try:
-            shutil.rmtree(path)
+            workspace.cleanup()
         except OSError:
             logger.warning("Could not remove recipe temporary workspace: %s", path)
 

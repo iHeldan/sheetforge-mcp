@@ -9,6 +9,8 @@ jobs:
     name: ${{ matrix.name || format('Lint and test (Python {0})', matrix.python-version) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +34,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked --extra dev
+
+      - name: Verify Python runtime
+        run: uv run --locked python -c "import os, sys; actual = '.'.join(map(str, sys.version_info[:2])); print(sys.version); assert actual == os.environ['UV_PYTHON']"
 
       - name: Run Ruff
         run: uv run ruff check src tests

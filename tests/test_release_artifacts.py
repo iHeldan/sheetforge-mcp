@@ -2,7 +2,9 @@ import importlib.util
 import io
 import json
 import copy
+import os
 import re
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -220,6 +222,39 @@ def test_ci_adds_one_required_windows_full_suite_without_expanding_every_python(
         assert command in commands
         assert "if" not in commands[command]
         assert not commands[command].get("continue-on-error", False)
+
+
+@pytest.mark.parametrize("version", ["current", "wrong", "missing"])
+def test_ci_verifies_the_actual_matrix_python_before_testing(version):
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    job = workflow["jobs"]["lint-and-test"]
+    assert job["env"]["UV_PYTHON"] == "${{ matrix.python-version }}"
+    steps = job["steps"]
+    matches = [step for step in steps if step.get("name") == "Verify Python runtime"]
+    assert len(matches) == 1
+    check = matches[0]
+    assert "if" not in check
+    assert "env" not in check
+    assert not check.get("continue-on-error", False)
+    commands = [step.get("run") for step in steps]
+    assert commands.index("uv sync --locked --extra dev") < steps.index(check)
+    assert steps.index(check) < commands.index("uv run pytest -q -ra")
+    command = shlex.split(check["run"])
+    assert command[:5] == ["uv", "run", "--locked", "python", "-c"]
+    assert len(command) == 6
+    env = os.environ.copy()
+    env.pop("UV_PYTHON", None)
+    if version != "missing":
+        env["UV_PYTHON"] = f"{sys.version_info.major}.{sys.version_info.minor}" if version == "current" else "0.0"
+    result = subprocess.run(
+        [sys.executable, "-c", command[5]], env=env, capture_output=True, text=True,
+        timeout=30,
+    )
+    assert (result.returncode == 0) == (version == "current")
+    assert sys.version.split()[0] in result.stdout
 
 
 def test_ci_tests_the_built_wheel_once_after_artifact_verification():

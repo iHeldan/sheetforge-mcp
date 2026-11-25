@@ -701,12 +701,9 @@ def explain_recipe_delta(
     }
     with recipes._recipe_workspace() as temp:
         for index, path in enumerate(paths):
-            baseline, candidate = (
-                Path(temp) / f"source-{index}.xlsx",
-                Path(temp) / f"unused-{index}.xlsx",
-            )
+            baseline = Path(temp) / f"source-{index}.xlsx"
             with workbook._exclusive_workbook_lock(path):
-                digest = changeset._stage_workbook(path, baseline, candidate)
+                digest = changeset._stage_workbook(path, baseline, None)
             if expected[index] is not None and expected[index] != digest:
                 raise PreconditionFailedError(
                     "Source version changed; inspect fresh snapshots",

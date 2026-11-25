@@ -6,6 +6,10 @@ Every job installs the audited lock, runs Ruff and the complete pytest suite,
 builds distributions and verifies release artifacts. Windows failures are not
 optional; jobs have a ten-minute timeout and pytest reports skip reasons.
 Existing Linux check names are retained; Windows has its own distinct check name.
+`UV_PYTHON` explicitly selects the matrix version instead of the local
+`.python-version` default. Every job verifies the actual interpreter version
+before linting and testing; a wrong runtime fails rather than passing under a
+misleading job name.
 
 ## Installed-wheel acceptance
 
@@ -58,6 +62,9 @@ Linux installation check is not native Windows or desktop-client acceptance.
 POSIX FIFO tests are skipped only when `os.mkfifo` is unavailable; directory and
 symlink admission tests remain active. Oversized input cases use short pytest IDs
 so Windows' environment-variable limit does not prevent those payloads being tested.
+Read-only explanation sources retain their bytes, permissions and modification
+time. Their stable capture needs no writable mutation candidate, and temporary
+workspaces clean up read-only copies on Windows without changing source permissions.
 
 Windows symlinks require Developer Mode or the relevant Windows privilege.
 The path-guidance test may skip the specific missing-privilege error (1314)

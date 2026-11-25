@@ -4,10 +4,12 @@
 
 ### Fixed
 
+- Read-only Verified Explanations avoid creating an unused writable candidate, allowing read-only source workbooks on Windows. Recipe workspace cleanup handles read-only temporary copies without changing the source or masking an already committed result.
 - Durable file flushes open a write-capable handle on Windows, where the underlying flush API rejects read-only handles; POSIX behavior and propagation of flush failures are retained. Native Windows CI also exposed test portability issues: POSIX FIFO checks now run only where the API exists, while directory/symlink checks remain cross-platform, and oversized-value tests use short IDs without changing their payloads.
 
 ### Changed
 
+- CI explicitly binds `uv` to each matrix Python version and verifies the runtime before tests, preventing the repository's local Python default from silently replacing matrix coverage.
 - CI configuration adds an isolated installed-wheel acceptance step only on Ubuntu/Python 3.12. It installs the exact build with runtime dependencies, launches the actual CLI outside the checkout, compares manifest tool names and reuses the Contracts/Recipe workflow with persisted workbook readback. No source-tree or development-environment fallback is allowed.
 - CI configuration adds one required Windows/Python 3.12 full-suite job alongside the existing Ubuntu/Python 3.10-3.12 jobs, with bounded job time and visible skip reasons. Regressions cover native Windows locking and open-file replacement, process lock timeouts, Unicode workbook/snapshot paths and symlink confinement. Native Windows results must be verified separately from POSIX runs or simulated backend tests; see [CI validation](docs/ci-validation.md).
 
