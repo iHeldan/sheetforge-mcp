@@ -11,6 +11,8 @@ jobs:
       name: pypi
       url: https://pypi.org/project/sheetforge-mcp
     permissions:
+      contents: read
+      actions: read
       id-token: write
 
     steps:
@@ -34,6 +36,12 @@ jobs:
 
       - name: Verify release artifacts
         run: python scripts/verify_release_artifacts.py dist
+
+      - name: Verify release CI
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/verify_release_artifacts.py --check-release-ci
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

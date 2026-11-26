@@ -228,6 +228,27 @@ def test_publish_checks_release_ref_unconditionally_before_building():
     assert workflow.index("python scripts/verify_release_artifacts.py dist") < workflow.index("uses: pypa/gh-action-pypi-publish@release/v1")
 
 
+def test_publish_requires_ci_immediately_before_upload_with_minimal_read_permissions():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/publish.yml").read_text())
+    job = workflow["jobs"]["build-n-publish"]
+    assert job["permissions"] == {"contents": "read", "actions": "read", "id-token": "write"}
+    assert "if" not in job and not job.get("continue-on-error", False)
+    matches = [step for step in job["steps"] if step.get("name") == "Verify release CI"]
+    assert len(matches) == 1
+    guard = matches[0]
+    assert guard["run"] == "python scripts/verify_release_artifacts.py --check-release-ci"
+    assert guard["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert guard["timeout-minutes"] == 2
+    assert "if" not in guard and not guard.get("continue-on-error", False)
+    assert job["steps"].index(guard) + 1 == next(
+        index for index, step in enumerate(job["steps"])
+        if step.get("uses") == "pypa/gh-action-pypi-publish@release/v1"
+    )
+
+
 def test_ci_uses_the_audited_dependency_lock():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github/workflows/ci.yml").read_text()

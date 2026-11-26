@@ -372,6 +372,8 @@ uv build
 - GitHub releases run a build verification workflow only.
 - PyPI publishing is a separate manual workflow, so releases do not create a failing deployment before Trusted Publisher is configured for the package.
 - The manual PyPI workflow requires a tag named `v<pyproject.toml version>`; branch runs and mismatched tags fail before dependency installation or package building. Artifact checks still run before publication.
+- Tags containing the CI publication guard also require the latest push run of `ci.yml` for that exact tag and commit to succeed. Immediately before upload, all three Linux jobs, the Windows job and their required steps must pass, including installed-wheel acceptance on Linux/Python 3.12. Missing, pending, failed, skipped or cancelled required checks and API/permission errors stop publication; wait for CI and rerun the publisher instead of starting duplicate CI runs.
+- The guard uses the runner's GitHub CLI with `actions: read` and `contents: read`; existing `id-token: write` remains for Trusted Publishing. Pagination and per-job rerun attempts are checked without borrowing successes from a different workflow run. A final read rejects a changed run/attempt. This is a point-in-time check, not a lock against later CI reruns; historical immutable tags, including `v0.15.4`, do not acquire the guard retroactively.
 - Publish and verify the PyPI package before making its pinned MCPB publicly available.
 
 ### MCPB Runtime Versioning

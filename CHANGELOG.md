@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Future PyPI publication requires successful push CI for the exact release tag and commit, including all four Linux/Windows jobs and the installed-wheel step. The guard reuses existing runs, rejects incomplete/failed checks and reads Actions with minimal token permissions; published tags/packages are unchanged.
+
 ## 0.15.4 - 2026-11-26
 
 ### Compatibility Notes

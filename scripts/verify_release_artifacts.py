@@ -11,6 +11,7 @@ import json
 import os
 import re
 import hashlib
+import subprocess
 from pathlib import Path, PurePosixPath
 
 FORBIDDEN_DIRECTORY_NAMES = {".git", ".notes", ".venv", "__pycache__"}
@@ -161,6 +162,99 @@ def verify_release_ref(root: Path) -> None:
         )
 
 
+REQUIRED_CI_JOBS = {
+    "Lint and test (Python 3.10)",
+    "Lint and test (Python 3.11)",
+    "Lint and test (Python 3.12)",
+    "Lint and test (Windows, Python 3.12)",
+}
+REQUIRED_CI_STEPS = (
+    "Install dependencies", "Verify Python runtime", "Run Ruff", "Run pytest",
+    "Build package", "Verify release artifacts",
+)
+
+
+def _require_ci(condition: bool, message: str) -> None:
+    if not condition:
+        raise SystemExit(f"Release CI check failed: {message}; publication refused")
+
+
+def _github_api(endpoint: str, *, pages: bool = False, **fields):
+    command = ["gh", "api", "--hostname", "github.com", "--method", "GET", endpoint]
+    if pages:
+        command.extend(["--paginate", "--slurp"])
+    for name, value in fields.items():
+        command.extend(["-f", f"{name}={value}"])
+    try:
+        response = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
+        return json.loads(response.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise SystemExit(
+            "Release CI lookup failed; require GitHub CLI and actions: read permission; publication refused"
+        ) from None
+
+
+def _github_items(endpoint: str, key: str, **fields) -> list[dict]:
+    pages = _github_api(endpoint, pages=True, per_page=100, **fields)
+    _require_ci(isinstance(pages, list), "invalid paginated GitHub response")
+    result = []
+    for page in pages:
+        _require_ci(isinstance(page, dict) and isinstance(page.get(key), list), "invalid GitHub page")
+        _require_ci(all(isinstance(item, dict) for item in page[key]), "invalid GitHub item")
+        result.extend(page[key])
+    return result
+
+
+def _require_ci_success(item: dict, label: str) -> None:
+    _require_ci(item.get("status") == "completed" and item.get("conclusion") == "success", label)
+
+
+def verify_release_ci(root: Path) -> None:
+    verify_release_ref(root)
+    repo, sha = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("GITHUB_SHA", "")
+    _require_ci(bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", repo)), "missing repository")
+    _require_ci(bool(re.fullmatch(r"[0-9a-f]{40}", sha)), "missing commit SHA")
+    tag = os.environ["GITHUB_REF"].removeprefix("refs/tags/")
+    base = f"repos/{repo}/actions"
+    runs = _github_items(
+        f"{base}/workflows/ci.yml/runs", "workflow_runs", head_sha=sha, branch=tag, event="push",
+    )
+    runs = [run for run in runs if run.get("head_sha") == sha and run.get("head_branch") == tag
+            and run.get("event") == "push" and str(run.get("path", "")).split("@")[0] == ".github/workflows/ci.yml"
+            and run.get("head_repository", {}).get("full_name", "").casefold() == repo.casefold()]
+    _require_ci(bool(runs), "no push CI run for this exact tag and commit")
+    _require_ci(all(type(run.get(key)) is int and run[key] > 0
+                    for run in runs for key in ("id", "run_number", "run_attempt")), "invalid CI run identity")
+    run = max(runs, key=lambda item: item["run_number"])
+    _require_ci_success(run, "latest tag CI run is not successful; wait for CI to finish")
+    jobs = _github_items(f"{base}/runs/{run['id']}/jobs", "jobs", filter="all")
+    latest, seen = {}, set()
+    # A failed-jobs-only rerun reuses successes from earlier attempts of this run.
+    for job in jobs:
+        name, attempt = job.get("name"), job.get("run_attempt")
+        if name not in REQUIRED_CI_JOBS:
+            continue
+        _require_ci(job.get("run_id") == run["id"] and job.get("head_sha") == sha
+                    and type(attempt) is int and 1 <= attempt <= run["run_attempt"], "invalid CI job identity")
+        _require_ci((name, attempt) not in seen, "duplicate required CI job")
+        seen.add((name, attempt))
+        if name not in latest or attempt > latest[name]["run_attempt"]:
+            latest[name] = job
+    _require_ci(set(latest) == REQUIRED_CI_JOBS, "required Linux/Windows jobs are missing")
+    for name, job in latest.items():
+        _require_ci_success(job, f"required job {name!r} is not successful")
+        steps = REQUIRED_CI_STEPS + (("Test installed wheel",) if name == "Lint and test (Python 3.12)" else ())
+        for required in steps:
+            matches = [step for step in job.get("steps", []) if step.get("name") == required]
+            _require_ci(len(matches) == 1, f"required step {required!r} missing or duplicated in {name!r}")
+            _require_ci_success(matches[0], f"required step {required!r} did not succeed in {name!r}")
+    fresh = _github_api(f"{base}/runs/{run['id']}")
+    _require_ci(isinstance(fresh, dict) and all(fresh.get(key) == run.get(key) for key in (
+        "id", "run_attempt", "head_sha", "head_branch", "event", "status", "conclusion",
+    )), "CI changed during verification; retry after CI completes")
+    print(f"Verified release CI run {run['id']} attempt {run['run_attempt']} for {tag} at {sha}")
+
+
 def verify_manifest_runtime(manifest: dict, *, expected_version: str) -> None:
     if not isinstance(manifest, dict) or manifest.get("version") != expected_version:
         raise AssertionError(f"Manifest version does not match {expected_version}")
@@ -255,6 +349,8 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--check-release-ref"]:
         verify_release_ref(repository_root)
         print("Verified release tag matches pyproject.toml")
+    elif sys.argv[1:] == ["--check-release-ci"]:
+        verify_release_ci(repository_root)
     else:
         output_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist")
         verify_dist(output_dir)
