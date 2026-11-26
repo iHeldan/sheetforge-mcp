@@ -6,6 +6,10 @@ Every job installs the audited lock, runs Ruff and the complete pytest suite,
 builds distributions and verifies release artifacts. Windows failures are not
 optional; jobs have a ten-minute timeout and pytest reports skip reasons.
 Existing Linux check names are retained; Windows has its own distinct check name.
+MCPB text members have explicit LF rules in `.gitattributes`, preserving exact
+archive/source parity even with Windows Git's CRLF defaults. A real temporary Git
+checkout regression covers both the canonical rules and a CRLF control; binary
+assets remain byte-identical. The public source archive includes these rules.
 `UV_PYTHON` explicitly selects the matrix version instead of the local
 `.python-version` default. Every job verifies the actual interpreter version
 before linting and testing; a wrong runtime fails rather than passing under a

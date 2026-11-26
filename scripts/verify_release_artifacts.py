@@ -17,6 +17,7 @@ FORBIDDEN_DIRECTORY_NAMES = {".git", ".notes", ".venv", "__pycache__"}
 FORBIDDEN_FILE_NAMES = {"context.md", ".ds_store"}
 FORBIDDEN_SUFFIXES = {".key", ".log", ".mcpb", ".pem", ".tape"}
 ALLOWED_SDIST_TOP_LEVEL = {
+    ".gitattributes",
     ".gitignore",
     "assets",
     "CHANGELOG.md",

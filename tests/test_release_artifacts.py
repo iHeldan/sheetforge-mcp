@@ -5,6 +5,7 @@ import copy
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -98,13 +99,55 @@ def test_tracked_bundle_contains_current_public_files():
             assert bundle.read(str(member)) == (root / str(member)).read_bytes()
 
 
+@pytest.mark.parametrize("canonical", [True, False], ids=["canonical-lf", "crlf-control"])
+def test_mcpb_members_keep_exact_bytes_under_windows_git_settings(tmp_path, canonical, monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    git = shutil.which("git")
+    assert git is not None, "Git is required for checkout reproducibility tests"
+    repo, output = tmp_path / "repo", tmp_path / "checkout"
+    repo.mkdir()
+    output.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "unused-repo"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "unused-index"))
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM="1")
+
+    def run(*args):
+        return subprocess.run(
+            [git, "-c", "core.autocrlf=true", "-c", "core.eol=crlf",
+             "-c", f"core.attributesFile={os.devnull}", *args],
+            cwd=repo, env=env, check=True, capture_output=True, timeout=30,
+        )
+
+    run("init", "--quiet")
+    attributes = (root / ".gitattributes").read_bytes() if canonical else b""
+    (repo / ".gitattributes").write_bytes(attributes)
+    text_members = sorted(
+        str(member) for member in _load_release_verifier().ALLOWED_MCPB_MEMBERS
+        if member.name != "icon.png"
+    )
+    for name in text_members:
+        (repo / name).write_bytes(b"first line\nsecond line\n")
+    for name in ("icon.png", "probe.mcpb"):
+        (repo / name).write_bytes(b"binary\x00\r\nunchanged\n")
+    run("add", "--all")
+    run("checkout-index", "--all", f"--prefix={output.as_posix()}/")
+    expected = b"first line\nsecond line\n" if canonical else b"first line\r\nsecond line\r\n"
+    for name in text_members:
+        assert (output / name).read_bytes() == expected
+    for name in ("icon.png", "probe.mcpb"):
+        assert (output / name).read_bytes() == b"binary\x00\r\nunchanged\n"
+    assert not (tmp_path / "unused-repo").exists()
+    assert not (tmp_path / "unused-index").exists()
+
+
 def test_sdist_uses_public_allowlist_and_private_artifact_excludes():
     root = Path(__file__).resolve().parents[1]
     pyproject = (root / "pyproject.toml").read_text()
     sdist_section = pyproject.split("[tool.hatch.build.targets.sdist]", 1)[1]
     sdist_section = sdist_section.split("\n[", 1)[0]
 
-    for required_include in ("/src", "/README.md", "/LICENSE", "/pyproject.toml"):
+    for required_include in ("/.gitattributes", "/src", "/README.md", "/LICENSE", "/pyproject.toml"):
         assert f'"{required_include}"' in sdist_section
 
     for required_exclude in (

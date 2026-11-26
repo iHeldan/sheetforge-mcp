@@ -47,6 +47,7 @@ packages = ["src/excel_mcp"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "/.gitattributes",
     "/src",
     "/tests",
     "/scripts/verify_release_artifacts.py",
