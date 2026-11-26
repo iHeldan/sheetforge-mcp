@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.4 - 2026-11-26
+
+### Compatibility Notes
+
+- This correction release keeps the same 83 MCP tools and dependency requirements. It fixes native Windows filesystem handling without bypassing locks, durable flushes, source-change detection or input safeguards. The MCPB launches exactly 0.15.4; update the extension to receive the new runtime. Earlier published releases remain unchanged.
+
 ### Fixed
 
 - Guarded saves account for Windows Python's differing path/handle `ctime` semantics. Both timestamp streams are still checked for changes, alongside device/inode, size, modification time and content hashes; POSIX retains its stricter cross-API timestamp check.
