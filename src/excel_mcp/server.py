@@ -155,6 +155,7 @@ WORKBOOK_PATH_HELP = (
     "Rooted: relative OK; unrooted stdio: absolute, ask if missing."
 )
 WorkbookPath = Annotated[str, Field(description=WORKBOOK_PATH_HELP)]
+RowMode = Literal["arrays", "objects"]
 
 # Initialize FastMCP server
 mcp = FastMCP(
@@ -807,7 +808,7 @@ def read_excel_as_table(
     max_rows: Optional[int] = None,
     compact: bool = False,
     include_headers: bool = True,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
     read_boundary_mode: str = "default",
 ) -> str:
@@ -852,7 +853,7 @@ def quick_read(
     end_col: Optional[str] = None,
     max_rows: Optional[int] = None,
     include_headers: bool = True,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
     read_boundary_mode: str = "default",
 ) -> str:
@@ -956,7 +957,7 @@ def query_table(
     sort_by: Optional[str] = None,
     sort_desc: bool = False,
     limit: Optional[int] = None,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
 ) -> str:
     """Filter, project, sort, and limit worksheet or table data. Filters support eq/neq/ne, comparisons, string matching, blank checks, and in/not_in with value or values."""
@@ -998,7 +999,7 @@ def bulk_filter_workbooks(
     schema_mode: str = "strict",
     source_sample_limit: int = 10,
     include_source_columns: bool = True,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
 ) -> str:
     """Filter comparable worksheet or table data across multiple workbooks. Uses the same filter operators and aliases as query_table."""
@@ -1043,7 +1044,7 @@ def union_tables(
     source_sample_limit: int = 10,
     include_source_columns: bool = True,
     dedupe_on: Optional[List[str]] = None,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
 ) -> str:
     """Union comparable worksheet or table data across multiple workbook files."""
@@ -1098,7 +1099,7 @@ def cross_workbook_lookup(
     include_lookup_source_columns: bool = True,
     include_lookup_match_count: bool = True,
     case_sensitive: bool = False,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
 ) -> str:
     """Enrich one workbook dataset from matching rows in one or more lookup workbooks."""
@@ -1151,7 +1152,7 @@ def aggregate_table(
     sort_by: Optional[str] = None,
     sort_desc: bool = False,
     limit: Optional[int] = None,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
 ) -> str:
     """Compute grouped metrics over worksheet-shaped data or a native Excel table."""
@@ -1194,7 +1195,7 @@ def bulk_aggregate_workbooks(
     limit: Optional[int] = None,
     schema_mode: str = "strict",
     source_sample_limit: int = 10,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
 ) -> str:
     """Aggregate comparable worksheet or table data across multiple workbooks."""
@@ -1236,7 +1237,7 @@ def read_excel_table(
     max_rows: Optional[int] = None,
     compact: bool = False,
     include_headers: bool = True,
-    row_mode: str = "arrays",
+    row_mode: RowMode = "arrays",
     infer_schema: bool = False,
 ) -> str:
     """Read a native Excel table by its table name, not by a worksheet tab name.
@@ -1244,7 +1245,8 @@ def read_excel_table(
     Use the exact table_name from list_tables. Omit sheet_name when unknown;
     if supplied, it must be the table's containing worksheet tab, not the table name.
     Supports compact table payloads, object-shaped record output, and optional
-    inferred schema hints.
+    inferred schema hints. row_mode is "arrays" for headers/rows or "objects"
+    for named records; no other row modes are supported.
     """
     return _run_tool(
         "read_excel_table",
@@ -1861,6 +1863,9 @@ def apply_workbook_changeset(
     and create_chart. Assertions support sheet_exists, cell_equals, range_equals,
     range_values_unchanged, table_exists, freeze_panes_equals, autofilter_equals,
     chart_exists, and no_cell_ref_errors.
+
+    Operations inherit the outer filepath. Omit filepath, dry_run and
+    include_changes from operation args; one ChangeSet cannot target other files.
 
     Call preview first. Commit the identical plan with expected_workbook_sha256 and
     changeset_token from that preview. Snapshot creation defaults to enabled.

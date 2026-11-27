@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Tabular MCP schemas now enumerate `row_mode="arrays"|"objects"`; native-table and ChangeSet tool descriptions clarify row output and inherited operation paths without accepting invalid modes or cross-file operations.
 - Future PyPI publication requires successful push CI for the exact release tag and commit, including all four Linux/Windows jobs and the installed-wheel step. The guard reuses existing runs, rejects incomplete/failed checks and reads Actions with minimal token permissions; published tags/packages are unchanged.
 
 ## 0.15.4 - 2026-11-26

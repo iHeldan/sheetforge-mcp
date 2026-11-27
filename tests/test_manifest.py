@@ -2,7 +2,26 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from excel_mcp.server import mcp
+
+
+@pytest.mark.parametrize("name", [
+    "read_excel_as_table", "quick_read", "query_table", "bulk_filter_workbooks",
+    "union_tables", "cross_workbook_lookup", "aggregate_table",
+    "bulk_aggregate_workbooks", "read_excel_table",
+])
+def test_tabular_read_schemas_advertise_only_supported_row_modes(name):
+    field = mcp._tool_manager._tools[name].parameters["properties"]["row_mode"]
+    assert field["type"] == "string" and field["default"] == "arrays"
+    assert field["enum"] == ["arrays", "objects"]
+
+
+def test_changeset_description_explains_operation_path_inheritance():
+    description = mcp._tool_manager._tools["apply_workbook_changeset"].description
+    assert "Operations inherit the outer filepath" in description
+    assert "Omit filepath, dry_run and" in description
 
 
 def test_manifest_tool_list_matches_registered_tools():
