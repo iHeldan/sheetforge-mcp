@@ -10,6 +10,7 @@ import sys
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from openpyxl import load_workbook
 import pytest
 
 from excel_mcp import recipes, report_receipts, reporting_evidence
@@ -115,7 +116,7 @@ def test_receipt_numeric_digest_does_not_hide_type_value_or_container_changes(
 
 
 @pytest.mark.parametrize("use_contract", [False, True])
-def test_v2_receipt_roundtrip_normalizes_rows_recipe_and_contract(
+def test_current_receipt_roundtrip_normalizes_rows_recipe_and_contract(
     source, rule, use_contract
 ):
     extra = {}
@@ -127,7 +128,7 @@ def test_v2_receipt_roundtrip_normalizes_rows_recipe_and_contract(
         {"field": "amount" if use_contract else "Amount", "op": "gte", "value": 0.0}
     ]
     receipt = receipt_for(source, rule, **extra)
-    assert receipt["version"] == 2 and type(receipt["rows"][0][-1]) is float
+    assert receipt["version"] == 3 and type(receipt["rows"][0][-1]) is float
     transported = json.loads(
         json.dumps(receipt)
         .replace("240.0", "240")
@@ -179,17 +180,60 @@ def test_node_roundtrip_rejects_actual_unsafe_integer_changes(source, rule):
     assert state(source) == before
 
 
-def legacy(receipt):
+def legacy(receipt, path, version=1):
+    # Reproduce the historical algorithms, not the current receipt hashes.
+    def atom(value):
+        if type(value) in (int, float):
+            return ["number", reporting_evidence.text(reporting_evidence.number(value))]
+        return [type(value).__name__, value]
+
+    def canonical(value):
+        if isinstance(value, dict):
+            return ["object", [[k, canonical(value[k])] for k in sorted(value)]]
+        if isinstance(value, list):
+            return ["array", [canonical(item) for item in value]]
+        return atom(value)
+
     result = deepcopy(receipt)
-    result["version"] = 1
-    result.pop("output_headers")
+    result["version"] = version
+    compiled = result["recipe"]
+    wb = load_workbook(path)
+    try:
+        if result["workbook_contract"] is not None:
+            from excel_mcp.contracts import compile_contract_recipe
+
+            compiled, _ = compile_contract_recipe(
+                wb, compiled, result["workbook_contract"], 3
+            )
+        source = recipes._load_table(wb, compiled)
+        fields = recipes._source_fields(compiled)
+        indexes = [source["headers"].index(field) for field in fields]
+        result["source_content_sha256"] = reporting_evidence.digest(
+            {
+                "fields": fields,
+                "rows": [[atom(row[i]) for i in indexes] for row in source["rows"]],
+            }
+        )
+        output = compiled["output"]
+        result["output_grid_sha256"] = reporting_evidence.digest(
+            [
+                [atom(c.value) for c in row]
+                for row in wb[output["sheet_name"]][output["range_ref"]]
+            ]
+        )
+    finally:
+        wb.close()
+    if version == 1:
+        result.pop("output_headers")
     result.pop("receipt_sha256")
-    result["receipt_sha256"] = reporting_evidence.digest(result)
+    result["receipt_sha256"] = reporting_evidence.digest(
+        result if version == 1 else canonical(result)
+    )
     return result
 
 
 def test_legacy_receipt_retains_exact_checksum_validation(source, rule):
-    receipt = legacy(receipt_for(source, rule))
+    receipt = legacy(receipt_for(source, rule), source)
     before = state(source)
     assert check_report_receipt(str(source), receipt)["status"] == "current"
     broken = json.loads(json.dumps(receipt).replace("240.0", "240"))
@@ -199,7 +243,7 @@ def test_legacy_receipt_retains_exact_checksum_validation(source, rule):
 
 
 @pytest.mark.parametrize("use_contract", [False, True])
-@pytest.mark.parametrize("legacy_format", [False, True])
+@pytest.mark.parametrize("legacy_format", [None, 1, 2])
 def test_alias_headers_match_the_actual_writer_without_changing_request(
     source, rule, use_contract, legacy_format
 ):
@@ -214,7 +258,7 @@ def test_alias_headers_match_the_actual_writer_without_changing_request(
     expected_alias = " Revenue " if use_contract else "Revenue"
     assert receipt["output_headers"][-1] == expected_alias
     if legacy_format:
-        receipt = legacy(receipt)
+        receipt = legacy(receipt, source, legacy_format)
     before = state(source)
     assert check_report_receipt(str(source), receipt)["status"] == "current"
     assert state(source) == before and rule == original
@@ -444,7 +488,7 @@ def test_actual_stdio_checks_transported_receipt_and_invalid_synthetic_recovery(
                         "check_report_receipt",
                         {"filepath": str(source), "report_receipt": receipt},
                     )
-                    assert checked["status"] == "current" and checked["version"] == 2
+                    assert checked["status"] == "current" and checked["version"] == 3
                     bad = deepcopy(receipt)
                     bad["rows"][0][-1] += 1
                     error = await call(

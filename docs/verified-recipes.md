@@ -150,7 +150,8 @@ structural diff and sampled value changes, not an exhaustive presentation diff.
 ## Persistence and limits
 
 Unreleased: `include_report_receipt=true` optionally prepares a client-owned
-fingerprint during preview and returns it only after verified commit. Pass the
+fingerprint during a passing preview and returns it only after verified commit.
+Failed checks retain their verification report without constructing an optional receipt. Pass the
 flag on both calls. Receipts share the pre-commit response budget, never change
 write permissions, and are not signatures. See [reporting preflight](reporting-preflight.md)
 for `check_report_receipt`, privacy, comparison semantics and acceptance tests.

@@ -82,31 +82,39 @@ not store approval or automatically change the recipe.
 
 Set `include_report_receipt=true` on both preview and commit of
 `run_workbook_recipe`. Keep the returned `report_receipt` outside the workbook.
-The default remains false. Preview constructs and budgets it but does **not**
-issue it. Commit returns it only after existing ChangeSet assertions have verified
+The default remains false. A passing preview constructs and budgets it but does
+**not** issue it. Commit returns it only after existing ChangeSet assertions have verified
 the exact saved output and source. No additional fallible receipt construction
-occurs after persistence. Oversized receipts fail before any mutation.
+occurs after persistence. Oversized receipts fail before any mutation. If Recipe
+checks already failed, preview/commit report those checks without attempting to
+construct an optional receipt. No receipt is returned in that failure path.
 
-New receipts use **receipt format 2** (the Recipe itself stays version 1). Their
-checksum tags JSON containers/scalars and normalizes finite numeric identity
-throughout rows, recipe and contract. Thus JSON-equivalent `240.0`/`240`, `-0.0`/`0`
-and equivalent exponent spellings survive a normal JavaScript JSON roundtrip.
-Booleans, strings and numbers remain distinct. A real numeric change, including
-loss of an unsafe integer in a JavaScript client, is still rejected. This is not
-a general guarantee that JavaScript can preserve every Excel number or identifier.
-Other Recipe/ChangeSet tokens and fingerprint algorithms are unchanged.
+New receipts use **receipt format 3** (the Recipe itself stays version 1). Their
+checksum and source/output/group fingerprints use exact integer/float ratios,
+matching executable numeric equality rather than rounded decimal spellings.
+JSON containers/scalars remain tagged. Equivalent `240.0`/`240`, `-0.0`/`0` and
+value-preserving exponent spellings survive reserialization. But integer `10**23`
+and float `1e23` are **not** equal: a JavaScript roundtrip between them changes
+an executable filter and is rejected. Booleans, strings and numbers remain distinct.
+This is not a guarantee that JavaScript can preserve every Excel number or
+identifier; retain original receipt JSON when the client cannot preserve it.
+Other Recipe/ChangeSet tokens and unrelated fingerprint algorithms are unchanged.
 
-Format 2 stores `output_headers` from the actual compiled report. This preserves
+Formats 2/3 store `output_headers` from the actual compiled report. This preserves
 existing writer behavior: ordinary Recipe metric aliases are trimmed by the query
 engine; Contract-backed output retains requested aliases. The checker and its
 comparison labels follow those effective headers, without modifying the request
 or granting permission to rename a report column.
 
-Unmodified legacy format-1 receipts remain readable with their original exact
-checksum algorithm. They do **not** acquire format 2's numeric-transport tolerance.
-If a legacy receipt was altered by reserialization, retain/use its original JSON
-or obtain a new format-2 receipt during an authorized verified refresh. Do not
-rewrite its checksum to claim preserved history. Unsupported versions fail closed.
+Legacy formats 1/2 retain their original checksum and value-fingerprint algorithms
+only for numerically unambiguous domains. Format 1 still requires its original
+JSON numeric spelling. Legacy integers not exactly representable as floats, and
+floats whose integral decimal spelling differs from their exact value, cannot
+be certified safely. Such numbers in the receipt, referenced source fields or
+reserved saved output fail closed with `legacy_receipt_numeric_ambiguity`,
+`requires_new_receipt=true`, and `suggested_next_tool="run_workbook_recipe"`.
+Obtain a new format-3 receipt through an authorized preview/verified commit;
+there is no automatic upgrade or checksum repair. Unsupported versions fail closed.
 
 The receipt holds the normalized recipe and optional contract, the recipe engine
 version, a fingerprint of referenced source values, bounded aggregate result rows,
@@ -171,14 +179,19 @@ lock and input controls; two captures are **not** a distributed/cross-file
 transaction. This is not streaming or a memory bound on unrelated workbook data.
 All three tools use `sample_limit=3` by default, accepting integers 1-5. Evidence
 responses are capped at 12,000 escaped JSON characters. Receipts are capped at
-6,000 characters and share Recipe's existing 8,000-character pre-commit summary
-budget. Large definitions/groups can exceed these limits; omit the optional
+6,000 characters when issued and share Recipe's existing 8,000-character pre-commit
+summary budget. Checking accepts up to 24,000 characters for bounded JSON notation
+growth (such as exponent-to-integer formatting), with unchanged integrity checks.
+This is not a larger issuance or write budget. Oversized input errors advise using
+the original issued JSON or obtaining a new receipt through an authorized refresh,
+not reducing a sample size that cannot shrink an existing receipt.
+Large definitions/groups can exceed issuance limits; omit the optional
 receipt rather than weakening mutation checks. No receipt history is persisted.
 An entirely null result row is indistinguishable from blank output padding and
 is refused when requesting a receipt; ordinary recipes retain their behavior.
 
 ```bash
-uv run pytest -q tests/test_reporting_preflight.py tests/test_preflight_audit_regressions.py
+uv run pytest -q tests/test_reporting_preflight.py tests/test_preflight_audit_regressions.py tests/test_receipt_identity_regressions.py
 ```
 
 Acceptance includes independent nested-loop join arithmetic, cancelling losses
@@ -190,5 +203,6 @@ acceptance tests, not an actual-model success-rate or token-saving benchmark,
 native Excel visual acceptance or a guarantee of business correctness.
 The audit regressions include optional actual Node JSON and Node-plus-MCP checks
 (skipped if Node is absent), alongside unconditional Python numeric-identity,
-legacy-validation, known-type, synthetic-error and conflict-policy controls. Node
-is not a runtime dependency of SheetForge.
+exact unsafe-integer/float identities, legacy ambiguity refusal, notation-growth
+budgets, check-failure priority, known-type, synthetic-error and conflict-policy
+controls. Node is not a runtime dependency of SheetForge.

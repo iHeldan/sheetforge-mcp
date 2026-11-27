@@ -2059,11 +2059,12 @@ def run_workbook_recipe(
     and expected_workbook_sha256 from preview. A verified snapshot is always enabled.
     Limits: 50,000 source cells, 64 source columns, 10,000 output cells; sample_limit 1-10.
     include_report_receipt optionally returns a client-owned value fingerprint ONLY
-    after verified commit. Preview budgets it but returns no receipt. Supply the
-    flag on both preview and commit. Use check_report_receipt before a later refresh;
+    after verified commit. Passing preview budgets it but returns no receipt;
+    failed checks retain their verification report without constructing a receipt.
+    Supply the flag on both preview and commit. Use check_report_receipt before a later refresh;
     receipts are not signatures, write authorization or automatic conflict resolution.
-    New receipt format 2 binds effective output headers and normalizes finite JSON
-    numeric identity throughout its checksum; real value/type changes still fail.
+    New receipt format 3 binds effective output headers and exact finite numeric
+    identity throughout its checksum; actual JavaScript rounding still fails.
     """
     return _run_tool(
         "run_workbook_recipe",
@@ -2135,8 +2136,12 @@ def check_report_receipt(
     A changed result plus reordered saved output remains a conservative conflict:
     conflict_reason/output_values_changed/output_positions_only_changed distinguish
     positional drift from changed values or unparseable structure. Do not silently
-    discard observed ordering. Unmodified legacy format-1 receipts remain supported
-    with their exact checksum, not format 2's numeric-transport tolerance.
+    discard observed ordering. Formats 1/2 retain their original checksum algorithms
+    only for unambiguous numbers in the receipt and referenced live values;
+    ambiguous legacy numbers require a new authorized preview/verified commit.
+    New format 3 matches exact executable numeric identity, not rounded decimals.
+    Issuance stays capped at 6000 characters; checking allows 24000 for JSON
+    notation growth without changing checksum validation or write budgets.
     Receipts are client-owned bounded JSON, not signatures or write credentials.
     Keep them private: they retain group labels/aggregate values and definitions;
     hashes can disclose low-entropy data. Reuse approved filepath.

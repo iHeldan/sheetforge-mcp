@@ -770,7 +770,7 @@ def run_workbook_recipe(
             summary["workbook_contract"] = changeset._bound_response_value(
                 contract_report
             )
-        if include_report_receipt:
+        if include_report_receipt and verification["passed"]:
             from .report_receipts import make_receipt
 
             # Prepare and budget the complete receipt BEFORE persistence. Existing

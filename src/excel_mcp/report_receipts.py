@@ -4,22 +4,68 @@ import re
 
 from . import changeset, recipes, workbook
 from . import reporting_evidence as evidence
-from .exceptions import PreconditionFailedError, ValidationError
+from .exceptions import PreconditionFailedError, ResponseTooLargeError, ValidationError
 
-VERSION = 2
+VERSION = 3
 MAX_RECEIPT_CHARS = 6_000
+# Checking accepts bounded JSON notation growth; issuance/write budgets stay fixed.
+MAX_RECEIPT_INPUT_CHARS = 24_000
 
 
 def _atom(value, data_type=None):
     if data_type in ("f", "e"):
         return [data_type, value if isinstance(value, str) else type(value).__name__]
     if type(value) in (int, float):
-        return ["number", evidence.text(evidence.number(value))]
+        recipes._scalar(value, location="receipt number")
+        numerator, denominator = (
+            (value, 1) if type(value) is int else value.as_integer_ratio()
+        )
+        return ["number", str(numerator), str(denominator)]
     if value is None or type(value) in (str, bool):
         return [type(value).__name__, value]
     # Receipts start from literal JSON values only. A later unsupported cell
     # must remain a mismatch rather than crash or masquerade as a literal.
     return ["unsupported", type(value).__name__]
+
+
+def _legacy_atom(value, data_type=None):
+    if data_type not in ("f", "e") and type(value) in (int, float):
+        return ["number", evidence.text(evidence.number(value))]
+    return _atom(value, data_type)
+
+
+def _check_legacy_numbers(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            _check_legacy_numbers(item)
+    elif isinstance(value, list):
+        for item in value:
+            _check_legacy_numbers(item)
+    elif type(value) in (int, float):
+        # Old decimal-string hashes cannot distinguish an inexact large integer
+        # from the float whose shortest decimal spelling denotes that integer.
+        if type(value) is int:
+            try:
+                ambiguous = float(value) != value
+            except OverflowError:
+                ambiguous = True
+        else:
+            decimal = evidence.number(value)
+            ambiguous = decimal.denominator == 1 and value != decimal.numerator
+        if ambiguous:
+            raise ValidationError(
+                "Legacy report receipt has ambiguous numeric identity; obtain a new "
+                "receipt through an authorized Recipe preview and verified commit",
+                code="legacy_receipt_numeric_ambiguity",
+                details={"requires_new_receipt": True, "automatic_upgrade": False},
+                suggested_next_tool="run_workbook_recipe",
+            )
+
+
+def _checked_legacy_atom(value, data_type=None):
+    if data_type not in ("f", "e"):
+        _check_legacy_numbers(value)
+    return _legacy_atom(value, data_type)
 
 
 def _row_fingerprints(rows, group_count):
@@ -32,7 +78,7 @@ def _row_fingerprints(rows, group_count):
     return indexed
 
 
-def _receipt_digest(value):
+def _receipt_digest(value, *, atom=_atom):
     # Tag every node, not just numbers: a JSON array ["number", "1"] must
     # never collide with the numeric scalar 1. Do not alter other tool tokens.
     def canonical(node):
@@ -40,7 +86,7 @@ def _receipt_digest(value):
             return ["object", [[key, canonical(node[key])] for key in sorted(node)]]
         if isinstance(node, list):
             return ["array", [canonical(item) for item in node]]
-        return _atom(node)
+        return atom(node)
 
     return evidence.digest(canonical(value))
 
@@ -51,13 +97,13 @@ def _output_headers(requested, contract, result):
     return result["headers"]
 
 
-def _source_digest(source, recipe):
+def _source_digest(source, recipe, *, atom=_atom):
     fields = recipes._source_fields(recipe)
     indexes = [source["headers"].index(f) for f in fields]
     return evidence.digest(
         {
             "fields": fields,
-            "rows": [[_atom(row[i]) for i in indexes] for row in source["rows"]],
+            "rows": [[atom(row[i]) for i in indexes] for row in source["rows"]],
         }
     )
 
@@ -85,7 +131,18 @@ def make_receipt(requested, contract, source, compiled, result, padded):
 
 def _normalize(receipt):
     receipt = changeset._json_copy(receipt, location="report_receipt")
-    evidence.bounded(receipt, MAX_RECEIPT_CHARS)
+    try:
+        evidence.bounded(receipt, MAX_RECEIPT_INPUT_CHARS)
+    except ResponseTooLargeError as exc:
+        raise ResponseTooLargeError(
+            "Report receipt exceeds its checking input budget",
+            estimated_size=exc.estimated_size,
+            limit=MAX_RECEIPT_INPUT_CHARS,
+            hints=[
+                "Use the original issued receipt JSON without adding data",
+                "If unavailable, obtain a new receipt through an authorized Recipe preview and verified commit",
+            ],
+        ) from exc
     keys = {
         "version",
         "recipe_engine_version",
@@ -99,13 +156,13 @@ def _normalize(receipt):
     if (
         isinstance(receipt, dict)
         and type(receipt.get("version")) is int
-        and receipt["version"] == 2
+        and receipt["version"] in (2, VERSION)
     ):
         keys.add("output_headers")
     recipes._object(receipt, allowed=keys, required=keys, location="report_receipt")
     if (
         type(receipt["version"]) is not int
-        or receipt["version"] not in (1, VERSION)
+        or receipt["version"] not in (1, 2, VERSION)
         or type(receipt["recipe_engine_version"]) is not int
         or receipt["recipe_engine_version"] != recipes.RECIPE_ENGINE_VERSION
     ):
@@ -115,18 +172,27 @@ def _normalize(receipt):
             r"[0-9a-f]{64}", receipt[name]
         ):
             raise ValidationError(f"Invalid receipt {name}")
-    checksum = _receipt_digest if receipt["version"] == 2 else evidence.digest
+
+    def checksum(value):
+        if receipt["version"] == 1:
+            return evidence.digest(value)
+        return _receipt_digest(
+            value, atom=_legacy_atom if receipt["version"] == 2 else _atom
+        )
+
     if (
         checksum({k: v for k, v in receipt.items() if k != "receipt_sha256"})
         != receipt["receipt_sha256"]
     ):
         raise ValidationError("Report receipt integrity check failed")
+    if receipt["version"] < VERSION:
+        _check_legacy_numbers(receipt)
     normalized = recipes._normalize_recipe(receipt["recipe"])
     if normalized != receipt["recipe"]:
         raise ValidationError("Receipt recipe is not normalized")
     rows = receipt["rows"]
     width = len(normalized["group_by"]) + len(normalized["metrics"])
-    if receipt["version"] == 2:
+    if receipt["version"] >= 2:
         headers = receipt["output_headers"]
         if not isinstance(headers, list) or len(headers) != width:
             raise ValidationError("Invalid receipt output headers")
@@ -152,6 +218,7 @@ def check_report_receipt(
 ) -> dict:
     evidence.sample_size(sample_limit)
     receipt, requested = _normalize(report_receipt)
+    fingerprint_atom = _checked_legacy_atom if receipt["version"] < VERSION else _atom
     compiled = requested
     contract = receipt["workbook_contract"]
     with evidence.capture([filepath]) as [(path, sha)]:
@@ -164,6 +231,7 @@ def check_report_receipt(
                     wb, requested, contract, sample_limit
                 )
             source = recipes._load_table(wb, compiled)
+            source_sha = _source_digest(source, compiled, atom=fingerprint_atom)
             result = recipes._aggregate(source, compiled)
             verification = recipes._verify_recipe(
                 source, compiled, result, sample_limit
@@ -180,7 +248,7 @@ def check_report_receipt(
             )
             expected_headers = _output_headers(requested, contract, result)
             if (
-                receipt["version"] == 2
+                receipt["version"] >= 2
                 and receipt["output_headers"] != expected_headers
             ):
                 raise ValidationError("Receipt output headers do not match its recipe")
@@ -199,7 +267,10 @@ def check_report_receipt(
                     ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2)
                 )
                 grid_sha = evidence.digest(
-                    [[_atom(c.value, c.data_type) for c in row] for row in grid]
+                    [
+                        [fingerprint_atom(c.value, c.data_type) for c in row]
+                        for row in grid
+                    ]
                 )
                 if [c.value for c in grid[0][:width]] == expected_headers:
                     rows = []
@@ -231,9 +302,7 @@ def check_report_receipt(
                             stored = None
         group_count = len(requested["group_by"])
         old = _row_fingerprints(receipt["rows"], group_count)
-        source_changed = (
-            _source_digest(source, compiled) != receipt["source_content_sha256"]
-        )
+        source_changed = source_sha != receipt["source_content_sha256"]
         output_changed = grid_sha != receipt["output_grid_sha256"]
         result_changed = current != old
         stored_matches = stored == current
