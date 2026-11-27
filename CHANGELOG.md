@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.15.5 - 2026-11-27
+
+### Compatibility Notes
+
+- This correction release retains 83 MCP tools and the same dependency requirements. Valid tabular calls are unchanged; schemas now advertise the two existing row modes. Float writes accept alternate XML decimal spellings only when the decoded float is identical. Exact integer/Decimal and actual precision-loss checks remain. Update the MCPB extension to load its pinned `0.15.5` runtime; older published packages and tags are unchanged.
+
 ### Fixed
 
 - Installed-wheel acceptance uses interpreter symlinks on POSIX so uv-managed macOS Python builds can locate `libpython`; Windows retains copies and all environment-isolation checks remain enabled.

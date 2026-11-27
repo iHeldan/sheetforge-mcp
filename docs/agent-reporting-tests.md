@@ -101,7 +101,7 @@ cohort ran the seven sequential task phases without human task interventions:
 | Installed build | Independently accepted tasks | MCP tool calls |
 | --- | --- | --- |
 | Baseline | 6 / 7 | 49 |
-| Unreleased float-identity correction | 7 / 7 | 42 |
+| Float-identity correction | 7 / 7 | 42 |
 | Correction plus row-mode/schema and ChangeSet guidance | 7 / 7 | 33 |
 
 The baseline failure was a safe but incorrect refusal to write `71753.65`.
@@ -110,7 +110,8 @@ duplicate-key refusal. The final cohort had no unexpected tool-error responses.
 Task text was identical after replacing temporary file roots, the resolved model
 and CLI were unchanged, and installed source hashes were checked. Later phases
 retain each cohort's earlier report, so a prior failure can affect later starting
-output. The local candidate is not the published `0.15.4` package.
+output. The candidates were local and unreleased at test time; these corrections
+are included in `0.15.5`. Published `0.15.4` artifacts were not modified.
 
 These observations do not establish a general speed/token advantage. Model
 choices and cache state vary, and one attempt per phase is not a reliability

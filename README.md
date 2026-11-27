@@ -10,7 +10,7 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.15.4`
+Published package release: `0.15.5`
 Repository docs track the current main-branch tool surface, which currently exposes `83` MCP tools.
 Version `0.15.0` adds [opt-in preserving XLSX saves](docs/xlsx-fidelity.md#preserving-save-mode) for literal cell edits in a restricted workbook profile. [Targeted XLSX fidelity checks](docs/xlsx-fidelity.md) still guard direct and ChangeSet-backed writes.
 Version `0.15.1` extends the targeted fidelity guard to ordinary standalone mutations and their dry runs, with checked grid boundaries, safer structural edits, verified formula/copy/pivot values, and early configurable XLSX input limits. Unsafe or unverifiable operations can now be refused before saving. See the [changelog](CHANGELOG.md#0151---2026-11-20), [value-safety policy](docs/value-safety.md), and [input-limit guide](docs/xlsx-input-limits.md).
@@ -18,6 +18,7 @@ Version `0.15.1` extends the targeted fidelity guard to ordinary standalone muta
 Version `0.15.2` preserves explicit cell types during copy/reference updates, rejects unsafe snapshot aliases and table/array intersections, reconciles ZIP64 directory checks, improves ChangeSet capacity and preview accuracy, and restores audit/repair workflows for fully dominant native tables. See the [correction release notes](CHANGELOG.md#0152---2026-11-20).
 Version `0.15.3` pins each new MCPB to its declared SheetForge version, restricts wrapper contents to six public files, and requires a matching version tag for PyPI publication. The 83-tool surface and workbook behavior are unchanged. See [runtime versioning](#mcpb-runtime-versioning) and the [release notes](CHANGELOG.md#0153---2026-11-24).
 Version `0.15.4` corrects native Windows file flushing, stable-file timestamp checks and read-only explanation staging/cleanup. CI now verifies its actual Python runtimes, runs the complete Windows suite, and tests a freshly built wheel through its installed CLI. The 83 tools and dependency requirements are unchanged. See the [release notes](CHANGELOG.md#0154---2026-11-26) and [CI validation guide](docs/ci-validation.md).
+Version `0.15.5` fixes false rejections of unchanged floating-point values, advertises supported tabular row modes and clarifies ChangeSet operation paths. It adds independently graded recurring reporting workflows, strengthens chart replay checks and requires exact-tag CI before PyPI upload. The tool count and dependency requirements remain unchanged. See the [release notes](CHANGELOG.md#0155---2026-11-27) and [reporting acceptance guide](docs/agent-reporting-tests.md).
 Workbook Contracts v1 is included in `0.14.0`: explicit bindings and full bounded data checks can guard Recipe preview/commit, with logical-field, file-path and worksheet-versus-table recovery guidance.
 Verified Recipes v1 is included in `0.11.0`: reusable native-table reports with explicit checks and verified preview/commit.
 Verified Explanations v1 is included in `0.12.0`: read-only, independently reconciled changes between recomputed recipe results.
