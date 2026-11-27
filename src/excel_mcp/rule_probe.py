@@ -11,18 +11,7 @@ MAX_CASES = 128
 
 
 def _different(left, right, group_count):
-    if left["headers"] != right["headers"] or len(left["rows"]) != len(right["rows"]):
-        return True
-    for a, b in zip(left["rows"], right["rows"]):
-        # Numeric group identities are exact; metric tolerance must never merge
-        # two nearby numeric identifiers into the same group.
-        if [evidence.identity(v) for v in a[:group_count]] != [
-            evidence.identity(v) for v in b[:group_count]
-        ]:
-            return True
-        if not recipes._equal_result([a[group_count:]], [b[group_count:]]):
-            return True
-    return False
+    return not recipes._equal_grouped_result(left, right, group_count)
 
 
 def probe_recipe_rules(

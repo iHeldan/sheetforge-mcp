@@ -66,8 +66,9 @@ def _compatible(before: dict, after: dict, fields: list[str]) -> None:
 
 
 def _identity(value: Any) -> tuple:
+    recipes._scalar(value, location="Identity value")
     kind = recipes._kind(value)
-    return kind, Fraction(str(value)) if kind == "number" else value
+    return kind, Fraction(value) if kind == "number" else value
 
 
 def _number(value: Any) -> Fraction:
@@ -80,8 +81,8 @@ def _number(value: Any) -> Fraction:
 
 
 def _text(value: Fraction) -> str:
-    # All denominators originate from decimal literals, so this division
-    # terminates. Explicit precision avoids the caller's ambient Decimal context.
+    # Decimal measures and exact binary key ratios both terminate in decimal.
+    # Explicit precision avoids the caller's ambient Decimal context.
     precision = abs(value.numerator).bit_length() + value.denominator.bit_length() + 5
     with localcontext(Context(prec=max(28, precision))):
         text = format(Decimal(value.numerator) / Decimal(value.denominator), "f")

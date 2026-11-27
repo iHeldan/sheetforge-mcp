@@ -13,6 +13,7 @@ from openpyxl.utils import get_column_letter
 from . import changeset, recipes, workbook
 from .exceptions import PreconditionFailedError, ResponseTooLargeError, ValidationError
 from .tables import _find_table, _table_data_bounds
+from .values import value_key
 
 REBASE_VERSION = 1
 MAX_PATCH_BYTES = 128_000
@@ -21,11 +22,7 @@ MAX_SUMMARY_CHARS = 8000
 
 
 def _identity(value):
-    recipes._scalar(value, location="Referenced value")
-    return (
-        recipes._kind(value),
-        Fraction(str(value)) if type(value) in (int, float) else value,
-    )
+    return value_key(recipes._scalar(value, location="Referenced value"))
 
 
 def _key(values):

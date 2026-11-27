@@ -41,6 +41,10 @@ whitespace-only keys never match each other. Null measures contribute zero and
 are counted explicitly. Formula/error/date inputs and mixed field types are
 rejected, not coerced. Declared totals are excluded; hidden/filtered rows remain.
 
+Exact numeric keys follow executed Python/query equality, not decimal spelling:
+integer `10**23` and float `1e23` do not match, while `int(1e23)` and that float do.
+This key policy is separate from the decimal strings used for measure arithmetic.
+
 `requires_decision` flags multiplied, dropped or unmatched left rows. It does
 not declare them errors. Many shipments to one unique invoice can legitimately
 preserve a shipment-count measure; allocating invoice revenue among shipment
@@ -75,6 +79,9 @@ errors still propagate; no general exception suppression is performed.
 Results expose hashes, counts, bounded samples and search coverage. No witness
 means **no difference found in these tests**, never equivalence. Numeric group
 identities are exact; metric comparisons use Recipe's documented tolerances.
+Actual aggregates are compared by keyed groups, not zipped presentation rows.
+Equivalent `1`/`1.0` group representations may sort differently without implying
+a different aggregate. Presentation ordering and raw result hashes are unchanged.
 The client may retain an owner-approved witness as a test case; the server does
 not store approval or automatically change the recipe.
 
@@ -193,6 +200,12 @@ is refused when requesting a receipt; ordinary recipes retain their behavior.
 ```bash
 uv run pytest -q tests/test_reporting_preflight.py tests/test_preflight_audit_regressions.py tests/test_receipt_identity_regressions.py
 ```
+
+Additional exact-key, operator-guard, retained-receipt and real CLI regression
+workflows are in `tests/test_reporting_guard_regressions.py` and
+`tests/test_guard_workflows.py`. Rebase controls verify blocked commits leave both
+files unchanged and create no snapshot; valid equal-value commits still persist
+and preserve their baseline snapshot. These are synthetic automated checks.
 
 Acceptance includes independent nested-loop join arithmetic, cancelling losses
 and duplication, typed/blank keys, legitimate many-to-one counts, absent refunds,

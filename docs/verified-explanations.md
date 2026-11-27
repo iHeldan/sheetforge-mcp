@@ -71,6 +71,9 @@ complete result in the normal `ok`/`data` envelope.
   Referenced columns must have compatible non-null value kinds across versions.
   Text keys and group labels are case-sensitive and are not trimmed for matching;
   that is separate from a filter's configurable string-comparison rules.
+  Numeric keys and group identities use exact loaded integer/float values, not
+  decimal-string approximation (`10**23` differs from float `1e23`). This does
+  not change the independent decimal measure/contribution arithmetic.
 - `added` and `removed` refer to keys present in only one version. `updated` refers
   to retained keys with changed recipe-referenced/key field values. `unchanged`
   ignores cell position and unreferenced fields, not all possible workbook changes.
@@ -153,6 +156,9 @@ presentation-only samples.
 It excludes sample size. The source/recipe pins do not pin implementation versions
 across server upgrades. It is not authentication,
 a commit credential or an exactly-once receipt. The service stores no session.
+The exact numeric-key correction can change result/explanation fingerprints for
+fractional numeric groups; obtain fresh evidence rather than treating an older
+fingerprint as a write credential. Existing Recipe/receipt formats are unchanged.
 
 ## Capture and limits
 

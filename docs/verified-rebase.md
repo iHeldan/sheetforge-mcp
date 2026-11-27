@@ -50,6 +50,13 @@ are exact, not trimmed/case-folded. Duplicate update keys are errors. Every targ
 must exist in the base; the tool never inserts a new record. Totals rows are excluded.
 Write fields cannot be key fields or declared read fields.
 
+Numeric identity is exact Python/query numeric equality, not rounded decimal
+spelling. This applies to keys, declared read dependencies, current/base target
+values and already-satisfied checks. Integer `10**23` differs from float `1e23`;
+`int(1e23)` equals that float. A changed key is missing, a changed read value is
+stale, and a competing target value is a conflict. No approximate or decimal-string
+match may authorize a write. Ordinary equal `1`/`1.0` and signed zero still match.
+
 ## Preview, resolve, commit
 
 1. Call with `mode="preview"` (default). Neither source is modified.

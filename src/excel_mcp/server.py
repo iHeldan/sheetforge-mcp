@@ -1960,6 +1960,8 @@ def apply_table_patch(
     must not be keys/read_fields. Checks complete unique keys and row-local read
     dependencies; does not infer undeclared or cross-row dependencies. Existing
     rows only, same exact headers with reordering allowed, no formula evaluation.
+    Numeric keys/read/target values use exact typed equality, never rounded decimal
+    spelling: int10**23 differs from float1e23, but numeric1 equals1.0.
     Conflicts/missing rows/changed premises block the entire batch. Commit requires
     the identical patch/base and rebase_token/expected_workbook_sha256 from a fresh
     preview. Reuses ChangeSet snapshots, exact-file checks and rollback. Limits:
@@ -2039,6 +2041,11 @@ def run_workbook_recipe(
     (fields), row_count (min/max), and sum_matches (source_field/output_field).
     count metrics omit field. Other metrics: sum, avg, min, max, count_non_null,
     count_distinct. Only literal finite JSON cells in referenced fields are supported.
+    Filter guards interpret operator case/whitespace exactly as execution does;
+    text operators still require text fields and blank checks forbid operands.
+    Valid retained operator spelling is not rewritten when checking a receipt.
+    Invariance compares exact keyed groups, not presentation row order; numeric
+    metric tolerances do not apply to group identities.
     Optional workbook_contract enforces Contract v1: source selectors must match,
     ALL Recipe input references must use contract fields[].name, NEVER physical
     fields[].headers. Copy names from inspection.recipe_input_fields (binding keys).
@@ -2110,8 +2117,9 @@ def probe_recipe_rules(
     """Compare two explicit Recipe v1 definitions differing ONLY in filters.
 
     Up to 8 sum/count metrics; no checks or Workbook Contracts in v1. Compare full
-    bounded native-table results, then seek an observed/hypothetical SINGLE-ROW
-    counterexample (128 cases each, synthetic at most 4 fields). Output definitions
+    bounded native-table results by exact keyed groups, not presentation row order.
+    Then seek an observed/hypothetical SINGLE-ROW counterexample (128 cases each,
+    synthetic at most 4 fields). Output definitions
     are never written. A hypothetical witness is not evidence that the row exists
     or satisfies business constraints. No witness is NOT proof of equivalence.
     Ask the owner which rule is intended; do not select or weaken either rule.

@@ -20,6 +20,7 @@ from openpyxl.utils import get_column_letter
 from . import changeset, query, workbook
 from .exceptions import PreconditionFailedError, ResponseTooLargeError, ValidationError
 from .tables import _find_table, _table_data_bounds
+from .values import value_key
 from .workbook import safe_workbook
 
 RECIPE_ENGINE_VERSION = 1
@@ -78,6 +79,11 @@ def _field_list(value: Any, location: str) -> list[str]:
     if len(set(result)) != len(result):
         raise ValidationError(f"{location} contains duplicate field names")
     return result
+
+
+def _filter_operator(value: str) -> str:
+    op = value.strip().lower()
+    return query.FILTER_OPERATOR_ALIASES.get(op, op)
 
 
 def _normalize_recipe(recipe: Any) -> dict:
@@ -164,8 +170,12 @@ def _normalize_recipe(recipe: Any) -> dict:
             raise ValidationError("filter.case_sensitive must be a boolean")
         if "value" in item and "values" in item:
             raise ValidationError("filter must not specify both value and values")
-        op = query.FILTER_OPERATOR_ALIASES.get(item["op"], item["op"])
-        item["op"] = op
+        # Keep historically retained spelling/alias handling for receipt tokens;
+        # validate the same canonical operator that query execution will use.
+        item["op"] = query.FILTER_OPERATOR_ALIASES.get(item["op"], item["op"])
+        op = _filter_operator(item["op"])
+        if op not in query.FILTER_OPERATORS:
+            raise ValidationError("filter.op is not a supported filter operator")
         if op in {"is_blank", "not_blank"} and ({"value", "values"} & set(item)):
             raise ValidationError("Blank checks must not specify value or values")
         if "values" in item and op not in {"in", "not_in"}:
@@ -318,10 +328,13 @@ def _load_table(wb: Any, recipe: dict) -> dict:
 
 def _validate_filter_inputs(source: dict, recipe: dict) -> None:
     for item in recipe["filters"]:
+        op = _filter_operator(item["op"])
         index = source["headers"].index(item["field"])
-        nonblank = next((row[index] for row in source["rows"] if row[index] is not None), None)
+        nonblank = next(
+            (row[index] for row in source["rows"] if row[index] is not None), None
+        )
         if (
-            item["op"] in {"contains", "starts_with", "ends_with"}
+            op in {"contains", "starts_with", "ends_with"}
             and nonblank is not None
             and not isinstance(nonblank, str)
         ):
@@ -330,7 +343,11 @@ def _validate_filter_inputs(source: dict, recipe: dict) -> None:
             )
         operands = item.get("values", [item["value"]] if "value" in item else [])
         for value in operands:
-            if nonblank is not None and value is not None and _kind(nonblank) != _kind(value):
+            if (
+                nonblank is not None
+                and value is not None
+                and _kind(nonblank) != _kind(value)
+            ):
                 raise ValidationError(
                     f"Filter operand type does not match field '{item['field']}'"
                 )
@@ -390,6 +407,25 @@ def _equal_result(left: list, right: list) -> bool:
             elif x != y:
                 return False
     return True
+
+
+def _equal_grouped_result(left: dict, right: dict, group_count: int) -> bool:
+    if left["headers"] != right["headers"] or len(left["rows"]) != len(right["rows"]):
+        return False
+
+    def indexed(result):
+        groups = {}
+        for row in result["rows"]:
+            if len(row) != len(result["headers"]):
+                raise ValidationError("Aggregate row width does not match its headers")
+            key = tuple(value_key(value) for value in row[:group_count])
+            if key in groups:
+                raise ValidationError("Aggregate contains duplicate group identities")
+            groups[key] = row[group_count:]
+        return groups
+
+    a, b = indexed(left), indexed(right)
+    return a.keys() == b.keys() and all(_equal_result([a[key]], [b[key]]) for key in a)
 
 
 def _sum_values(rows: list, index: int) -> int | float:
@@ -479,8 +515,7 @@ def _verify_recipe(source: dict, recipe: dict, result: dict, sample_limit: int) 
         probes.append(
             {
                 "type": name,
-                "passed": result["headers"] == other["headers"]
-                and _equal_result(result["rows"], other["rows"]),
+                "passed": _equal_grouped_result(result, other, len(recipe["group_by"])),
             }
         )
 
@@ -776,7 +811,11 @@ def run_workbook_recipe(
             # Prepare and budget the complete receipt BEFORE persistence. Existing
             # ChangeSet assertions verify these exact saved values after replace.
             summary["report_receipt"] = make_receipt(
-                requested, contract, source, normalized, output_result,
+                requested,
+                contract,
+                source,
+                normalized,
+                output_result,
                 operations[0]["args"]["data"],
             )
         _assert_summary_budget(summary)

@@ -85,6 +85,12 @@ Use `value` for scalar comparisons, `values` for membership, and neither for bla
 checks. Membership also accepts a scalar `value`. String comparisons default to
 case-insensitive; `case_sensitive` must be a boolean. Operand types must match
 non-null input types. Numeric-looking strings are not coerced into numbers.
+Operator spelling is interpreted case-insensitively with surrounding whitespace
+ignored **before** every syntax/type guard, just as during query execution.
+`CONTAINS` on a numeric field is refused exactly like `contains`; blank checks
+cannot carry ignored operands. Valid retained operator spelling and historical
+lowercase alias normalization remain unchanged for Recipe/receipt integrity:
+checking an old receipt never rewrites its definition or repairs its checksum.
 
 Referenced fields must contain homogeneous JSON scalar values, allowing mixed
 integer/float numbers and nulls. Formula cells, Excel errors, dates/times and
@@ -117,9 +123,12 @@ and Excel error literals are rejected rather than converted into formulas/errors
   all output groups. Both must be numeric; null values are excluded.
 
 Every run also re-executes aggregation over in-memory copies with columns reversed
-and rows reversed. The normalized results must agree. These probes cover the full
-bounded input/result, not a sample. Integer comparisons are exact; floating-point
-comparisons use relative tolerance `1e-12` and absolute tolerance `1e-9`.
+and rows reversed. The results must agree by exact typed group identity, regardless
+of presentation row order or equivalent numeric group spellings (`1`/`1.0`).
+The existing serialized-key presentation sort is unchanged. These probes cover
+the full bounded input/result, not a sample. Group keys are never tolerance-matched.
+Integer metric comparisons are exact; floating-point metric comparisons use
+relative tolerance `1e-12` and absolute tolerance `1e-9`.
 Floating-point metric outputs are normalized to openpyxl's numeric serialization
 before checks and preview, so binary tails such as `0.30000000000000004` do not
 disagree with the saved `0.3`. The ChangeSet still asserts the exact normalized
