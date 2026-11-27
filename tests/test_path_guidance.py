@@ -33,7 +33,7 @@ def test_every_tool_workbook_path_has_guidance():
             if name == "filepath" or name.endswith(("_filepath", "filepaths")):
                 assert_path_schema(node)
                 count += 1
-    assert count == 88
+    assert count == 92
 
 
 def test_compact_schema_guidance_keeps_standalone_path_rules():
@@ -65,7 +65,9 @@ def test_complete_input_schema_payload_has_a_size_budget():
     schemas = {
         name: tool.parameters for name, tool in server.mcp._tool_manager._tools.items()
     }
-    assert len(json.dumps(schemas, separators=(",", ":"))) <= 61_000
+    # Three read-only reporting tools add four path arguments; keep the
+    # complete 86-tool schema bounded without shortening safety guidance.
+    assert len(json.dumps(schemas, separators=(",", ":"))) <= 64_000
 
 
 @pytest.mark.parametrize("filename", [None, False, 42, "", "  "])
@@ -233,7 +235,7 @@ def exercise_path_workflow(tmp_path, *, installed=False):
                     initialized = await session.initialize()
                     assert "NEVER prepend client cwd" in initialized.instructions
                     inventory = (await session.list_tools()).tools
-                    assert len(inventory) == 83
+                    assert len(inventory) == 86
                     profile = next(t for t in inventory if t.name == "profile_workbook")
                     assert_path_schema(profile.inputSchema["properties"]["filepath"])
                     rejected = await session.call_tool(
@@ -258,7 +260,7 @@ def exercise_path_workflow(tmp_path, *, installed=False):
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=30))
     return {
-        "tools": 83,
+        "tools": 86,
         "calls": 2,
         "same_tool_recovery": True,
         "source_unchanged": True,

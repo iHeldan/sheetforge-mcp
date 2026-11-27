@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Read-only `rehearse_table_join` exposes complete join multiplicity, separate signed/absolute measure duplication and loss, and bounded physical-row evidence without materializing a join.
+- Read-only `probe_recipe_rules` compares explicit filter alternatives and seeks bounded observed/hypothetical singleton counterexamples. No difference found is never an equivalence proof.
+- Optional `include_report_receipt` on Recipe preview/commit prepares a client-owned value fingerprint before persistence and returns it only after verified commit. Read-only `check_report_receipt` separates source, saved-output and recomputed-result changes without automatic writes or authorship claims.
+- Added independent synthetic preflight controls and actual stdio coverage. Main exposes 86 tools; published 0.15.5 and its immutable 83-tool MCPB are unchanged. See [reporting preflight](docs/reporting-preflight.md) for limits and recovery.
+
 ## 0.15.5 - 2026-11-27
 
 ### Compatibility Notes

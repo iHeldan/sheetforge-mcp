@@ -60,7 +60,7 @@ def run_boundary_workflow(parameters, tmp_path):
             async with stdio_client(parameters, errlog=log) as (read, write):
                 async with ClientSession(read, write) as client:
                     await client.initialize()
-                    assert len((await client.list_tools()).tools) == 83
+                    assert len((await client.list_tools()).tools) == 86
 
                     async def call(tool, path=source, *, ok=True, **args):
                         reply = await client.call_tool(tool, {"filepath": str(path), **args})

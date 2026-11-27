@@ -149,6 +149,12 @@ structural diff and sampled value changes, not an exhaustive presentation diff.
 
 ## Persistence and limits
 
+Unreleased: `include_report_receipt=true` optionally prepares a client-owned
+fingerprint during preview and returns it only after verified commit. Pass the
+flag on both calls. Receipts share the pre-commit response budget, never change
+write permissions, and are not signatures. See [reporting preflight](reporting-preflight.md)
+for `check_report_receipt`, privacy, comparison semantics and acceptance tests.
+
 Compilation reads an isolated, stable byte copy. Tokens bind the recipe, recipe
 engine version, canonical workbook path, source digest and compiled operations.
 ChangeSet independently checks that same source digest before preparing and

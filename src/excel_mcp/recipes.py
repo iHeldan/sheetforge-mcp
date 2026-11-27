@@ -299,28 +299,7 @@ def _load_table(wb: Any, recipe: dict) -> dict:
             raise ValidationError(
                 f"Source field '{headers[index]}' contains mixed value types"
             )
-    for item in recipe["filters"]:
-        index = headers.index(item["field"])
-        nonblank = next((row[index] for row in rows if row[index] is not None), None)
-        if (
-            item["op"] in {"contains", "starts_with", "ends_with"}
-            and nonblank is not None
-            and not isinstance(nonblank, str)
-        ):
-            raise ValidationError(
-                f"String filter requires a text field: '{item['field']}'"
-            )
-        operands = item.get("values", [item["value"]] if "value" in item else [])
-        for value in operands:
-            if (
-                nonblank is not None
-                and value is not None
-                and _kind(nonblank) != _kind(value)
-            ):
-                raise ValidationError(
-                    f"Filter operand type does not match field '{item['field']}'"
-                )
-    return {
+    source = {
         "sheet_name": sheet,
         "table_name": table.displayName,
         "range_ref": table.ref,
@@ -333,6 +312,28 @@ def _load_table(wb: Any, recipe: dict) -> dict:
         },
         "totals_rows_excluded": int(table.totalsRowCount or 0),
     }
+    _validate_filter_inputs(source, recipe)
+    return source
+
+
+def _validate_filter_inputs(source: dict, recipe: dict) -> None:
+    for item in recipe["filters"]:
+        index = source["headers"].index(item["field"])
+        nonblank = next((row[index] for row in source["rows"] if row[index] is not None), None)
+        if (
+            item["op"] in {"contains", "starts_with", "ends_with"}
+            and nonblank is not None
+            and not isinstance(nonblank, str)
+        ):
+            raise ValidationError(
+                f"String filter requires a text field: '{item['field']}'"
+            )
+        operands = item.get("values", [item["value"]] if "value" in item else [])
+        for value in operands:
+            if nonblank is not None and value is not None and _kind(nonblank) != _kind(value):
+                raise ValidationError(
+                    f"Filter operand type does not match field '{item['field']}'"
+                )
 
 
 def _aggregate(source: dict, recipe: dict) -> dict:
@@ -629,12 +630,15 @@ def run_workbook_recipe(
     recipe_token: str | None = None,
     sample_limit: int = 5,
     workbook_contract: dict | None = None,
+    include_report_receipt: bool = False,
 ) -> dict:
     """Compile a native-table recipe from a stable snapshot and use ChangeSet persistence."""
     if not isinstance(mode, str) or mode not in {"preview", "commit"}:
         raise ValidationError("mode must be preview or commit")
     if type(sample_limit) is not int or not 1 <= sample_limit <= 10:
         raise ValidationError("sample_limit must be an integer from 1 to 10")
+    if type(include_report_receipt) is not bool:
+        raise ValidationError("include_report_receipt must be a boolean")
     expected = changeset._normalize_sha256(
         expected_workbook_sha256, required=mode == "commit"
     )
@@ -766,8 +770,18 @@ def run_workbook_recipe(
             summary["workbook_contract"] = changeset._bound_response_value(
                 contract_report
             )
+        if include_report_receipt:
+            from .report_receipts import make_receipt
+
+            # Prepare and budget the complete receipt BEFORE persistence. Existing
+            # ChangeSet assertions verify these exact saved values after replace.
+            summary["report_receipt"] = make_receipt(
+                requested, contract, source, normalized, output_result,
+                operations[0]["args"]["data"],
+            )
         _assert_summary_budget(summary)
         if not verification["passed"]:
+            summary.pop("report_receipt", None)
             if mode == "commit":
                 raise PreconditionFailedError(
                     "Recipe checks or invariance probes failed; workbook unchanged",
@@ -796,6 +810,8 @@ def run_workbook_recipe(
             sample_limit=sample_limit,
         )
         transaction.pop("changeset_token", None)
+        if not transaction["persisted"]:
+            summary.pop("report_receipt", None)
         return {
             **transaction,
             **summary,

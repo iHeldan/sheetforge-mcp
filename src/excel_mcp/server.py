@@ -34,6 +34,9 @@ from excel_mcp.validation import (
 from excel_mcp.calculations import inspect_formula as inspect_formula_impl
 from excel_mcp.changeset import apply_workbook_changeset as apply_workbook_changeset_impl
 from excel_mcp.recipes import run_workbook_recipe as run_workbook_recipe_impl
+from excel_mcp.join_rehearsal import rehearse_table_join as rehearse_table_join_impl
+from excel_mcp.rule_probe import probe_recipe_rules as probe_recipe_rules_impl
+from excel_mcp.report_receipts import check_report_receipt as check_report_receipt_impl
 from excel_mcp.contracts import inspect_workbook_contract as inspect_workbook_contract_impl
 from excel_mcp.explanations import explain_recipe_delta as explain_recipe_delta_impl
 from excel_mcp.rebase import apply_table_patch as apply_table_patch_impl
@@ -2025,6 +2028,7 @@ def run_workbook_recipe(
     recipe_token: Optional[str] = None,
     sample_limit: int = 5,
     workbook_contract: Optional[Dict[str, Any]] = None,
+    include_report_receipt: bool = False,
 ) -> str:
     """Preview or commit a reusable JSON recipe without echoing intermediate rows.
 
@@ -2054,6 +2058,10 @@ def run_workbook_recipe(
     is rejected. Preview first, then commit the unchanged recipe with recipe_token
     and expected_workbook_sha256 from preview. A verified snapshot is always enabled.
     Limits: 50,000 source cells, 64 source columns, 10,000 output cells; sample_limit 1-10.
+    include_report_receipt optionally returns a client-owned value fingerprint ONLY
+    after verified commit. Preview budgets it but returns no receipt. Supply the
+    flag on both preview and commit. Use check_report_receipt before a later refresh;
+    receipts are not signatures, write authorization or automatic conflict resolution.
     """
     return _run_tool(
         "run_workbook_recipe",
@@ -2062,8 +2070,73 @@ def run_workbook_recipe(
             expected_workbook_sha256=expected_workbook_sha256,
             recipe_token=recipe_token, sample_limit=sample_limit,
             workbook_contract=workbook_contract,
+            include_report_receipt=include_report_receipt,
         ),
     )
+
+
+@mcp.tool(structured_output=False, annotations=ToolAnnotations(title="Rehearse Table Join", readOnlyHint=True))
+def rehearse_table_join(
+    left_filepath: WorkbookPath, right_filepath: WorkbookPath,
+    left_source: Dict[str, Any], right_source: Dict[str, Any],
+    left_key: str, right_key: str, measure_field: str,
+    join_type: Literal["left", "inner"] = "left",
+    sample_limit: Literal[1, 2, 3, 4, 5] = 3,
+) -> str:
+    """Read-only all-match join preflight; never choose keys or allocate amounts.
+
+    Sources are {table_name, optional sheet_name}. Exact typed scalar keys; blank
+    keys never match, no trimming/coercion/case folding. One numeric measure_field
+    on the LEFT is checked for duplication/loss separately, even if net delta is
+    zero. Null measures count as zero and are reported. Tables exclude native
+    totals; hidden/filtered rows remain included. 50000 cells/64 columns per table.
+    Not cross_workbook_lookup's first-match behavior or proof of business grain.
+    No joined rows are materialized. Reuse both supplied paths unchanged.
+    """
+    return _run_tool("rehearse_table_join", lambda: rehearse_table_join_impl(
+        get_excel_path(left_filepath), get_excel_path(right_filepath), left_source,
+        right_source, left_key, right_key, measure_field, join_type, sample_limit,
+    ))
+
+
+@mcp.tool(structured_output=False, annotations=ToolAnnotations(title="Probe Recipe Rules", readOnlyHint=True))
+def probe_recipe_rules(
+    filepath: WorkbookPath, left_recipe: Dict[str, Any], right_recipe: Dict[str, Any],
+    sample_limit: Literal[1, 2, 3, 4, 5] = 3,
+) -> str:
+    """Compare two explicit Recipe v1 definitions differing ONLY in filters.
+
+    Up to 8 sum/count metrics; no checks or Workbook Contracts in v1. Compare full
+    bounded native-table results, then seek an observed/hypothetical SINGLE-ROW
+    counterexample (128 cases each, synthetic at most 4 fields). Output definitions
+    are never written. A hypothetical witness is not evidence that the row exists
+    or satisfies business constraints. No witness is NOT proof of equivalence.
+    Ask the owner which rule is intended; do not select or weaken either rule.
+    """
+    return _run_tool("probe_recipe_rules", lambda: probe_recipe_rules_impl(
+        get_excel_path(filepath), left_recipe, right_recipe, sample_limit,
+    ))
+
+
+@mcp.tool(structured_output=False, annotations=ToolAnnotations(title="Check Report Receipt", readOnlyHint=True))
+def check_report_receipt(
+    filepath: WorkbookPath, report_receipt: Dict[str, Any],
+    sample_limit: Literal[1, 2, 3, 4, 5] = 3,
+) -> str:
+    """Compare a retained Recipe report_receipt with current source and saved values.
+
+    Distinguishes source_changed, output_changed and result_changed under the
+    receipt's exact recipe/contract. Keyed groups tolerate row reorder; full-grid
+    hash still exposes order/padding/header changes. Conflicts require an owner
+    decision. Invalid sources fail rather than certify currency. No formula
+    evaluation, style validation, author attribution or automatic writes.
+    Receipts are client-owned bounded JSON, not signatures or write credentials.
+    Keep them private: they retain group labels/aggregate values and definitions;
+    hashes can disclose low-entropy data. Reuse approved filepath.
+    """
+    return _run_tool("check_report_receipt", lambda: check_report_receipt_impl(
+        get_excel_path(filepath), report_receipt, sample_limit,
+    ))
 
 
 @mcp.tool(

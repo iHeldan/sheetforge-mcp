@@ -17,7 +17,7 @@ def assert_tool_inventory(inventory, expected_tools=None):
     names = [tool.name for tool in inventory]
     assert len(names) == len(set(names)), "Server returned duplicate tool names"
     if expected_tools is None:
-        assert len(names) == 83
+        assert len(names) == 86
     else:
         assert set(names) == set(expected_tools), "Installed tool names do not match manifest"
 
@@ -210,7 +210,7 @@ def exercise_contract_workflow(
 
     asyncio.run(asyncio.wait_for(exercise(), timeout=45))
     return {
-        "tools": 83,
+        "tools": 86,
         "calls": len(sizes),
         "response_chars": sum(sizes),
         "installed": installed,

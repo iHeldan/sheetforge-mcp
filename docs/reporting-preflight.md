@@ -1,0 +1,156 @@
+# Reporting Preflight v1
+
+Unreleased. Main registers three new read-only tools (86 total); the published
+0.15.5 MCPB and package still expose 83. No new dependency is required.
+
+These tools help decide whether to join, which declared filter rule to approve,
+and whether an existing report needs attention. They do not infer business truth,
+choose definitions, authorize writes or run arbitrary code.
+
+## Join Rehearsal
+
+```json
+{
+  "left_filepath": "/reports/invoices.xlsx",
+  "right_filepath": "/reports/shipments.xlsx",
+  "left_source": {"table_name": "Invoices"},
+  "right_source": {"table_name": "Shipments"},
+  "left_key": "InvoiceId",
+  "right_key": "InvoiceId",
+  "measure_field": "Amount",
+  "join_type": "inner"
+}
+```
+
+Send these arguments to `rehearse_table_join`. Sources are explicit native Excel
+tables, optionally scoped by `sheet_name`. Only `left` and `inner` all-match joins
+are modeled. One numeric measure on the **left** is followed through each row's
+projected multiplicity. This is not the lookup tool's `match_mode="first"`.
+
+For two 120-unit invoices, if one has two shipment matches and the other none,
+an inner join still totals 240. The tool separately reports one multiplied row,
+one dropped row, `extra_signed: "120"`, `lost_signed: "120"` and `delta: "0"`.
+Absolute amounts expose cancellation among positive and negative measures too.
+Counts are complete; physical-row examples and right matching rows are sampled.
+Measure evidence uses exact decimal strings derived from the loaded numbers,
+not formatted Excel displays or a newly materialized joined workbook.
+
+Keys use exact typed equality: numeric `1` and `1.0` match, but text `"1"` and
+boolean `true` do not. No case folding or whitespace trimming. Null, empty and
+whitespace-only keys never match each other. Null measures contribute zero and
+are counted explicitly. Formula/error/date inputs and mixed field types are
+rejected, not coerced. Declared totals are excluded; hidden/filtered rows remain.
+
+`requires_decision` flags multiplied, dropped or unmatched left rows. It does
+not declare them errors. Many shipments to one unique invoice can legitimately
+preserve a shipment-count measure; allocating invoice revenue among shipment
+types still requires an owner-supplied allocation rule. Neither net conservation
+nor a clean preflight proves correct grain, attribution or missing-source coverage.
+
+## Rule Probe
+
+`probe_recipe_rules(filepath, left_recipe, right_recipe)` requires two Recipe v1
+objects identical **except for filters**. Up to eight sum/count metrics, no checks
+or Workbook Contracts in this first version. Both source definitions are validated
+and evaluated on the complete bounded actual table before seeking a witness.
+Output rectangles are neither read nor written by this probe.
+
+If the historical table has only positive sales, both "all entries" and
+"Amount >= 0" can reproduce its report. A hypothetical negative entry can expose
+their difference. A returned `witness` contains a single record and both computed
+results. `kind` clearly distinguishes an observed row from a hypothetical case;
+`source_row` is null for a hypothetical record. This is an example question for
+the data owner, not proof that the example exists or satisfies business constraints.
+
+The deterministic search tries up to 128 actual singleton rows and then up to
+128 hypothetical rows with at most four referenced fields and 16 values per
+field. Values come from bounded observed values, explicit predicates, boundary
+neighbors and type-appropriate examples. Invalid synthetic cases are counted.
+`real_results_differ` can be true even if no compact singleton witness is found.
+Results expose hashes, counts, bounded samples and search coverage. No witness
+means **no difference found in these tests**, never equivalence. Numeric group
+identities are exact; metric comparisons use Recipe's documented tolerances.
+The client may retain an owner-approved witness as a test case; the server does
+not store approval or automatically change the recipe.
+
+## Report Receipts
+
+Set `include_report_receipt=true` on both preview and commit of
+`run_workbook_recipe`. Keep the returned `report_receipt` outside the workbook.
+The default remains false. Preview constructs and budgets it but does **not**
+issue it. Commit returns it only after existing ChangeSet assertions have verified
+the exact saved output and source. No additional fallible receipt construction
+occurs after persistence. Oversized receipts fail before any mutation.
+
+The receipt holds the normalized recipe and optional contract, the recipe engine
+version, a fingerprint of referenced source values, bounded aggregate result rows,
+and a fingerprint of the entire reserved output rectangle including padding.
+Raw source records are not embedded, but group labels and aggregate metric values
+are retained to support historical comparisons. Definitions can also contain
+sensitive literals, and low-entropy hashes can be guessed: **treat the
+receipt as private**. Its checksum detects accidental edits, not an adversary
+who can replace it and recompute hashes. It is not a signature, authentication,
+durable delivery acknowledgment or exactly-once retry credential.
+
+```python
+from excel_mcp.report_receipts import check_report_receipt
+
+checked = check_report_receipt(filepath, report_receipt)
+```
+
+Use the same arguments with the MCP tool. It recomputes the receipt's exact
+definition against a fresh stable capture, including complete Contract/check
+validation, and compares it with stored output values:
+
+| Observation | Status / action |
+| --- | --- |
+| Stored values match current computed values | `current`; no numeric refresh needed |
+| Referenced source changed but aggregate is unchanged | `current`, `source_changed=true` |
+| Source result changed, saved output unchanged | `refresh_needed`; obtain a fresh preview |
+| Saved output changed and differs from current result | `conflict`; obtain an owner decision |
+| Source/contract invalid or unsupported | Error; no claim that the report is current |
+
+`source_changed` covers referenced fields and **all** source rows in physical
+order, excluding declared totals. It does not mean every workbook byte or every
+unreferenced column was compared. `source_sha256` separately identifies the full
+current capture. Logical groups and metrics are matched by hashes rather than
+output row position; reordering output groups alone is not a metric conflict,
+but `output_changed` still reports the full-grid change. Extra values in padding,
+changed headers, formulas and duplicate output groups cannot silently certify a
+matching result. Values are compared exactly after numeric identity normalization
+(`1` equals `1.0`, not `true`). Styles/layout/causes/authorship are not certified.
+`comparison_sample` returns bounded per-group `previous`, `computed` and `stored`
+metric values. Missing groups have null entries, not invented zero values.
+If headers/formulas/duplicate groups prevent interpretation of saved output,
+`stored_output_parseable=false`; no per-group stored interpretation is certified.
+
+Checking a receipt never writes. A later Recipe commit still needs its existing
+fresh preview credentials and output overwrite permission. The receipt does not
+automatically guard direct writers or resolve a changed output definition. Reuse
+the approved filepath; this portable receipt is not evidence of file identity.
+
+## Bounds And Acceptance
+
+Each source is limited to 50,000 table cells/64 columns and literal finite JSON
+values in referenced fields. Each file is captured stably under existing path,
+lock and input controls; two captures are **not** a distributed/cross-file
+transaction. This is not streaming or a memory bound on unrelated workbook data.
+All three tools use `sample_limit=3` by default, accepting integers 1-5. Evidence
+responses are capped at 12,000 escaped JSON characters. Receipts are capped at
+6,000 characters and share Recipe's existing 8,000-character pre-commit summary
+budget. Large definitions/groups can exceed these limits; omit the optional
+receipt rather than weakening mutation checks. No receipt history is persisted.
+An entirely null result row is indistinguishable from blank output padding and
+is refused when requesting a receipt; ordinary recipes retain their behavior.
+
+```bash
+uv run pytest -q tests/test_reporting_preflight.py
+```
+
+Acceptance includes independent nested-loop join arithmetic, cancelling losses
+and duplication, typed/blank keys, legitimate many-to-one counts, absent refunds,
+identical-rule inconclusiveness, receipt refresh/conflict/no-op cases, Contract
+rebinding, tampering/budget/transaction failures, byte/mtime preservation and real
+stdio tool discovery plus preview/commit/readback. These are synthetic scripted
+acceptance tests, not an actual-model success-rate or token-saving benchmark,
+native Excel visual acceptance or a guarantee of business correctness.
