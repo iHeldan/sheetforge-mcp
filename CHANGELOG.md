@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Added recurring weekly refresh, multi-file monthly consolidation and read-only variance/refusal acceptance with independent Decimal/preservation graders and negative controls. Chart replay checks now inspect full chart XML instead of root attributes only. See [reporting acceptance](docs/agent-reporting-tests.md) for scripted versus actual-agent evidence and limitations.
 - Tabular MCP schemas now enumerate `row_mode="arrays"|"objects"`; native-table and ChangeSet tool descriptions clarify row output and inherited operation paths without accepting invalid modes or cross-file operations.
 - Future PyPI publication requires successful push CI for the exact release tag and commit, including all four Linux/Windows jobs and the installed-wheel step. The guard reuses existing runs, rejects incomplete/failed checks and reads Actions with minimal token permissions; published tags/packages are unchanged.
 

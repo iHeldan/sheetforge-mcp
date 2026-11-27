@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 import time
+from xml.etree.ElementTree import tostring
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -112,7 +113,7 @@ def _source_and_layout(path):
             "header_fill": report["D4"].fill.fgColor.rgb,
             "freeze": report.freeze_panes,
             "print_area": str(report.print_area),
-            "chart": str(report._charts[0].to_tree().attrib),
+            "chart": tostring(report._charts[0]._write()),
             "chart_series": report._charts[0].series[0].val.numRef.f,
             "chart_anchor": (
                 report._charts[0].anchor._from.col,

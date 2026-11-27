@@ -102,3 +102,9 @@ Windows job at the intended commit before claiming Windows CI has passed.
 These checks cover local filesystem operations, not native Excel/Claude Desktop
 installation, OneDrive synchronization, network filesystems or distributed locks.
 Published packages and existing release tags are not modified by a CI-only patch.
+
+The offline suite also includes [recurring reporting acceptance](agent-reporting-tests.md)
+over real stdio MCP: Contract/Recipe refresh, multi-workbook consolidation and
+read-only variance/refusal workflows. Scripted controls and independent graders
+run in ordinary CI; optional actual-model evaluations remain separate and do not
+consume model credentials, network calls or usage budget in CI.

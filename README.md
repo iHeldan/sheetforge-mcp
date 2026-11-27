@@ -345,6 +345,12 @@ Run tests:
 uv run --extra dev pytest -q
 ```
 
+Recurring reporting acceptance covers weekly refreshes, multi-file monthly
+consolidation and read-only variance explanations, with independent numeric and
+preservation checks. See [reporting workflow tests](docs/agent-reporting-tests.md)
+for the reproducible fixtures, model-run method and evidence limits. Normal CI
+runs scripted MCP clients; it does not call an external language model.
+
 Run lint checks:
 
 ```bash
