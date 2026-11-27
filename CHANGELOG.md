@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Installed-wheel acceptance uses interpreter symlinks on POSIX so uv-managed macOS Python builds can locate `libpython`; Windows retains copies and all environment-isolation checks remain enabled.
 - Standard writes no longer reject floats such as `71753.65` merely because their XML decimal spelling differs: decoding must preserve the identical float. Exact integer/Decimal checks and rejection of actual precision loss, non-finite values and unsafe serialized cells remain in place.
 
 ### Changed

@@ -99,6 +99,11 @@ tests are explicitly skipped on non-Windows hosts. A simulated backend tests
 call shape and cleanup only; it is not Windows acceptance. Verify the actual
 Windows job at the intended commit before claiming Windows CI has passed.
 
+The installed-wheel test uses interpreter symlinks on POSIX, matching the `venv`
+CLI default and avoiding relocation failures with uv-managed macOS interpreters.
+Windows keeps interpreter copies without requiring symlink privileges. Both paths
+still disable system site packages and retain isolated import/origin checks.
+
 These checks cover local filesystem operations, not native Excel/Claude Desktop
 installation, OneDrive synchronization, network filesystems or distributed locks.
 Published packages and existing release tags are not modified by a CI-only patch.

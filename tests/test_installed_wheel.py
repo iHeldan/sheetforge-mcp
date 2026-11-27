@@ -112,7 +112,7 @@ def test_install_and_probe_use_fresh_environment_without_dev_lock(tmp_path, monk
     monkeypatch.setattr(installed_wheel.venv, "EnvBuilder", builder)
     monkeypatch.setattr(installed_wheel.subprocess, "run", run)
     installed_wheel.verify_wheel(dist)
-    assert builders == [{"system_site_packages": False, "with_pip": False}]
+    assert builders == [{"system_site_packages": False, "with_pip": False, "symlinks": os.name != "nt"}]
     assert len(calls) == 3
     install, check, probe = [command for command, _ in calls]
     assert install[:4] == ["/synthetic/uv", "--no-config", "pip", "install"]

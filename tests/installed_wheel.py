@@ -122,7 +122,9 @@ def verify_wheel(dist: Path) -> None:
         home, prefix = scratch / "home", scratch / "venv"
         home.mkdir()
         env = clean_environment(ROOT, home)
-        venv.EnvBuilder(system_site_packages=False, with_pip=False).create(prefix)
+        # POSIX interpreter builds may resolve libpython relative to the binary.
+        # Match the venv CLI default instead of relocating that binary by copy.
+        venv.EnvBuilder(system_site_packages=False, with_pip=False, symlinks=os.name != "nt").create(prefix)
         python, _ = environment_paths(prefix)
         subprocess.run(
             [uv, "--no-config", "pip", "install", "--python", str(python),
