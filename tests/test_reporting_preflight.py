@@ -366,7 +366,7 @@ def test_receipt_budget_failure_happens_before_any_write(source, recipe, monkeyp
 
 def test_receipt_tampering_and_unsupported_version_fail(source, recipe):
     receipt = receipt_for(source, recipe)
-    for key, value in [("version", 2), ("rows", []), ("receipt_sha256", "x")]:
+    for key, value in [("version", 3), ("rows", []), ("receipt_sha256", "x")]:
         bad = {**receipt, key: value}
         before = state(source)
         with pytest.raises(ValidationError):

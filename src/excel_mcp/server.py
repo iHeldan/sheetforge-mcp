@@ -2062,6 +2062,8 @@ def run_workbook_recipe(
     after verified commit. Preview budgets it but returns no receipt. Supply the
     flag on both preview and commit. Use check_report_receipt before a later refresh;
     receipts are not signatures, write authorization or automatic conflict resolution.
+    New receipt format 2 binds effective output headers and normalizes finite JSON
+    numeric identity throughout its checksum; real value/type changes still fail.
     """
     return _run_tool(
         "run_workbook_recipe",
@@ -2130,6 +2132,11 @@ def check_report_receipt(
     hash still exposes order/padding/header changes. Conflicts require an owner
     decision. Invalid sources fail rather than certify currency. No formula
     evaluation, style validation, author attribution or automatic writes.
+    A changed result plus reordered saved output remains a conservative conflict:
+    conflict_reason/output_values_changed/output_positions_only_changed distinguish
+    positional drift from changed values or unparseable structure. Do not silently
+    discard observed ordering. Unmodified legacy format-1 receipts remain supported
+    with their exact checksum, not format 2's numeric-transport tolerance.
     Receipts are client-owned bounded JSON, not signatures or write credentials.
     Keep them private: they retain group labels/aggregate values and definitions;
     hashes can disclose low-entropy data. Reuse approved filepath.

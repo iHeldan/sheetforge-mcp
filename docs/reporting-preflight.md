@@ -65,7 +65,12 @@ the data owner, not proof that the example exists or satisfies business constrai
 The deterministic search tries up to 128 actual singleton rows and then up to
 128 hypothetical rows with at most four referenced fields and 16 values per
 field. Values come from bounded observed values, explicit predicates, boundary
-neighbors and type-appropriate examples. Invalid synthetic cases are counted.
+neighbors and type-appropriate examples. Known column types are taken from the
+complete loaded source, even when its first eight values are null; example values
+remain sampled. An entirely null column has no observed type. Expected validation
+or calculation errors on hypothetical rows are counted as invalid synthetic cases,
+not failures of the real comparison. Actual-source errors and unexpected engine
+errors still propagate; no general exception suppression is performed.
 `real_results_differ` can be true even if no compact singleton witness is found.
 Results expose hashes, counts, bounded samples and search coverage. No witness
 means **no difference found in these tests**, never equivalence. Numeric group
@@ -81,6 +86,27 @@ The default remains false. Preview constructs and budgets it but does **not**
 issue it. Commit returns it only after existing ChangeSet assertions have verified
 the exact saved output and source. No additional fallible receipt construction
 occurs after persistence. Oversized receipts fail before any mutation.
+
+New receipts use **receipt format 2** (the Recipe itself stays version 1). Their
+checksum tags JSON containers/scalars and normalizes finite numeric identity
+throughout rows, recipe and contract. Thus JSON-equivalent `240.0`/`240`, `-0.0`/`0`
+and equivalent exponent spellings survive a normal JavaScript JSON roundtrip.
+Booleans, strings and numbers remain distinct. A real numeric change, including
+loss of an unsafe integer in a JavaScript client, is still rejected. This is not
+a general guarantee that JavaScript can preserve every Excel number or identifier.
+Other Recipe/ChangeSet tokens and fingerprint algorithms are unchanged.
+
+Format 2 stores `output_headers` from the actual compiled report. This preserves
+existing writer behavior: ordinary Recipe metric aliases are trimmed by the query
+engine; Contract-backed output retains requested aliases. The checker and its
+comparison labels follow those effective headers, without modifying the request
+or granting permission to rename a report column.
+
+Unmodified legacy format-1 receipts remain readable with their original exact
+checksum algorithm. They do **not** acquire format 2's numeric-transport tolerance.
+If a legacy receipt was altered by reserialization, retain/use its original JSON
+or obtain a new format-2 receipt during an authorized verified refresh. Do not
+rewrite its checksum to claim preserved history. Unsupported versions fail closed.
 
 The receipt holds the normalized recipe and optional contract, the recipe engine
 version, a fingerprint of referenced source values, bounded aggregate result rows,
@@ -108,6 +134,7 @@ validation, and compares it with stored output values:
 | Referenced source changed but aggregate is unchanged | `current`, `source_changed=true` |
 | Source result changed, saved output unchanged | `refresh_needed`; obtain a fresh preview |
 | Saved output changed and differs from current result | `conflict`; obtain an owner decision |
+| Output was reordered/repositioned and the computed result also changed | `conflict` with `conflict_reason="output_positions_changed"`; no implicit permission to discard the observed ordering |
 | Source/contract invalid or unsupported | Error; no claim that the report is current |
 
 `source_changed` covers referenced fields and **all** source rows in physical
@@ -119,6 +146,13 @@ but `output_changed` still reports the full-grid change. Extra values in padding
 changed headers, formulas and duplicate output groups cannot silently certify a
 matching result. Values are compared exactly after numeric identity normalization
 (`1` equals `1.0`, not `true`). Styles/layout/causes/authorship are not certified.
+`output_values_changed` compares stored group/metric values with the receipt,
+and is null when output cannot be interpreted. `output_positions_only_changed`
+identifies a changed grid whose keyed values still match the receipt (including
+row order or blank-row placement). It does not identify who changed it. A combined
+source refresh deliberately remains conservative; the separate `conflict_reason`
+distinguishes positions, values and unparseable output structure. An already-current
+reordered report still needs no numeric refresh. These advisory fields never write.
 `comparison_sample` returns bounded per-group `previous`, `computed` and `stored`
 metric values. Missing groups have null entries, not invented zero values.
 If headers/formulas/duplicate groups prevent interpretation of saved output,
@@ -144,7 +178,7 @@ An entirely null result row is indistinguishable from blank output padding and
 is refused when requesting a receipt; ordinary recipes retain their behavior.
 
 ```bash
-uv run pytest -q tests/test_reporting_preflight.py
+uv run pytest -q tests/test_reporting_preflight.py tests/test_preflight_audit_regressions.py
 ```
 
 Acceptance includes independent nested-loop join arithmetic, cancelling losses
@@ -154,3 +188,7 @@ rebinding, tampering/budget/transaction failures, byte/mtime preservation and re
 stdio tool discovery plus preview/commit/readback. These are synthetic scripted
 acceptance tests, not an actual-model success-rate or token-saving benchmark,
 native Excel visual acceptance or a guarantee of business correctness.
+The audit regressions include optional actual Node JSON and Node-plus-MCP checks
+(skipped if Node is absent), alongside unconditional Python numeric-identity,
+legacy-validation, known-type, synthetic-error and conflict-policy controls. Node
+is not a runtime dependency of SheetForge.

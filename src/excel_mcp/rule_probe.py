@@ -5,7 +5,7 @@ import math
 
 from . import recipes, workbook
 from . import reporting_evidence as evidence
-from .exceptions import ValidationError
+from .exceptions import DataError, ValidationError
 
 MAX_CASES = 128
 
@@ -86,24 +86,35 @@ def probe_recipe_rules(
             if len(fields) <= 4:
                 choices = []
                 for field, index in zip(fields, fields_indexes):
+                    known = next(
+                        (
+                            row[index]
+                            for row in source["rows"]
+                            if row[index] is not None
+                        ),
+                        None,
+                    )
+                    known_kind = recipes._kind(known) if known is not None else None
                     values = [
                         row[index]
                         for row in source["rows"][:8]
                         if row[index] is not None
                     ]
+                    if not values and known is not None:
+                        values.append(known)
                     for r in (left, right):
                         for spec in r["filters"]:
                             if spec["field"] == field:
                                 values.extend(spec.get("values", [spec.get("value")]))
                     nonnull = [v for v in values if v is not None]
-                    kind = recipes._kind(nonnull[0]) if nonnull else "number"
-                    if any(recipes._kind(v) != kind for v in nonnull):
-                        raise ValidationError(
-                            "Synthetic probe operands have incompatible types"
-                        )
+                    kind = known_kind or (
+                        recipes._kind(nonnull[0]) if nonnull else "number"
+                    )
                     if kind == "number":
                         values += [-1, 0, 1]
-                        for value in nonnull[:8]:
+                        for value in [
+                            v for v in nonnull if recipes._kind(v) == "number"
+                        ][:8]:
                             values += [value - 1, value + 1]
                     elif kind == "str":
                         values += ["", "other", "posted", "cancelled"]
@@ -112,6 +123,12 @@ def probe_recipe_rules(
                     values.append(None)
                     unique = {}
                     for v in values:
+                        if (
+                            v is not None
+                            and known_kind is not None
+                            and recipes._kind(v) != known_kind
+                        ):
+                            continue
                         if type(v) is float and not math.isfinite(v):
                             continue
                         unique.setdefault(evidence.identity(v), v)
@@ -125,7 +142,9 @@ def probe_recipe_rules(
                     synthetic += 1
                     try:
                         examine(row, "hypothetical_single_row")
-                    except ValidationError:
+                    except (ValidationError, DataError):
+                        # Only proposed rows are disposable; actual-source and
+                        # unexpected engine errors must still propagate.
                         invalid += 1
                         continue
                     if witness:

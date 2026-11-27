@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- New report receipts use format 2 with effective output headers and a typed numeric-identity checksum across rows, recipe and contract. Ordinary JSON reserialization (`240.0` to `240`, signed zero or exponent spelling) no longer rejects unchanged values; actual numeric/type changes still fail. Legacy format-1 receipts retain exact verification. Recipe/ChangeSet tokens and published packages are unchanged.
+- Receipt checks follow the actual writer's metric labels, preventing immediate false conflicts for accepted whitespace aliases without changing Contract/non-contract writing behavior. Conflict metadata explicitly distinguishes positions-only drift, changed values and invalid structure; combined reordering/source refresh conservatively still needs an owner decision.
+- Rule Probe preserves valid real comparisons when an expected error occurs on a synthetic row, while propagating actual-source/unexpected errors. Known synthetic column kinds use the full bounded source instead of assuming the first eight rows establish its type. Regression coverage includes actual optional Node/MCP roundtrips, tampering, legacy checks and negative controls.
+
 ### Added
 
 - Read-only `rehearse_table_join` exposes complete join multiplicity, separate signed/absolute measure duplication and loss, and bounded physical-row evidence without materializing a join.

@@ -6,7 +6,7 @@ from . import changeset, recipes, workbook
 from . import reporting_evidence as evidence
 from .exceptions import PreconditionFailedError, ValidationError
 
-VERSION = 1
+VERSION = 2
 MAX_RECEIPT_CHARS = 6_000
 
 
@@ -30,6 +30,25 @@ def _row_fingerprints(rows, group_count):
             raise ValidationError("Output has duplicate group identities")
         indexed[key] = [evidence.digest(_atom(v)) for v in row[group_count:]]
     return indexed
+
+
+def _receipt_digest(value):
+    # Tag every node, not just numbers: a JSON array ["number", "1"] must
+    # never collide with the numeric scalar 1. Do not alter other tool tokens.
+    def canonical(node):
+        if isinstance(node, dict):
+            return ["object", [[key, canonical(node[key])] for key in sorted(node)]]
+        if isinstance(node, list):
+            return ["array", [canonical(item) for item in node]]
+        return _atom(node)
+
+    return evidence.digest(canonical(value))
+
+
+def _output_headers(requested, contract, result):
+    if contract is not None:
+        return [*requested["group_by"], *[m["as"] for m in requested["metrics"]]]
+    return result["headers"]
 
 
 def _source_digest(source, recipe):
@@ -58,8 +77,9 @@ def make_receipt(requested, contract, source, compiled, result, padded):
             [[_atom(v) for v in row] for row in padded]
         ),
         "rows": result["rows"],
+        "output_headers": result["headers"],
     }
-    receipt["receipt_sha256"] = evidence.digest(receipt)
+    receipt["receipt_sha256"] = _receipt_digest(receipt)
     return evidence.bounded(receipt, MAX_RECEIPT_CHARS)
 
 
@@ -76,10 +96,16 @@ def _normalize(receipt):
         "rows",
         "receipt_sha256",
     }
+    if (
+        isinstance(receipt, dict)
+        and type(receipt.get("version")) is int
+        and receipt["version"] == 2
+    ):
+        keys.add("output_headers")
     recipes._object(receipt, allowed=keys, required=keys, location="report_receipt")
     if (
         type(receipt["version"]) is not int
-        or receipt["version"] != VERSION
+        or receipt["version"] not in (1, VERSION)
         or type(receipt["recipe_engine_version"]) is not int
         or receipt["recipe_engine_version"] != recipes.RECIPE_ENGINE_VERSION
     ):
@@ -89,8 +115,9 @@ def _normalize(receipt):
             r"[0-9a-f]{64}", receipt[name]
         ):
             raise ValidationError(f"Invalid receipt {name}")
+    checksum = _receipt_digest if receipt["version"] == 2 else evidence.digest
     if (
-        evidence.digest({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+        checksum({k: v for k, v in receipt.items() if k != "receipt_sha256"})
         != receipt["receipt_sha256"]
     ):
         raise ValidationError("Report receipt integrity check failed")
@@ -99,6 +126,12 @@ def _normalize(receipt):
         raise ValidationError("Receipt recipe is not normalized")
     rows = receipt["rows"]
     width = len(normalized["group_by"]) + len(normalized["metrics"])
+    if receipt["version"] == 2:
+        headers = receipt["output_headers"]
+        if not isinstance(headers, list) or len(headers) != width:
+            raise ValidationError("Invalid receipt output headers")
+        for header in headers:
+            recipes._name(header, "receipt output header")
     if not isinstance(rows, list) or any(
         not isinstance(row, list)
         or len(row) != width
@@ -145,10 +178,12 @@ def check_report_receipt(
             c1, r1, c2, r2 = changeset._range_bounds(
                 output["range_ref"], location="receipt output"
             )
-            expected_headers = [
-                *requested["group_by"],
-                *[m["as"] for m in requested["metrics"]],
-            ]
+            expected_headers = _output_headers(requested, contract, result)
+            if (
+                receipt["version"] == 2
+                and receipt["output_headers"] != expected_headers
+            ):
+                raise ValidationError("Receipt output headers do not match its recipe")
             width = len(expected_headers)
             stored = None
             stored_rows = None
@@ -202,6 +237,8 @@ def check_report_receipt(
         output_changed = grid_sha != receipt["output_grid_sha256"]
         result_changed = current != old
         stored_matches = stored == current
+        values_changed = stored != old if stored is not None else None
+        positions_only = bool(output_changed and stored is not None and stored == old)
         status = (
             "current"
             if stored_matches
@@ -209,6 +246,15 @@ def check_report_receipt(
             if output_changed or not result_changed
             else "refresh_needed"
         )
+        conflict_reason = None
+        if status == "conflict":
+            conflict_reason = (
+                "output_structure_changed"
+                if stored is None
+                else "output_values_changed"
+                if values_changed
+                else "output_positions_changed"
+            )
         changed = [
             key
             for key in sorted(set(old) | set(current))
@@ -232,7 +278,7 @@ def check_report_receipt(
             and stored.get(key) != current.get(key)
         ]
         examples = []
-        aliases = [m["as"] for m in requested["metrics"]]
+        aliases = expected_headers[group_count:]
         for key in relevant[:sample_limit]:
             label_row = current_values.get(
                 key, previous_values.get(key, stored_values.get(key))
@@ -251,13 +297,16 @@ def check_report_receipt(
             examples.append(item)
         return evidence.bounded(
             {
-                "version": VERSION,
+                "version": receipt["version"],
                 "read_only": True,
                 "status": status,
                 "source_sha256": sha,
                 "source_changed": source_changed,
                 "source_change_scope": "referenced fields and all source rows in worksheet order, excluding declared totals",
                 "output_changed": output_changed,
+                "output_values_changed": values_changed,
+                "output_positions_only_changed": positions_only,
+                "conflict_reason": conflict_reason,
                 "result_changed": result_changed,
                 "stored_result_matches_current": stored_matches,
                 "changed_group_count": len(changed),
