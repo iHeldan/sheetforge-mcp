@@ -70,6 +70,35 @@ def test_supported_values_round_trip(tmp_path, kind, value):
     assert result["changed_cells"] >= 1
 
 
+@pytest.mark.parametrize("kind", WRITERS)
+@pytest.mark.parametrize("value", [71753.65, -71753.65, 0.8455124082255701])
+def test_float_spelling_changes_without_value_loss_are_supported(tmp_path, kind, value):
+    from excel_mcp.values import validate_cell_value
+
+    # A longer XML decimal can reload as the exact same IEEE-754 float. This is
+    # different from 0.1 + 0.2 becoming 0.3, which must still be rejected.
+    path = make_book(tmp_path, kind)
+    before = path.read_bytes()
+    validate_cell_value(value)
+    write(path, kind, value, dry_run=True)
+    assert path.read_bytes() == before
+    write(path, kind, value)
+    wb = load_workbook(path)
+    try:
+        row = 3 if kind.endswith("append") else 2
+        assert wb["Data"].cell(row, 2).value == value
+    finally:
+        wb.close()
+
+
+@pytest.mark.parametrize("value", [Decimal("71753.65"), 9007199254740993, 0.1 + 0.2])
+def test_float_round_trip_policy_does_not_relax_exact_decimal_or_integer_checks(value):
+    from excel_mcp.values import validate_cell_value
+
+    with pytest.raises(DataError, match="round-trip"):
+        validate_cell_value(value)
+
+
 @pytest.mark.parametrize("kind", ["sheet_update", "native_upsert"])
 def test_boolean_key_does_not_select_numeric_identity(tmp_path, kind):
     path = make_book(tmp_path, kind)

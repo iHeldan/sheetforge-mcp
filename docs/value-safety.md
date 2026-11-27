@@ -15,6 +15,11 @@ cell values, not complete XLSX feature fidelity or calculated formula results.
   automatically converted to text. Supply an identifier as a string explicitly
   when its digits must be preserved. Binary tails such as `0.1 + 0.2` may also
   require the caller to provide the intended representable number explicitly.
+- Unreleased correction: float identity is checked after decoding the serialized decimal into a float.
+  A value such as `71753.65` can have a longer XML spelling yet reload as the
+  identical IEEE-754 value; that is accepted, not rounded to a nearby float.
+  Integers and explicit Python `Decimal` inputs still require exact decimal
+  digits. This does not make binary floating-point amounts exact decimal money.
 - Numerically equal values such as `1` and `1.0` may reload as the same integer.
   Boolean `true` is not equal to numeric `1`, including for keyed mutations.
 - Text must be nonempty, at most 32767 UTF-16 code units, and valid XML text.

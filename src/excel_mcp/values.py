@@ -40,7 +40,15 @@ def validate_cell_value(value: Any, *, data_type: str | None = None) -> None:
         try:
             encoded = safe_string(value)
             decoded = Decimal(encoded)
-            if not decoded.is_finite() or decoded != Decimal(str(value)):
+            if not decoded.is_finite():
+                raise ValueError
+            # XML decimal spellings can differ while decoding to the identical
+            # IEEE float. Integers and Decimal inputs still require exact digits.
+            if isinstance(value, float):
+                unchanged = float(decoded) == value
+            else:
+                unchanged = decoded == Decimal(str(value))
+            if not unchanged:
                 raise ValueError
             if not math.isfinite(float(decoded)):
                 raise ValueError

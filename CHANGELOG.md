@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Standard writes no longer reject floats such as `71753.65` merely because their XML decimal spelling differs: decoding must preserve the identical float. Exact integer/Decimal checks and rejection of actual precision loss, non-finite values and unsafe serialized cells remain in place.
+
 ### Changed
 
 - Future PyPI publication requires successful push CI for the exact release tag and commit, including all four Linux/Windows jobs and the installed-wheel step. The guard reuses existing runs, rejects incomplete/failed checks and reads Actions with minimal token permissions; published tags/packages are unchanged.
