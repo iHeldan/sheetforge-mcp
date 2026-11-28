@@ -317,7 +317,12 @@ def _delta(
     return [right - left for left, right in zip(old, new)]
 
 
-def _pairs(before: dict, after: dict, fields: list[str]):
+def _pairs(
+    before: dict,
+    after: dict,
+    fields: list[str],
+    measure_fields: frozenset = frozenset(),
+):
     # Preserve source ordering for stable tie-breaking without sorting raw values
     # that might be null, text, or numeric composite keys.
     for key in dict.fromkeys([*before, *after]):
@@ -329,6 +334,8 @@ def _pairs(before: dict, after: dict, fields: list[str]):
                 field
                 for field in fields
                 if _identity(old.values[field]) != _identity(new.values[field])
+                or field in measure_fields
+                and _number(old.values[field]) != _number(new.values[field])
             ]
         )
         category = (
@@ -344,11 +351,17 @@ def _pairs(before: dict, after: dict, fields: list[str]):
 
 
 def _breakdown(
-    before: dict, after: dict, fields: list[str], size: int, group: tuple | None = None
+    before: dict,
+    after: dict,
+    fields: list[str],
+    size: int,
+    group: tuple | None = None,
+    *,
+    measure_fields: frozenset = frozenset(),
 ) -> dict:
     totals = {category: [ZERO] * size for category in CATEGORIES}
     counts = dict.fromkeys(CATEGORIES, 0)
-    for category, old, new, _ in _pairs(before, after, fields):
+    for category, old, new, _ in _pairs(before, after, fields, measure_fields):
         if group is not None and not any(
             record and record.included and record.group == group
             for record in (old, new)
@@ -445,7 +458,13 @@ def _present(
             data.get(selected, zeros) if selected is not None else _totals(data, size)
         )
 
-    breakdown = _breakdown(before, after, fields, size, selected)
+    # Key equality and decimal measure equality intentionally have different rules.
+    measure_fields = frozenset(
+        item["field"] for item in recipe["metrics"] if item["op"] == "sum"
+    )
+    breakdown = _breakdown(
+        before, after, fields, size, selected, measure_fields=measure_fields
+    )
     scoped_values = [
         scoped(data)
         for data in (before_actual, after_actual, before_exact, after_exact)
@@ -511,7 +530,7 @@ def _present(
     ]
     pairs = [
         pair
-        for pair in _pairs(before, after, fields)
+        for pair in _pairs(before, after, fields, measure_fields)
         if pair[0] != "unchanged"
         and (
             selected is None

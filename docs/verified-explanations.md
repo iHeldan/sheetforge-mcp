@@ -74,6 +74,10 @@ complete result in the normal `ok`/`data` envelope.
   Numeric keys and group identities use exact loaded integer/float values, not
   decimal-string approximation (`10**23` differs from float `1e23`). This does
   not change the independent decimal measure/contribution arithmetic.
+  A `sum` field also compares those decimal measure values: an equal large
+  integer/float pair with different decimal spellings is reported as `updated`
+  when its decimal measure value changes, even if filters exclude the row.
+  Keys and group matching remain exact; excluded rows still contribute zero.
 - `added` and `removed` refer to keys present in only one version. `updated` refers
   to retained keys with changed recipe-referenced/key field values. `unchanged`
   ignores cell position and unreferenced fields, not all possible workbook changes.
@@ -157,7 +161,7 @@ It excludes sample size. The source/recipe pins do not pin implementation versio
 across server upgrades. It is not authentication,
 a commit credential or an exactly-once receipt. The service stores no session.
 The exact numeric-key correction can change result/explanation fingerprints for
-fractional numeric groups; obtain fresh evidence rather than treating an older
+numeric groups; obtain fresh evidence rather than treating an older
 fingerprint as a write credential. Existing Recipe/receipt formats are unchanged.
 
 ## Capture and limits

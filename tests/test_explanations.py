@@ -3,6 +3,8 @@ import copy
 import hashlib
 import json
 import random
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -118,6 +120,56 @@ def test_reordering_is_not_a_data_change(books, recipe):
     assert result["changes"]["counts"]["unchanged"] == 2
     assert result["changes"]["sample"] == [] and result["groups"]["changed_count"] == 0
     assert result["sources"]["after"]["bindings"]["Amount"] == "A1"
+
+
+@pytest.mark.parametrize("integer", [2**60, int(1e23)])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_equal_integer_float_measures_reconcile_decimal_changes(
+    books, recipe, integer, reverse, scoped
+):
+    before = books("integer.xlsx", [[1, "North", 0]])
+    after = books("float.xlsx", [[1, "North", float(integer)]])
+    # Preserve an exact integer literal, not openpyxl's rounded numeric writer.
+    with ZipFile(before) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+    sheet = ET.fromstring(members["xl/worksheets/sheet1.xml"])
+    ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    sheet.find("s:sheetData/s:row/s:c[@r='C2']/s:v", ns).text = str(integer)
+    members["xl/worksheets/sheet1.xml"] = ET.tostring(sheet)
+    with ZipFile(before, "w") as archive:
+        for name, content in members.items():
+            archive.writestr(name, content)
+    if reverse:
+        before, after = after, before
+    frozen = [p.read_bytes() for p in (before, after)]
+    delta = Fraction(str(float(integer))) - integer
+    if reverse:
+        delta = -delta
+    result = _call(
+        before, after, recipe, **({"group": {"Region": "North"}} if scoped else {})
+    )
+    assert result["status"] == "verified"
+    assert result["changes"]["counts"] == {
+        "added": 0,
+        "removed": 0,
+        "updated": 1,
+        "unchanged": 0,
+    }
+    assert set(result["changes"]["sample"][0]["fields_changed"]) == {"Amount"}
+    revenue, count = result["metrics"]
+    assert revenue["delta"] == revenue["components"]["updated"] == _text(delta)
+    assert revenue["residual"] == count["delta"] == "0"
+    assert [p.read_bytes() for p in (before, after)] == frozen
+
+
+def test_equal_numeric_key_spelling_without_measure_change_is_unchanged(recipe):
+    fields = ["Id", "Region", "Amount"]
+    before = _index(_source([[2**60, "North", 10]]), recipe, ["Id"], fields)
+    after = _index(_source([[float(2**60), "North", 10]]), recipe, ["Id"], fields)
+    result = _breakdown(before, after, fields, 2, measure_fields=frozenset({"Amount"}))
+    assert result["counts"]["unchanged"] == 1
+    assert result["totals"]["unchanged"] == [0, 0]
 
 
 def test_group_drilldown_and_omitted_cancelling_groups(books, recipe):
