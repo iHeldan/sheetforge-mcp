@@ -158,7 +158,7 @@ structural diff and sampled value changes, not an exhaustive presentation diff.
 
 ## Persistence and limits
 
-Unreleased: `include_report_receipt=true` optionally prepares a client-owned
+Since `0.16.0`, `include_report_receipt=true` optionally prepares a client-owned
 fingerprint during a passing preview and returns it only after verified commit.
 Failed checks retain their verification report without constructing an optional receipt. Pass the
 flag on both calls. Receipts share the pre-commit response budget, never change

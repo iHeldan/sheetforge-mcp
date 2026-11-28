@@ -118,6 +118,23 @@ choices and cache state vary, and one attempt per phase is not a reliability
 estimate. Raw transcripts, temporary workbooks and usage receipts are not shipped
 in packages; public fixtures, prompts, graders and scripted controls are reusable.
 
+## Reporting Preflight Pilot (0.16.0 Candidate)
+
+A separate bounded synthetic pilot used the same CLI/model/effort with an
+installed 86-tool candidate and 120 source rows. The first fresh session used
+join rehearsal to identify cancelling duplication/loss, compared explicit rules
+without excluding refunds, and previewed, committed and checked a report receipt
+(six MCP calls). A second session detected a changed source through the retained
+receipt, refreshed the same approved Recipe and checked its new receipt (five calls).
+Both passed independent Decimal totals, source/non-output/style/chart preservation
+and pre-mutation snapshot checks. No human task intervention was needed.
+
+One earlier setup attempt exposed no MCP tools because CLI safe mode disabled the
+explicit server; it made no workbook calls and was retained as a harness failure.
+Only the two connected sessions count as completed workflow phases. This pilot
+is not a new comparative benchmark or a native Excel visual acceptance result.
+Its transcripts, workbooks and grading state remain private and are not packaged.
+
 These are small synthetic acceptance cases, not a statistically representative
 success rate, a cross-model benchmark, customer acceptance or native Excel visual
 validation. They do not establish cloud locking, universal XLSX fidelity or the

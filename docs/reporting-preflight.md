@@ -1,7 +1,7 @@
 # Reporting Preflight v1
 
-Unreleased. Main registers three new read-only tools (86 total); the published
-0.15.5 MCPB and package still expose 83. No new dependency is required.
+Available since `0.16.0`: three read-only tools (86 total). Earlier `0.15.5`
+packages and their 83-tool MCPB remain unchanged. No new dependency is required.
 
 These tools help decide whether to join, which declared filter rule to approve,
 and whether an existing report needs attention. They do not infer business truth,

@@ -10,8 +10,9 @@ Instead of treating every sheet as a blind cell grid, SheetForge helps agents di
 
 Package name: `sheetforge-mcp`
 CLI command: `sheetforge-mcp`
-Published package release: `0.15.5`
-Repository docs track the current main-branch tool surface, which currently exposes `86` MCP tools. The three [reporting preflight tools](docs/reporting-preflight.md) are unreleased; published `0.15.5` retains 83 tools.
+Published package release: `0.16.0`
+This release currently exposes `86` MCP tools, including three [reporting preflight tools](docs/reporting-preflight.md). Version `0.15.5` and its published 83-tool MCPB remain unchanged.
+Version `0.16.0` adds read-only join rehearsal, explicit rule comparisons and client-owned report receipts. It also fixes exact numeric identity in Rebase and reporting, operator validation and keyed aggregate comparisons. Receipts are private value fingerprints, not signatures or write permission. See the [release notes](CHANGELOG.md#0160---2026-11-28) and [preflight examples and limits](docs/reporting-preflight.md).
 Version `0.15.0` adds [opt-in preserving XLSX saves](docs/xlsx-fidelity.md#preserving-save-mode) for literal cell edits in a restricted workbook profile. [Targeted XLSX fidelity checks](docs/xlsx-fidelity.md) still guard direct and ChangeSet-backed writes.
 Version `0.15.1` extends the targeted fidelity guard to ordinary standalone mutations and their dry runs, with checked grid boundaries, safer structural edits, verified formula/copy/pivot values, and early configurable XLSX input limits. Unsafe or unverifiable operations can now be refused before saving. See the [changelog](CHANGELOG.md#0151---2026-11-20), [value-safety policy](docs/value-safety.md), and [input-limit guide](docs/xlsx-input-limits.md).
 
@@ -228,7 +229,7 @@ The most agent-friendly read tools are:
 - `apply_workbook_repairs`: dry-runs or applies the safe repair subset from those plans, including broken named ranges, broken validation rules, broken conditional formats, and optional hidden-sheet reveals
 - `apply_workbook_changeset`: previews a bounded multi-tool report mutation on an isolated candidate, evaluates explicit postconditions, and commits it with exact-file stale-write protection plus optional verified snapshot and rollback
 - `run_workbook_recipe`: executes a versioned JSON recipe over one native table, checks unique keys, row counts or sum reconciliation, probes column/row-order invariance, and writes a reserved rectangle in the same workbook through ChangeSet preview/commit. See the [Verified Recipes guide](docs/verified-recipes.md) and [example recipe](docs/examples/regional-sales.recipe.json).
-- Unreleased reporting preflight: `rehearse_table_join` exposes multiplication/loss before a join; `probe_recipe_rules` seeks examples distinguishing explicit filters; `check_report_receipt` compares retained Recipe fingerprints with current sources and saved output. Read-only checks do not choose business rules or authorize writes. See [limits and examples](docs/reporting-preflight.md).
+- Reporting preflight (since `0.16.0`): `rehearse_table_join` exposes multiplication/loss before a join; `probe_recipe_rules` seeks examples distinguishing explicit filters; `check_report_receipt` compares retained Recipe fingerprints with current sources and saved output. Read-only checks do not choose business rules or authorize writes. See [limits and examples](docs/reporting-preflight.md).
 - `explain_recipe_delta`: independently reconciles changes in recomputed `sum`/`count` recipe results across two source versions by unique keys. Includes group drilldown, exact decimal evidence and explicit sample remainders. It does not validate saved report cells or infer business causes. See [Verified Explanations](docs/verified-explanations.md).
 - `diff_workbooks`: compares two workbook files and reports structural changes plus sampled cell-value diffs, which is useful for before/after verification in agent workflows
 - `create_workbook_snapshot`: creates the verified, non-overwriting baseline that makes `diff_workbooks` usable without an external copy script

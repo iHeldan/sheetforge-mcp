@@ -239,8 +239,7 @@
           inspect formulas, and plan safer edits before writing.
         </p>
         <p>
-          Published package release: <strong>0.15.5</strong>. The repository currently
-          exposes <strong>86 MCP tools</strong> on main (83 in published 0.15.5), including smart read-strategy suggestions,
+          Published package release: <strong>0.16.0</strong>, with <strong>86 MCP tools</strong>, including smart read-strategy suggestions,
           lightweight dataset summaries, declarative table queries, grouped aggregates,
           cross-workbook aggregation, cross-workbook filtering, cross-workbook unions, cross-workbook lookups, workbook profiling, repair
           planning and execution, assertion-backed ChangeSet previews and commits, opt-in preserving XLSX saves for supported literal edits, verified workbook snapshots, workbook diffs, formula-lineage debugging,
@@ -251,12 +250,12 @@
           and workbook-level impact analysis for formulas, validations, and conditional formatting.
         </p>
         <p>
-          Version 0.15.5 fixes false floating-point write refusals, improves tabular
-          schemas and ChangeSet guidance, and adds independently graded recurring
-          reporting workflows. Publication requires successful CI for the exact tag
-          and commit, including Windows and installed-wheel checks. The 83 tools and
-          dependency requirements are unchanged; update the pinned MCPB extension
-          to receive the new runtime.
+          Version 0.16.0 adds read-only join rehearsal, explicit rule comparisons
+          and client-owned report receipts. It fixes exact numeric identity in
+          Rebase and reporting, operator validation and keyed aggregate comparison.
+          Publication requires successful CI for the exact tag and commit, including
+          Windows and installed-wheel checks. Update the pinned MCPB extension to
+          receive the new runtime. Earlier published packages remain unchanged.
         </p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://github.com/iHeldan/sheetforge-mcp">View Repository</a>
@@ -269,7 +268,7 @@
         <h2>At a glance</h2>
         <ul class="meta-list">
           <li>Python 3.10+</li>
-          <li>86 MCP tools on main; 83 in published 0.15.5</li>
+          <li>86 MCP tools</li>
           <li>Smart dataset summaries and read-strategy guidance</li>
           <li>Supports `stdio`, `streamable-http`, and deprecated `sse`</li>
           <li>Uniform JSON envelopes for every tool response</li>

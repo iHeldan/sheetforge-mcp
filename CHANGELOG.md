@@ -2,8 +2,16 @@
 
 ## Unreleased
 
+## 0.16.0 - 2026-11-28
+
+### Compatibility Notes
+
+- Adds three read-only MCP tools (86 total) with no new dependencies. Optional Recipe receipts default off and are issued only after verified commit. Receipt format 3 uses exact numeric identity; legacy formats retain their original algorithms only for unambiguous domains. Receipts contain potentially sensitive definitions/group values and never authorize writes.
+- Rebase now refuses large-number int/float key, read-premise and target mismatches that decimal-spelling comparison could incorrectly accept. Filter guards consistently interpret operator case/whitespace without silently rewriting valid retained receipt definitions. Numeric-group explanation fingerprints can change after the identity correction; obtain fresh evidence. Update the MCPB to receive its pinned `0.16.0` runtime; older published releases remain immutable.
+
 ### Fixed
 
+- Explanations report equal large integer/float measures with differing decimal contributions as updates instead of refusing reconciliation; exact key/group matching and decimal contribution arithmetic are unchanged.
 - Rebase uses exact typed numeric identity for keys, declared read dependencies and target conflict/already-satisfied checks. Large integer/float decimal-spelling collisions no longer authorize stale or wrong-row writes; genuinely equal int/float values still work. Source pins, snapshots, whole-batch refusal and ChangeSet persistence remain enforced.
 - Join/Rule Probe and explanation key identities now agree with executed numeric equality without changing independent decimal measure arithmetic. Recipe invariance and Rule Probe compare keyed groups instead of zipped display rows, avoiding false differences/refusals for equivalent numeric group representations. Existing display ordering is retained.
 - Recipe filter syntax/type guards interpret operator case/whitespace consistently with execution. Text operators cannot bypass numeric-field rejection, and blank checks cannot silently ignore operands. Valid historical recipe/receipt spelling and checksum algorithms are preserved without repairs/upgrades. Added actual stdio and blocked/allowed commit regressions.
@@ -17,7 +25,7 @@
 - Read-only `rehearse_table_join` exposes complete join multiplicity, separate signed/absolute measure duplication and loss, and bounded physical-row evidence without materializing a join.
 - Read-only `probe_recipe_rules` compares explicit filter alternatives and seeks bounded observed/hypothetical singleton counterexamples. No difference found is never an equivalence proof.
 - Optional `include_report_receipt` on Recipe preview/commit prepares a client-owned value fingerprint before persistence and returns it only after verified commit. Read-only `check_report_receipt` separates source, saved-output and recomputed-result changes without automatic writes or authorship claims.
-- Added independent synthetic preflight controls and actual stdio coverage. Main exposes 86 tools; published 0.15.5 and its immutable 83-tool MCPB are unchanged. See [reporting preflight](docs/reporting-preflight.md) for limits and recovery.
+- Added independent synthetic preflight controls and actual stdio coverage. This release exposes 86 tools; earlier 0.15.5 and its immutable 83-tool MCPB are unchanged. See [reporting preflight](docs/reporting-preflight.md) for limits and recovery.
 
 ## 0.15.5 - 2026-11-27
 

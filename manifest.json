@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "sheetforge-mcp",
-  "version": "0.15.5",
+  "version": "0.16.0",
   "description": "Local-first Excel MCP server for AI agents and automation workflows with structured reads, workbook introspection, and safer .xlsx mutation",
   "author": {
     "name": "SheetForge",
@@ -20,7 +20,7 @@
     "entry_point": "src/excel_mcp/__main__.py",
     "mcp_config": {
       "command": "uvx",
-      "args": ["--from", "sheetforge-mcp==0.15.5", "sheetforge-mcp", "stdio"]
+      "args": ["--from", "sheetforge-mcp==0.16.0", "sheetforge-mcp", "stdio"]
     }
   },
   "tools": [
